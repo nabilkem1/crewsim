@@ -1,0 +1,30 @@
+{
+  "absences": 7736,
+  "drafts_true": 2592,
+  "cascades_true": 522,
+  "cascade_rate_true": 0.2014,
+  "eligibility_rate_true": 0.3025,
+  "draft_paycode_missing_rate": 0.12,
+  "expected_reconstruction_recall": 0.88,
+  "generator_seed": 20260805,
+  "months": 36,
+  "window": [
+    "2023-08-01",
+    "2026-07-31"
+  ],
+  "fitting_window": [
+    "2023-08-01",
+    "2025-07-31"
+  ],
+  "holdout_window": [
+    "2025-08-01",
+    "2026-07-31"
+  ],
+  "deliberate_gaps": {
+    "draft_paycode_missing": 0.12,
+    "d6_initiator_null": 0.08,
+    "absence_unlinkable": 0.03,
+    "d9_station_day_missing": 0.02
+  },
+  "note": "Ground truth for scoring the spec 6.3 reconstructions and gates V3/V4. Real data has no such file \u2014 that is the point of the mock corpus."
+}

@@ -1,0 +1,43 @@
+[project]
+name = "crewsim"
+version = "0.1.0"
+description = "Crew reserve & drafting policy optimisation for Air Transat"
+requires-python = ">=3.11"
+dependencies = [
+    "simpy>=4.1",
+    "numpy>=1.26",
+    "polars>=0.20",
+    "pydantic>=2.5",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "hypothesis>=6", "ruff", "mypy", "joblib>=1.3"]
+
+[project.scripts]
+crewsim = "crewsim.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# The whole package directory ships, non-Python files included — that is what
+# carries src/crewsim/data/corpus/ (the D1–D12 datasets) into the wheel.
+packages = ["src/crewsim"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.11"
+# Strict on the engine only (§4.3): that is where a silent type error becomes a
+# wrong dollar figure. The rest of the tree is checked, not policed.
+[[tool.mypy.overrides]]
+module = "crewsim.engine.*"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

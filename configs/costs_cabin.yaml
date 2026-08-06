@@ -1,0 +1,9 @@
+# Cost coefficients — cabin crew (CUPE). Phase 2. STUB ONLY.
+#
+# Locals are per base and are an AGREEMENT BOUNDARY, not just a location:
+#   YUL -> CUPE 4041 | YYZ -> CUPE 4047 | YVR -> CUPE 4078
+#
+# Pilot coefficients must NOT be reused here (§4.5.1). This file exists so the
+# separation is structural rather than a convention someone remembers.
+version: unpopulated
+status: PHASE_2_STUB

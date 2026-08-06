@@ -1,0 +1,46 @@
+# =============================================================================
+# Cost coefficients — pilots (ALPA agreement). All CAD. Spec §4.4.2.
+#
+# EVERY VALUE HERE IS [CONFIRM: Finance + Crew Planning].
+# They are placeholders chosen to be the right order of magnitude so that the
+# worked examples in the spec are arithmetically checkable. None is an Air
+# Transat figure. §9.3 requires any report whose result depends on one of these
+# to list it as outstanding.
+# =============================================================================
+version: v0.1.0-placeholder
+
+reserve:
+  guarantee_per_day:                     # kappa — paid whether used or not
+    short_call: 250                      # [CONFIRM: Finance]
+    long_call:  180                      # [CONFIRM: Finance]
+  utilisation: 150                       # q_res — marginal delta when actually used
+
+draft:
+  base_premium: 500                      # q_base — paid on every draft
+  tier:                                  # q_tier — by what the crew member was doing
+    1: 0                                 # day off (WFY)
+    2: 300                               # holds a conflicting pairing
+    3: 900                               # ground training
+    4: 2500                              # vacation   <- newly high priority, see below
+    5: 4000                              # simulator slot
+  train_reschedule: 1200                 # added on a tier-3 or tier-5 draft
+
+# Tier 4 note: Air Transat has no protected-block rule, so vacation is REACHABLE
+# rather than forbidden — and senior-first drafting reaches the crew holding the
+# best vacation. This moved from a corner case to a live cost driver (§4.4.2).
+
+positioning:
+  deadhead: 400
+  hotel:    220
+
+disruption:
+  cancellation:       25000              # internal cost of cancelling one flight
+  delay_per_minute:   55
+  terminal_penalty_multiple: 1.5         # x cancellation; MUST exceed 1.0 (§5.0.5)
+
+# Statutory passenger compensation, Canadian APPR, large carrier.
+# [CONFIRM: Legal — verify against the current CTA schedule]
+appr_compensation:
+  hours_3_to_6:  400
+  hours_6_to_9:  700
+  hours_9_plus:  1000

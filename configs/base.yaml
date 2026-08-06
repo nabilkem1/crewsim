@@ -1,0 +1,64 @@
+# =============================================================================
+# configs/base.yaml — MVP scope & horizon
+#
+# This file is the ONLY place these values are set. Nothing in src/ or in
+# crewsim_skeleton.py may hard-code them (§4.4, parameter registry).
+#
+# Marker convention:
+#   [CONFIRM: <owner>]  a placeholder. Plausible in magnitude, NOT an Air
+#                       Transat figure. Must be replaced before any result
+#                       informs a bid-period decision.
+# =============================================================================
+
+paths:
+  # The corpus the loaders read. It ships INSIDE the package, alongside the
+  # loaders in src/crewsim/data/, so a checkout is runnable with no generation
+  # step. Nothing may hard-code this path -- same rule as every other value
+  # (§4.4): pointing at Air Transat's real extracts is a one-line change here.
+  corpus_dir:    src/crewsim/data/corpus
+  params_dir:    generated/params        # calibration output (§6.2 parameter store)
+  reports_dir:   generated/reports       # HTML reports (§9.3)
+
+scope:
+  base:       YUL            # Montréal–Trudeau
+  fleet:      A321neoLR      # no type-rating overlap with A330 (§4.5.1)
+  position:   FO
+  crew_group: pilots         # ALPA. Cabin crew (CUPE) is Phase 2, own cost file.
+  season:     winter_sun     # one season per run (§4.5.2)
+  bid_period: 2027-01        # the specific bid period being modelled
+
+horizon:
+  warmup_days:      7        # simulated, excluded from KPIs
+  measurement_days: 28       # one bid period — KPIs computed here
+  cooldown_days:    7        # lets late cascades realise their cost
+  # total = 42 days (§5.0.5)
+
+population:
+  # Total crew in scope = line holders + reserves.
+  # Reserves are carved OUT of this number (§5.10), never added to it.
+  # Ask Crew Planning for the PUBLISHED LINE COUNT for the bid period above,
+  # including how many of those lines were reserve lines — that single figure
+  # answers the total-vs-line-holder question and gives the historical R to
+  # compare recommendations against (§1.5).
+  roster_size: 120           # [CONFIRM: Crew Planning]
+
+demand:
+  # roster_size is meaningless on its own: it is only meaningful against how
+  # much flying that population covers. Supply one of these for the same scope
+  # and bid period; the other is derived.
+  #
+  # NOTE: declared here but NOT yet consumed. Flying is generated exogenously
+  # until slice 1b, when sick calls bind to real roster crew and pairings come
+  # from dataset D3. The loader warns if this is set while unconsumed.
+  pairings_per_bid_period: 480         # [CONFIRM: Crew Planning]
+  # credit_hours_per_bid_period: 9600  # alternative to the line above
+
+sensitivity:
+  # Swept by gate V9 (§9.2). If the recommended reserve level is stable across
+  # a range, the imprecision in that parameter does not block the next slice.
+  roster_size:      [100, 120, 140]
+  terminal_penalty: [1.0, 1.25, 1.5, 2.0, 3.0]   # × cancel_cost
+  lambda_risk_dial: [0.0, 0.25, 0.5, 0.75, 1.0]
+
+mode: FULL                   # REDUCED is for smoke tests only — never a recommendation
+costs_file: costs_pilots.yaml

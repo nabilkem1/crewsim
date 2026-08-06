@@ -1,0 +1,17 @@
+# Run output — the parameter store and HTML reports. The corpus is NOT here:
+# it ships committed inside the package at src/crewsim/data/corpus/.
+# NOTE: this rule also hides generated/data/{generate_mock_corpus,validate_corpus}.py,
+# so a clone gets the corpus but not the scripts that rebuild it. Un-ignore them
+# if the generator is meant to be part of the repository.
+generated/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,10 @@
+# Operating seasons — spec §4.5.2.
+#
+# Air Transat is a leisure carrier: a February bid period and a July one are
+# different problems with different correct reserve levels. The severity regime
+# is fitted PER SEASON, results are reported PER BID PERIOD, and the deliverable
+# is a vector indexed by bid period — never one annual number.
+seasons:
+  winter_sun:      {months: [12, 1, 2, 3, 4], regime_model: regimes_winter.json}
+  summer_atlantic: {months: [6, 7, 8, 9],     regime_model: regimes_summer.json}
+  shoulder:        {months: [5, 10, 11],      regime_model: regimes_shoulder.json}

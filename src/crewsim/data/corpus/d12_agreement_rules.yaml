@@ -1,0 +1,18 @@
+# D12 — collective agreement cost rules (document, not data).
+# MOCK. Every value is [CONFIRM: Labour Relations + Finance].
+# Confirmed facts (business, 2026-08-05) are marked CONFIRMED.
+pilots:
+  agreement: ALPA
+  term: 2025-05-01..2030-04-30
+  drafting:
+    order: tier_then_senior_first     # CONFIRMED
+    protected_blocks: none            # CONFIRMED — no such concept
+    max_drafts_per_crew_month: null   # CONFIRMED — no cap exists
+    premium_pct: 200                  # [CONFIRM: Finance]
+  reserve:
+    guarantee_per_day_cad: {short_call: 250, long_call: 180}
+    notice_hours:          {short_call: 2,   long_call: 12}
+cabin_crew:
+  agreement: CUPE
+  locals: {YUL: 4041, YYZ: 4047, YVR: 4078}
+  note: Phase 2 — do not reuse pilot coefficients.
