@@ -4,7 +4,7 @@ costs_file: costs_pilots.yaml
 
 stage1:                                   # committed weeks ahead, irreversible
   reserves:
-    - {base: YUL, fleet: A321neoLR, position: FO, total: 4}
+    - {base: YUL, fleet: A321neoLR, position: FO, dow: [1,2,3,4,5,6,7], short_call: 2, long_call: 2}
 
 stage2:
   # Drafting has NO parameters at Air Transat: impact tier then senior-first are

@@ -5,7 +5,7 @@ retrofit:
 
   1. The corpus ships with the package. src/crewsim/data/ holds the loaders AND
      the datasets they read, so a fresh checkout runs with no generation step.
-     generated/ is for run output only (params, reports) and stays ignored.
+     output/ is for run output only (params, reports) and stays ignored.
   2. No path is ever hard-coded. Everything comes from configs/base.yaml.
 
 If either is broken, the failure message says what to do about it.
@@ -13,6 +13,7 @@ If either is broken, the failure message says what to do about it.
 from __future__ import annotations
 
 import importlib
+import pathlib
 import re
 
 import pytest
@@ -54,7 +55,7 @@ def test_corpus_lives_inside_the_package() -> None:
     corpus = SRC / "data" / "corpus"
     assert corpus.is_dir(), (
         f"{corpus.relative_to(ROOT)} is missing. The corpus ships with the "
-        f"package; regenerate it with: python generated/data/generate_mock_corpus.py"
+        f"package; regenerate it with: python tools/generate_mock_corpus.py"
     )
 
 
@@ -94,14 +95,14 @@ def test_corpus_ships_in_the_wheel() -> None:
 # The one permitted literal: something has to know where the config file lives.
 BOOTSTRAP = SRC / "config.py"
 
-# A path literal names a DATA LOCATION — it points at the corpus or at generated
+# A path literal names a DATA LOCATION — it points at the corpus or at run
 # output. Two things are deliberately *not* caught:
 #   * bare file suffixes  — config.DATASET_SUFFIXES is their single authority,
 #                           guarded by test_dataset_suffixes_have_one_authority
 #   * "configs/base.yaml" — the bootstrap, guarded by its own test, and harmless
 #                           when it appears in help text rather than in an open()
 FORBIDDEN = re.compile(
-    r"""["'][^"']*(generated/|corpus/|/corpus|\w+/\w+\.(csv|parquet|json))[^"']*["']"""
+    r"""["'][^"']*(output/|corpus/|/corpus|\w+/\w+\.(csv|parquet|json))[^"']*["']"""
 )
 
 
@@ -155,9 +156,25 @@ def test_dataset_suffixes_have_one_authority() -> None:
 
 # ------------------------------------------------------------------- wiring
 def test_configured_paths_resolve() -> None:
+    """Every declared path resolves. Only the corpus has to exist already.
+
+    Output directories are created by the run that writes them — a checkout
+    carries inputs and code, never an empty output tree.
+    """
     cfg = config.load()
-    for key in ("corpus_dir", "params_dir", "reports_dir"):
-        assert config.resolve(cfg, key).is_dir(), f"paths.{key} does not exist"
+    assert config.resolve(cfg, "corpus_dir").is_dir(), "paths.corpus_dir does not exist"
+    for key in config.OUTPUT_PATH_KEYS:
+        p = config.resolve(cfg, key)
+        assert p.is_absolute(), f"paths.{key} must resolve to an absolute path"
+        assert not p.is_file(), f"paths.{key} resolves to a file, not a directory"
+
+
+def test_output_dirs_are_created_on_demand(tmp_path: pathlib.Path) -> None:
+    """ensure_dir is the single way an output location comes into existence."""
+    cfg = config.load()
+    cfg["paths"] = dict(cfg["paths"]) | {"reports_dir": str(tmp_path / "nested" / "reports")}
+    created = config.ensure_dir(cfg, "reports_dir")
+    assert created.is_dir()
 
 
 def test_corpus_dir_points_at_package_data() -> None:
@@ -173,14 +190,24 @@ def test_all_twelve_datasets_are_present() -> None:
     missing = [n for n in EXPECTED_DATASETS if config.dataset_path(cfg, n) is None]
     assert not missing, (
         f"missing datasets: {missing}. "
-        f"Regenerate with: python generated/data/generate_mock_corpus.py"
+        f"Regenerate with: python tools/generate_mock_corpus.py"
     )
 
 
-def test_generated_is_git_ignored() -> None:
-    """generated/ now holds run output only — params and reports, never inputs."""
+def test_output_root_is_git_ignored() -> None:
+    """output/ holds run output only — params and reports, never inputs."""
     ignore = (ROOT / ".gitignore").read_text().splitlines()
-    assert any(line.strip().rstrip("/") == "generated" for line in ignore), (
-        ".gitignore must exclude generated/ — calibration output and HTML reports "
+    assert any(line.strip().rstrip("/") == "output" for line in ignore), (
+        ".gitignore must exclude output/ — calibration output and HTML reports "
         "are rebuilt on every run and must not reach the repository"
     )
+
+
+def test_output_paths_share_the_ignored_root() -> None:
+    """Every output path must sit under the one ignored root, or it will be committed."""
+    cfg = config.load()
+    for key in config.OUTPUT_PATH_KEYS:
+        rel = config.resolve(cfg, key).relative_to(ROOT).as_posix()
+        assert rel.startswith("output/"), (
+            f"paths.{key} resolves to {rel}, outside the git-ignored output/ root"
+        )

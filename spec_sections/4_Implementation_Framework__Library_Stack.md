@@ -70,6 +70,9 @@ crew-recovery-sim/
 │   ├── optimize/                  # Phase 2: policy search
 │   ├── reporting/                 # KPI aggregation, HTML report
 │   └── cli.py                     # crewsim run | compare | calibrate
+├── tools/                         # dev scripts (corpus generator, validator)
+├── output/                        # run output only — git-ignored, created on
+│                                  #   first write, absent in a fresh checkout
 └── tests/
 ```
 
@@ -140,8 +143,13 @@ The corpus ships with the code; run output does not. No location may be hard-cod
 | Key | Value | Why |
 |---|---|---|
 | `paths.corpus_dir` | `src/crewsim/data/corpus` | **Where the datasets live.** `src/crewsim/data/` holds the *loaders* and, under `corpus/`, the datasets they read — committed and shipped in the wheel, so a checkout or an install is runnable with no generation step and every gate is scored against the exact bytes the loaders were written against. The price is a ~97 MB repository. This does **not** weaken §4.4.1b: the value is still read from config, never hard-coded, so pointing the loaders at Air Transat's real extracts remains a one-line change. |
-| `paths.params_dir` | `generated/params` | Calibration output — the versioned parameter store (§6.2). |
-| `paths.reports_dir` | `generated/reports` | HTML reports (§9.3). |
+| `paths.params_dir` | `output/params` | Calibration output — the versioned parameter store (§6.2). Created on first write. |
+| `paths.reports_dir` | `output/reports` | HTML reports (§9.3). Created on first write. |
+
+Output paths resolve before they exist: `output/` is git-ignored and absent from a fresh checkout,
+and `config.ensure_dir()` — called by the writer, by nothing else — is what brings a directory into
+being. A checkout therefore carries inputs and code only, and an empty output tree is impossible to
+mistake for a completed run.
 
 ### 4.4.2 Cost coefficients (`configs/costs_pilots.yaml`), all CAD
 

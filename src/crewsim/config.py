@@ -62,8 +62,28 @@ def dataset_path(cfg: dict[str, Any], name: str) -> pathlib.Path | None:
     return None
 
 
+# Output locations. They are created on first write, not kept in the repository:
+# a checkout carries inputs (the corpus) and code, never run output.
+OUTPUT_PATH_KEYS = ("params_dir", "reports_dir")
+
+
+def ensure_dir(cfg: dict[str, Any], key: str) -> pathlib.Path:
+    """Resolve an output `paths.*` key and create it if it does not exist.
+
+    Writers call this instead of `resolve`; nothing else may create directories,
+    so an empty output tree is always the result of a run, never of a checkout.
+    """
+    path = resolve(cfg, key)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def resolve(cfg: dict[str, Any], key: str) -> pathlib.Path:
     """Resolve a `paths.*` key to an absolute path.
+
+    Resolution is pure: it does not touch the filesystem, so a path may be
+    resolved before it exists. Output directories are materialised by
+    `ensure_dir` at write time.
 
     >>> resolve(load(), "corpus_dir")   # -> <repo>/src/crewsim/data/corpus
     """

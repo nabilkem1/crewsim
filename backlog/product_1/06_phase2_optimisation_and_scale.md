@@ -36,13 +36,19 @@ dispatch**, not drafting.
 
 ## E2.1 — Optimisation engine
 
-### S2-01 — Bayesian optimisation over the integer reserve lattice  ·  `L`
+### ⏳ [TODO] S2-01 — Bayesian optimisation over the integer reserve lattice
+**Size:** `L`
+
 Optuna TPE over R, relaxed-and-rounded. Depends on S1e-07. Spec §7.7.
 **Refine when** slice 1e has passed.
 *Sketch of the check:* converges to the exhaustive grid's optimum in far fewer runs; **fails if** it
 finds a different optimum on the same seed — that is a search bug, not a better answer.
 
-### S2-02 — Ranking & selection over θ  ·  `M`
+---
+
+### ⏳ [TODO] S2-02 — Ranking & selection over θ
+**Size:** `M`
+
 OCBA or similar over the small discrete set. Depends on S2-01. Spec §7.3, §7.7.
 **Scope note:** θ holds two levers. This is a small story wearing a large story's name.
 
@@ -50,7 +56,11 @@ OCBA or similar over the small discrete set. Depends on S2-01. Spec §7.3, §7.7
 
 ## E2.2 — Multi-fleet & multi-base
 
-### S2-03 — A330 as a separate problem instance  ·  `L`
+---
+
+### ⏳ [TODO] S2-03 — A330 as a separate problem instance
+**Size:** `L`
+
 Depends on S2-01. Spec §4.5.1.
 **Not one larger search space.** No common type rating between A321 and A330 means cross-fleet
 substitution is infeasible and cross terms are wasted search. Two loosely-coupled sub-problems sharing
@@ -62,7 +72,11 @@ with infeasible cross-fleet terms.
 
 ## E2.3 — Scale
 
-### S2-04 — joblib → Ray on AKS  ·  `L`
+---
+
+### ⏳ [TODO] S2-04 — joblib → Ray on AKS
+**Size:** `L`
+
 Depends on S2-01. Spec §4.1, §3. Aligns with the existing digital-twin AKS stack.
 *Sketch:* **V7 must still pass distributed.** Reproducibility that holds on one machine and breaks
 across a cluster is the same class of defect as D2, one layer up.
@@ -71,7 +85,11 @@ across a cluster is the same class of defect as D2, one layer up.
 
 ## E2.4 — Variance reduction
 
-### S2-05 — Stratified sampling by severity regime  ·  `M`
+---
+
+### ⏳ [TODO] S2-05 — Stratified sampling by severity regime
+**Size:** `M`
+
 Depends on S2-01. Spec §3.
 *Sketch:* narrower CI at the same scenario count; **fails if** the point estimate shifts —
 stratification must be unbiased, or it is just a different model.
@@ -80,7 +98,11 @@ stratification must be unbiased, or it is just a different model.
 
 ## E2.5 — Cabin crew
 
-### S2-06 — Cabin crew, own cost file, multi-position complement  ·  `L`
+---
+
+### ⏳ [TODO] S2-06 — Cabin crew, own cost file, multi-position complement
+**Size:** `L`
+
 Depends on S2-03. Spec §4.5.1, §6.1.
 **Refine when** Crew Planning answers which group is the higher-value target
 (`QUESTIONS_TO_ASK.md` §2.4).
@@ -105,3 +127,4 @@ Raised during Phase-1 work, parked deliberately:
 | Crew geography — day off at home vs at a layover station | Two very different tier-1 drafts |
 | Draft refusal rate | Likely near zero given drafting is premium-paid, but unconfirmed |
 | Roster variability across bid periods | Currently one roster across all scenarios, a stated CRN choice (§5.2) |
+

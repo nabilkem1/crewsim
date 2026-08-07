@@ -9,7 +9,9 @@
 
 ## E3.1 — Full legality
 
-### S3-01 — Replace the surrogate with a rules engine, and quantify the bias  ·  `L`
+### ⏳ [TODO] S3-01 — Replace the surrogate with a rules engine, and quantify the bias
+**Size:** `L`
+
 Depends on S2-01. Spec §5.4, §3.
 
 The surrogate implements L0–L8 with a documented **conservative** bias: surrogate-legal ⇒ almost always
@@ -23,7 +25,11 @@ result needs revisiting.
 
 ## E3.2 — Network propagation
 
-### S3-02 — Delay propagation through aircraft rotations  ·  `L`
+---
+
+### ⏳ [TODO] S3-02 — Delay propagation through aircraft rotations
+**Size:** `L`
+
 Depends on S3-01. Spec §1.4, §5.2.
 
 **The largest remaining realism gap.** CVaR₀.₉₅ is in the objective and tail days are exactly when
@@ -38,7 +44,11 @@ propagation is not actually binding and the reduced form was adequate, which is 
 
 ## E3.3 — Drift monitoring
 
-### S3-03 — Monthly refit with input-drift alerting  ·  `M`
+---
+
+### ⏳ [TODO] S3-03 — Monthly refit with input-drift alerting
+**Size:** `M`
+
 Depends on S2-01. Spec §6.2, §3.
 
 Matters more for a leisure carrier than for a scheduled network carrier: route structure changes
@@ -51,7 +61,11 @@ seasonally, so a model fitted on last winter's sun programme may not describe th
 
 ## E3.4 — Workflow integration
 
-### S3-04 — Dashboard with scenario drill-down  ·  `L`
+---
+
+### ⏳ [TODO] S3-04 — Dashboard with scenario drill-down
+**Size:** `L`
+
 Depends on S1e-03. Spec §3.
 
 Power BI or a web app, integrated into the monthly bid-period planning workflow.
@@ -64,7 +78,11 @@ losing it to make the charts prettier would be a net loss.
 
 ## E3.5 — Accreditation
 
-### S3-05 — Formal V&V accreditation package  ·  `L`
+---
+
+### ⏳ [TODO] S3-05 — Formal V&V accreditation package
+**Size:** `L`
+
 Depends on S3-01. Spec §9.
 
 Trace validation, Turing-style controller test, historical backtesting bands and the surrogate-vs-rules
@@ -77,7 +95,11 @@ reads as fully validated when two gates are advisory is worse than no package.
 
 ## E3.6 — Voluntary recovery layer  ·  ⛔ **BLOCKED**
 
-### S3-06 — Model the voluntary layer, if one exists  ·  `M`
+---
+
+### ⏳ [TODO] S3-06 — Model the voluntary layer, if one exists
+**Size:** `M`
+
 Depends on S1e-07. Spec §1.4.
 
 **Blocked by:** `QUESTIONS_TO_ASK.md` §1.2 — *is what we call drafting already that step?*
@@ -100,3 +122,4 @@ an unmodelled mechanism reads as a claim that the mechanism has been characteris
 |---|---|
 | Real-time / day-of decision support | Different product. A "what-if" mode seeded from live crew state is a possible future track, not this one |
 | Aircraft and passenger recovery optimisation | They appear as cost terms only. Adding them as *decisions* makes this a crew-recovery optimiser — a much larger system |
+
