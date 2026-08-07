@@ -1,866 +1,1063 @@
-# =============================================================================
-# stories.yaml — machine-readable backlog. Source of truth for verify.py.
-#
-# The markdown in mvp/ and product_1/ is the human-readable view of this file.
-# If they disagree, this file wins and the markdown is stale.
-#
-# status: todo | in_progress | done | blocked
-# check.auto    — what Claude runs. Must be deterministic and exit non-zero on failure.
-# check.manual  — what YOU run. One command, one screen, <= 60 seconds.
-# check.expect  — the value you compare against. You compare; you do not derive.
-# check.fails_if— what wrong looks like.
-# =============================================================================
-
 meta:
   project: crew-recovery-sim
   spec: spec_sections/ v3.1
   updated: 2026-08-05
-
 phases:
-  "0":  {name: "Project foundation & data", folder: mvp, gate: "draft reconstruction >= 80% recall"}
-  "1a": {name: "Ledger, CRN & legality core",  folder: mvp, gate: "V1 degeneracy, V7 reproducibility, V8 L0 invariant"}
-  "1b": {name: "Real rosters & full event set", folder: mvp, gate: "V2 Erlang-B bound"}
-  "1c": {name: "Eligibility engine FULL",      folder: mvp, gate: "V3 on holdout"}
-  "1d": {name: "Cascade engine FULL",          folder: mvp, gate: "V4 on holdout, V9 sensitivity"}
-  "1e": {name: "Reporting & backtest",         folder: mvp, gate: "V5 SME sign-off, V6 cost backtest"}
-  "2":  {name: "Optimisation & scale",         folder: product_1, gate: "recommendation stable under search"}
-  "3":  {name: "Enterprise hardening",         folder: product_1, gate: "formal V&V accreditation"}
-
-# =============================================================================
-# PHASE 0 — DATA FOUNDATION
-# =============================================================================
+  '0':
+    name: Project foundation & data
+    folder: mvp
+    gate: draft reconstruction >= 80% recall
+  1a:
+    name: Ledger, CRN & legality core
+    folder: mvp
+    gate: V1 degeneracy, V7 reproducibility, V8 L0 invariant
+  1b:
+    name: Real rosters & full event set
+    folder: mvp
+    gate: V2 Erlang-B bound
+  1c:
+    name: Eligibility engine FULL
+    folder: mvp
+    gate: V3 on holdout
+  1d:
+    name: Cascade engine FULL
+    folder: mvp
+    gate: V4 on holdout, V9 sensitivity
+  1e:
+    name: Reporting & backtest
+    folder: mvp
+    gate: V5 SME sign-off, V6 cost backtest
+  '2':
+    name: Optimisation & scale
+    folder: product_1
+    gate: recommendation stable under search
+  '3':
+    name: Enterprise hardening
+    folder: product_1
+    gate: formal V&V accreditation
 stories:
-
-  - id: S0-00
-    epic: E0.0 Project foundation
-    phase: "0"
-    title: "Create the Python project structure"
-    size: M
-    status: done
-    completed: 2026-08-05
-    depends_on: []
-    spec: ["4.2"]
-    check:
-      auto: pytest tests/test_project_structure.py
-      manual: "PYTHONPATH=src python -m crewsim doctor   # or `crewsim doctor` after `uv sync`"
-      expect: "every §4.2 module present; corpus_dir resolves to src/crewsim/data/corpus with 12 datasets found"
-      fails_if: "the corpus is missing from the package or excluded by .gitignore, or a path is hard-coded instead of read from configs/base.yaml"
-
-  - id: S0-00b
-    epic: E0.0 Project foundation
-    phase: "0"
-    title: "Tooling, CI and the engine dependency rule"
-    size: S
-    status: done
-    completed: 2026-08-05
-    depends_on: [S0-00]
-    spec: ["4.1", "4.3"]
-    check:
-      auto: "ruff check src && mypy --strict src/crewsim/engine && pytest tests/test_dependency_rule.py"
-      manual: "grep -rn 'import simpy' src/crewsim/engine | wc -l"
-      expect: "0 — the engine is pure; only des.py may import simpy"
-      fails_if: "anything above 0, or mypy strict is not actually enforced on engine/"
-
-  - id: S0-01
-    epic: E0 Data foundation
-    phase: "0"
-    title: Typed corpus loader for D1-D12
-    size: M
-    status: todo
-    depends_on: [S0-00]
-    spec: ["6.1", "4.2", "4.4.1b"]
-    check:
-      auto: pytest tests/data/test_loaders.py
-      manual: crewsim data head --dataset d2_rosters --rows 5
-      expect: "5 roster rows; start_utc and start_local differ by the base offset (YUL = 4h)"
-      fails_if: "UTC and local are identical — timezone discipline (6.2) is not implemented"
-
-  - id: S0-02
-    epic: E0 Data foundation
-    phase: "0"
-    title: Data-quality report against the 6.2 completeness gates
-    size: S
-    status: todo
-    depends_on: [S0-01]
-    spec: ["6.2"]
-    check:
-      auto: pytest tests/data/test_quality_gates.py
-      manual: crewsim data quality-report
-      expect: "D4 linkage ~92% (PASS, gate >=95% flagged as marginal); D9 completeness ~98%"
-      fails_if: "every gate passes at 100% — the injected gaps in the mock corpus are not being seen"
-
-  - id: S0-02b
-    epic: E0 Data foundation
-    phase: "0"
-    title: "Descriptive data profile — distributions of everything we are about to fit"
-    size: M
-    status: todo
-    depends_on: [S0-01]
-    spec: ["5.2", "6.1", "4.4.1b"]
-    check:
-      auto: pytest tests/data/test_profile_report.py
-      manual: "crewsim data profile --open   # -> generated/reports/data_profile.html"
-      expect: "sick-call var/mean = 3.3 (overdispersed, so NegBin not Poisson); winter 9.6 vs summer 5.7 per day; absence duration median 1 / mean 2.0 / max 38 (right-skewed); reserve outcomes 88.7% assigned, 7.3% released, 3.9% no-show; sick calls AND cancellations AND delays all rise together across CALM->SEVERE"
-      fails_if: "var/mean is about 1.0 (S0-07's NegBin choice is then unjustified), or the three streams do not move together (the severity-regime design in 5.2 has no support in the data)"
-
-  - id: S0-03
-    epic: E0 Data foundation
-    phase: "0"
-    title: "Draft-event reconstruction (D6 x D7) — CRITICAL PATH"
-    size: L
-    status: todo
-    depends_on: [S0-01]
-    spec: ["6.3-1", "6.2"]
-    critical_path: true
-    check:
-      auto: pytest tests/data/test_draft_reconstruction.py
-      manual: python generated/data/validate_corpus.py
-      expect: "recall 87.7% against ground truth of 2,592 drafts — above the 80% gate"
-      fails_if: "recall < 80%: escalate immediately, two validation gates degrade to advisory"
-
-  - id: S0-04
-    epic: E0 Data foundation
-    phase: "0"
-    title: Eligibility-rate table from history
-    size: M
-    status: todo
-    depends_on: [S0-01]
-    spec: ["6.3-2"]
-    check:
-      auto: pytest tests/data/test_eligibility_table.py
-      manual: crewsim data eligibility-target --season winter_sun
-      expect: "a DISTRIBUTION, not a point: mean ~30%, with a confidence interval printed"
-      fails_if: "only a single number is printed — V3 compares distributions, not means"
-
-  - id: S0-05
-    epic: E0 Data foundation
-    phase: "0"
-    title: Cascade table from reconstructed drafts
-    size: M
-    status: todo
-    depends_on: [S0-03]
-    spec: ["6.3-3"]
-    check:
-      auto: pytest tests/data/test_cascade_table.py
-      manual: crewsim data cascade-target
-      expect: "~20% with a CI; row count consistent with S0-03's reconstructed draft count"
-      fails_if: "the cascade count exceeds the reconstructed draft count"
-
-  - id: S0-06
-    epic: E0 Data foundation
-    phase: "0"
-    title: Severity-regime labelling and Markov fit, per season
-    size: M
-    status: todo
-    depends_on: [S0-02b]
-    spec: ["6.3-4", "5.2", "4.5.2"]
-    check:
-      auto: pytest tests/calibration/test_regime.py
-      manual: crewsim calibrate regime --season winter_sun --show-matrix
-      expect: "4x4 matrix, rows sum to 1.0; SEVERE->SEVERE > 0.25 (bad WEEKS, not scattered days)"
-      fails_if: "SEVERE->SEVERE < 0.15, or one matrix is fitted across all seasons"
-
-  - id: S0-07
-    epic: E0 Data foundation
-    phase: "0"
-    title: Sick-call NHPP fit with covariates
-    size: L
-    status: todo
-    depends_on: [S0-02b, S0-06]
-    spec: ["5.2"]
-    check:
-      auto: pytest tests/calibration/test_nhpp.py
-      manual: crewsim calibrate sick-calls --show-coefficients
-      expect: "season, day-of-week, base, fleet and regime coefficients; NegBin dispersion > 1"
-      fails_if: "dispersion ~= 1 (Poisson assumed) — absence counts are always overdispersed"
-
-  - id: S0-08
-    epic: E0 Data foundation
-    phase: "0"
-    title: Versioned parameter store with content hash
-    size: S
-    status: todo
-    depends_on: [S0-06, S0-07]
-    spec: ["2.2", "6.2"]
-    check:
-      auto: pytest tests/calibration/test_param_store.py
-      manual: crewsim calibrate --emit params/ && cat params/params_v*.json | head -20
-      expect: "params_version, fitted_at, data_window, season, content_hash all present"
-      fails_if: "no content_hash — the data->params->results chain is broken"
-
-  - id: S0-09
-    epic: E0 Data foundation
-    phase: "0"
-    title: Enforce the fitting/holdout split
-    size: S
-    status: todo
-    depends_on: [S0-08]
-    spec: ["6.4", "9.2"]
-    check:
-      auto: pytest tests/calibration/test_holdout.py
-      manual: crewsim calibrate --window holdout --emit /tmp/x
-      expect: "refuses to run, with an explicit error: the holdout window is never used for fitting"
-      fails_if: "it runs — nothing then stops someone fitting on the validation data"
-
-# =============================================================================
-# SLICE 1a — LEDGER, CRN & LEGALITY CORE   (no data needed; start immediately)
-# =============================================================================
-
-  - id: S1a-02
-    epic: E1a Foundation
-    phase: "1a"
-    title: Pydantic config loader for base.yaml and costs
-    size: M
-    status: todo
-    depends_on: [S0-00]
-    spec: ["4.4", "2.3"]
-    check:
-      auto: pytest tests/test_config.py
-      manual: crewsim config show
-      expect: "scope, horizon 42 days, roster_size 120, paths.corpus_dir=src/crewsim/data/corpus, and every [CONFIRM] listed"
-      fails_if: "a numeric constant appears in code rather than config, or [CONFIRM] items are hidden"
-
-  - id: S1a-03
-    epic: E1a Foundation
-    phase: "1a"
-    title: Event-level cost ledger with root_event_uid
-    size: M
-    status: todo
-    depends_on: [S1a-02]
-    spec: ["2.3", "5.8"]
-    check:
-      auto: pytest tests/engine/test_ledger.py
-      manual: crewsim explain-cost --scenario 0 --trace-root
-      expect: "every row carries a root_event_uid; a cancellation traces back to its originating sick call"
-      fails_if: "any cost is aggregated without a row — 'why' becomes unanswerable"
-
-  - id: S1a-04
-    epic: E1a Foundation
-    phase: "1a"
-    title: Accrue reserve staffing cost per reserve-day
-    size: S
-    status: todo
-    depends_on: [S1a-03]
-    spec: ["5.8", "7.2"]
-    fixes: D1
-    check:
-      auto: pytest tests/engine/test_costs.py -k staffing
-      manual: crewsim explain-cost --policy R6 --category RESERVE_STAFFING --summary
-      expect: "measured-window total 31,500 = 250 x 6 reserves x 21 measured days"
-      fails_if: "the total is 0, or a single lump row appears at t=0 — the warm-up filter eats it"
-
-  - id: S1a-05
-    epic: E1a Foundation
-    phase: "1a"
-    title: CRN streams with process-stable seeding
-    size: M
-    status: todo
-    depends_on: [S1a-02]
-    spec: ["5.2", "2.3", "4.3"]
-    fixes: D2
-    check:
-      auto: pytest tests/test_crn.py -k reproducible
-      manual: "for s in 0 1 2; do PYTHONHASHSEED=$s crewsim run --policy R6 --scenarios 20 --print-hash; done"
-      expect: "the same ledger hash three times"
-      fails_if: "three different hashes — hash() is being used for seeding somewhere"
-
-  - id: S1a-06
-    epic: E1a Foundation
-    phase: "1a"
-    title: "Legality rule L0 — single assignment"
-    size: M
-    status: todo
-    depends_on: [S1a-02]
-    spec: ["5.4", "9.2"]
-    fixes: D3
-    check:
-      auto: pytest tests/engine/test_legality.py -k L0 --hypothesis-show-statistics
-      manual: crewsim run --policy R6 --scenarios 100 --assert-invariants
-      expect: "0 overlapping duty blocks across 100 scenarios"
-      fails_if: "any count above 0 — v2 produced 1,030 physically impossible assignments"
-
-  - id: S1a-07
-    epic: E1a Foundation
-    phase: "1a"
-    title: "Legality rules L1, L2, L6, L7"
-    size: M
-    status: todo
-    depends_on: [S1a-06]
-    spec: ["5.4"]
-    check:
-      auto: pytest tests/engine/test_legality.py
-      manual: crewsim explain-legality --crew C0203 --pairing TS156
-      expect: "ILLEGAL_L6 with a human-readable reason: A330 rating cannot fly A321neoLR"
-      fails_if: "a boolean is returned with no failing rule id — explainability is a requirement"
-
-  - id: S1a-08
-    epic: E1a Foundation
-    phase: "1a"
-    title: "Draft selector — impact tier, then SENIOR first"
-    size: M
-    status: todo
-    depends_on: [S1a-07]
-    spec: ["5.6"]
-    fixes: D6
-    check:
-      auto: pytest tests/engine/test_drafting.py -k senior_first
-      manual: crewsim explain-draft --scenario 0 --event 1
-      expect: "tier 1 exhausted first; within it the LOWEST seniority number is chosen"
-      fails_if: "the highest seniority number is chosen — the sort is inverted, as in v2"
-
-  - id: S1a-09
-    epic: E1a Foundation
-    phase: "1a"
-    title: Serialisable policy object, hash-pinned to a cost file
-    size: S
-    status: todo
-    depends_on: [S1a-02]
-    spec: ["2.3", "5.9"]
-    check:
-      auto: pytest tests/test_policy.py
-      manual: crewsim run --policy configs/policies/R6.yaml --print-provenance
-      expect: "policy hash, costs_file version, params_version and master seed all printed"
-      fails_if: "any of the four is missing — the result cannot be regenerated in a year"
-
-  - id: S1a-10
-    epic: E1a Foundation
-    phase: "1a"
-    title: "V1 degeneracy tests"
-    size: S
-    status: todo
-    depends_on: [S1a-04, S1a-08]
-    spec: ["9.2"]
-    gate: V1
-    check:
-      auto: pytest tests/gates/test_v1_degeneracy.py
-      manual: crewsim gate v1
-      expect: "0 reserves + 0 sick calls => cost exactly 0.00; all-reserve => zero drafts, zero cancels"
-      fails_if: "any non-zero cost in the empty case — something is booked that should not be"
-
-  - id: S1a-11
-    epic: E1a Foundation
-    phase: "1a"
-    title: "V7 reproducibility under joblib, in CI"
-    size: S
-    status: todo
-    depends_on: [S1a-05]
-    spec: ["9.2"]
-    gate: V7
-    check:
-      auto: pytest tests/gates/test_v7_crn.py -n 4
-      manual: crewsim gate v7 --jobs 4
-      expect: "bit-identical ledgers across 4 worker processes"
-      fails_if: "identical single-process but different multi-process — the v2 failure exactly"
-
-  - id: S1a-12
-    epic: E1a Foundation
-    phase: "1a"
-    title: "CLI — run, compare, explain"
-    size: M
-    status: todo
-    depends_on: [S1a-09]
-    spec: ["4.2"]
-    check:
-      auto: pytest tests/test_cli.py
-      manual: crewsim compare --policies R6 R10 --scenarios 100
-      expect: "paired CRN diff with a CI and t-statistic, not two independent means"
-      fails_if: "no paired statistic is shown — CRN's whole benefit is invisible"
-
-# =============================================================================
-# SLICE 1b — REAL ROSTERS & THE FULL EVENT SET
-# =============================================================================
-
-  - id: S1b-01
-    epic: E1b Real rosters
-    phase: "1b"
-    title: Load D1/D2 into the Crew State Engine
-    size: L
-    status: todo
-    depends_on: [S1a-12, S0-01]
-    spec: ["5.1", "5.4", "6.1"]
-    check:
-      auto: pytest tests/engine/test_roster_loader.py
-      manual: crewsim roster summary --base YUL --fleet A321neoLR --position FO
-      expect: "112 crew rostered from an establishment of 120 — 8 are non-ACTIVE"
-      fails_if: "120 crew load — non-ACTIVE statuses are being counted as available"
-
-  - id: S1b-02
-    epic: E1b Real rosters
-    phase: "1b"
-    title: "Headcount conservation — carve reserves out of the roster"
-    size: M
-    status: todo
-    depends_on: [S1b-01]
-    spec: ["5.10", "7.5"]
-    check:
-      auto: pytest tests/engine/test_headcount.py
-      manual: crewsim roster summary --policy R10 --show-split
-      expect: "line holders + reserves = roster_size exactly, for every R"
-      fails_if: "the total grows with R — reserves are being added, not carved out"
-
-  - id: S1b-03
-    epic: E1b Real rosters
-    phase: "1b"
-    title: Reserve lines with rotation and SC/LC split
-    size: M
-    status: todo
-    depends_on: [S1b-02]
-    spec: ["5.0.2", "5.5", "4.5"]
-    check:
-      auto: pytest tests/engine/test_reserve_lines.py
-      manual: crewsim roster reserve-pattern --policy R10
-      expect: "on/off rotation visible; SC/LC split roughly 60/40; NOT one flat horizon-long block"
-      fails_if: "every reserve is on call every day — eligibility will read ~100%, not ~30%"
-
-  - id: S1b-04
-    epic: E1b Real rosters
-    phase: "1b"
-    title: Bind sick calls to roster crew, and remove them
-    size: M
-    status: todo
-    depends_on: [S1b-01]
-    spec: ["5.0.4", "5.2"]
-    fixes: D5
-    check:
-      auto: pytest tests/engine/test_sick_calls.py
-      manual: crewsim explain-event --scenario 0 --event SICK_CALL --first
-      expect: "a named crew member is removed from the pool and their pairing becomes open time"
-      fails_if: "open time appears but no crew member is removed — demand is still exogenous"
-
-  - id: S1b-05
-    epic: E1b Real rosters
-    phase: "1b"
-    title: "Events E6 DUTY_END and E7 REST_END"
-    size: M
-    status: todo
-    depends_on: [S1b-03]
-    spec: ["5.0.3", "5.0.4"]
-    fixes: D4
-    check:
-      auto: pytest tests/engine/test_events.py -k "duty_end or rest_end"
-      manual: crewsim explain-crew --crew R001 --scenario 0 --timeline
-      expect: "RESERVE -> duty -> REST -> RESERVE again; the reserve block is split, not deleted"
-      fails_if: "the reserve disappears after one use, or is reusable during rest"
-
-  - id: S1b-06
-    epic: E1b Real rosters
-    phase: "1b"
-    title: "Event E8 UNCOVERED_DEADLINE — hold before cancelling"
-    size: M
-    status: todo
-    depends_on: [S1b-05]
-    spec: ["5.0.3", "5.0.4"]
-    check:
-      auto: pytest tests/engine/test_events.py -k deadline
-      manual: crewsim explain-event --scenario 0 --event UNCOVERED_DEADLINE --first
-      expect: "the item is held to its deadline; a reserve freeing up in between can still rescue it"
-      fails_if: "cancellation is booked at the moment of failure — rescues become impossible"
-
-  - id: S1b-07
-    epic: E1b Real rosters
-    phase: "1b"
-    title: "V2 Erlang-B sanity bound"
-    size: M
-    status: todo
-    depends_on: [S1b-06]
-    spec: ["7.8", "9.2"]
-    gate: V2
-    check:
-      auto: pytest tests/gates/test_v2_erlang.py
-      manual: crewsim gate v2 --show-comparison
-      expect: "DES shortfall probability inside the Erlang-B confidence interval, side by side"
-      fails_if: "they differ by more than the CI — reserve accounting has a bug"
-
-# =============================================================================
-# SLICE 1c — ELIGIBILITY ENGINE FULL
-# =============================================================================
-
-  - id: S1c-01
-    epic: E1c Eligibility
-    phase: "1c"
-    title: Eligibility engine in FULL mode with distribution logging
-    size: M
-    status: todo
-    depends_on: [S1b-07]
-    spec: ["5.5"]
-    check:
-      auto: pytest tests/engine/test_eligibility.py
-      manual: crewsim run --policy R10 --scenarios 200 --report-eligibility
-      expect: "a histogram, not a mean — the pool is reserves on call during the DUTY WINDOW"
-      fails_if: "eligibility is computed against reserves on call at the moment of the phone call"
-
-  - id: S1c-02
-    epic: E1c Eligibility
-    phase: "1c"
-    title: "Rule L8 — reserve notification time (SC 2h / LC 12h)"
-    size: S
-    status: todo
-    depends_on: [S1c-01, S1b-03]
-    spec: ["5.4"]
-    check:
-      auto: pytest tests/engine/test_legality.py -k L8
-      manual: crewsim explain-legality --crew R002 --pairing TS156 --call-at "15:00"
-      expect: "ILLEGAL_L8 for a long-call reserve given 1 hour of notice"
-      fails_if: "long-call and short-call behave identically — L8 is not binding"
-
-  - id: S1c-03
-    epic: E1c Eligibility
-    phase: "1c"
-    title: "Rules L3/L4 — rolling 7-day and 28-day limits"
-    size: M
-    status: todo
-    depends_on: [S1c-01]
-    spec: ["5.4"]
-    check:
-      auto: pytest tests/engine/test_legality.py -k "L3 or L4"
-      manual: crewsim explain-crew --crew C0041 --show-counters
-      expect: "rolling duty and flight hours accumulate and decay over the window"
-      fails_if: "counters only ever increase — the rolling window is not rolling"
-
-  - id: S1c-04
-    epic: E1c Eligibility
-    phase: "1c"
-    title: "Rule L5 — one duty-free day per rolling 7"
-    size: S
-    status: todo
-    depends_on: [S1c-03]
-    spec: ["5.4"]
-    check:
-      auto: pytest tests/engine/test_legality.py -k L5
-      manual: crewsim run --policy R6 --scenarios 100 --assert-invariants
-      expect: "no crew member ever works 7 consecutive days"
-      fails_if: "any violation — L5 is not enforced on the drafting path"
-
-  - id: S1c-05
-    epic: E1c Eligibility
-    phase: "1c"
-    title: "V3 gate — eligibility rate on the HOLDOUT window"
-    size: M
-    status: todo
-    depends_on: [S1c-04, S0-04, S0-09]
-    spec: ["9.2", "6.4"]
-    gate: V3
-    check:
-      auto: pytest tests/gates/test_v3_eligibility.py
-      manual: crewsim gate v3 --window holdout
-      expect: "simulated distribution vs the historical band, both plotted; verdict PASS or FAIL stated"
-      fails_if: "it passes only on the fitting window, or inputs were tuned until it passed"
-
-# =============================================================================
-# SLICE 1d — CASCADE ENGINE FULL
-# =============================================================================
-
-  - id: S1d-01
-    epic: E1d Cascades
-    phase: "1d"
-    title: "Future-pairing cascade from the StateDelta"
-    size: M
-    status: todo
-    depends_on: [S1c-05]
-    spec: ["5.7", "5.0.4"]
-    check:
-      auto: pytest tests/engine/test_cascade.py -k pairing
-      manual: crewsim explain-cascade --scenario 0 --first
-      expect: "draft -> the crew member's later pairing is removed -> a new open item at the right time"
-      fails_if: "the cascade fires immediately rather than at the future time it belongs to"
-
-  - id: S1d-02
-    epic: E1d Cascades
-    phase: "1d"
-    title: Future-reserve cascade (structural pool loss)
-    size: M
-    status: todo
-    depends_on: [S1d-01]
-    spec: ["5.7"]
-    check:
-      auto: pytest tests/engine/test_cascade.py -k reserve
-      manual: crewsim explain-cascade --scenario 0 --type reserve_loss
-      expect: "drafting a crew member who held a later reserve block shrinks that day's pool"
-      fails_if: "only pairing cascades ever appear — half the mechanism is missing"
-
-  - id: S1d-03
-    epic: E1d Cascades
-    phase: "1d"
-    title: "Event E9 — terminal penalty on residual open items"
-    size: S
-    status: todo
-    depends_on: [S1d-01]
-    spec: ["5.0.5", "7.3"]
-    check:
-      auto: pytest tests/engine/test_terminal.py
-      manual: crewsim explain-cost --category TERMINAL_PENALTY --summary
-      expect: "charged per unresolved item at 1.5 x cancel_cost = 37,500"
-      fails_if: "it is lower than cancel_cost — abandoning an item becomes cheaper than cancelling"
-
-  - id: S1d-04
-    epic: E1d Cascades
-    phase: "1d"
-    title: "V4 gate — cascade rate on the HOLDOUT window"
-    size: M
-    status: todo
-    depends_on: [S1d-02, S0-05, S0-09]
-    spec: ["9.2", "6.4"]
-    gate: V4
-    check:
-      auto: pytest tests/gates/test_v4_cascade.py
-      manual: crewsim gate v4 --window holdout
-      expect: "simulated cascade rate vs the historical band, verdict stated"
-      fails_if: "roster composition was adjusted to make it pass — that is calibration, not validation"
-
-  - id: S1d-05
-    epic: E1d Cascades
-    phase: "1d"
-    title: "V9 sensitivity sweep — terminal penalty, roster_size, lambda"
-    size: M
-    status: todo
-    depends_on: [S1d-03]
-    spec: ["9.2"]
-    gate: V9
-    check:
-      auto: pytest tests/gates/test_v9_sensitivity.py
-      manual: crewsim gate v9 --surface
-      expect: "recommended R as a surface over the swept parameters, not a point"
-      fails_if: "R* moves a lot and the report does not say so prominently"
-
-# =============================================================================
-# SLICE 1e — REPORTING, GRID & BACKTEST
-# =============================================================================
-
-  - id: S1e-01
-    epic: E1e Reporting
-    phase: "1e"
-    title: KPI aggregation over the measurement window
-    size: M
-    status: todo
-    depends_on: [S1d-05]
-    spec: ["2.1", "5.0.5"]
-    check:
-      auto: pytest tests/reporting/test_kpis.py
-      manual: crewsim run --policy R6 --scenarios 500 --kpis
-      expect: "E[C], CVaR95, uncovered, eligibility, cascade rate, draft distribution — warm-up excluded"
-      fails_if: "warm-up rows are included, or cool-down costs are not attributed back to the window"
-
-  - id: S1e-02
-    epic: E1e Reporting
-    phase: "1e"
-    title: Self-contained HTML report
-    size: M
-    status: todo
-    depends_on: [S1e-01]
-    spec: ["2.2", "9.3"]
-    check:
-      auto: pytest tests/reporting/test_html.py
-      manual: crewsim report --policies R4 R6 R8 R10 R14 --open
-      expect: "one HTML file; cost distributions and a U-shaped trade-off curve with the optimum marked"
-      fails_if: "external assets are needed — it must be emailable to Crew Planning as one file"
-
-  - id: S1e-03
-    epic: E1e Reporting
-    phase: "1e"
-    title: Exemplar-scenario drill-down
-    size: M
-    status: todo
-    depends_on: [S1e-02]
-    spec: ["9.3", "2.3"]
-    check:
-      auto: pytest tests/reporting/test_drilldown.py
-      manual: crewsim report --policy R6 --drilldown costliest
-      expect: "the 5 costliest and 5 most typical scenarios, each an auditable event timeline"
-      fails_if: "'why 6 reserves?' cannot be answered with a specific simulated Tuesday"
-
-  - id: S1e-04
-    epic: E1e Reporting
-    phase: "1e"
-    title: Policy grid runner
-    size: M
-    status: todo
-    depends_on: [S1e-01]
-    spec: ["3"]
-    check:
-      auto: pytest tests/test_grid.py
-      manual: crewsim grid --config configs/grid_mvp.yaml --scenarios 1000
-      expect: "24 combinations, all CRN-paired against the same scenario set"
-      fails_if: "each combination regenerates its own scenarios — the comparison is unpaired"
-
-  - id: S1e-05
-    epic: E1e Reporting
-    phase: "1e"
-    title: "Counterfactual runs — junior-first and cost-ranked selection"
-    size: M
-    status: todo
-    depends_on: [S1e-04]
-    spec: ["3", "5.6"]
-    check:
-      auto: pytest tests/test_counterfactuals.py
-      manual: crewsim counterfactual --vs-mandated
-      expect: "the price of the mandated rules, clearly labelled NOT A RECOMMENDATION"
-      fails_if: "a counterfactual can be selected as a candidate policy"
-
-  - id: S1e-06
-    epic: E1e Reporting
-    phase: "1e"
-    title: "V5 trace export for the SME walkthrough"
-    size: M
-    status: todo
-    depends_on: [S1e-03]
-    spec: ["9.2"]
-    gate: V5
-    check:
-      auto: pytest tests/gates/test_v5_trace.py
-      manual: crewsim gate v5 --week 2026-01-12 --format timeline
-      expect: "an hour-by-hour operational timeline, readable by a duty manager — not a log dump"
-      fails_if: "it reads as debug output; you get one hour of an SME's attention, spend it well"
-
-  - id: S1e-07
-    epic: E1e Reporting
-    phase: "1e"
-    title: "V6 cost backtest against actuals"
-    size: L
-    status: todo
-    depends_on: [S1e-06]
-    spec: ["9.2"]
-    gate: V6
-    check:
-      auto: pytest tests/gates/test_v6_backtest.py
-      manual: crewsim gate v6 --period 2026-01
-      expect: "simulated vs actual cost, plus the bias decomposition from 9.2's table"
-      fails_if: "it lands inside tolerance with no decomposition — offsetting biases prove nothing"
-
-# =============================================================================
-# PHASE 2 & 3 — coarse by design. Refine only when the prior slice has passed.
-# =============================================================================
-
-  - id: S2-01
-    epic: E2.1 Optimisation engine
-    phase: "2"
-    title: Bayesian optimisation over the integer reserve lattice
-    size: L
-    status: todo
-    depends_on: [S1e-07]
-    spec: ["7.7"]
-    refine_when: "slice 1e gate passed"
-    check: {auto: "TBD", manual: "TBD", expect: "converges to the grid optimum in far fewer runs", fails_if: "it finds a different optimum than the exhaustive grid on the same seed"}
-
-  - id: S2-02
-    epic: E2.1 Optimisation engine
-    phase: "2"
-    title: "Ranking & selection over the (small) theta set"
-    size: M
-    status: todo
-    depends_on: [S2-01]
-    spec: ["7.3", "7.7"]
-    refine_when: "slice 1e gate passed"
-    note: "Scope is small: drafting has no parameters. Only reserve dispatch remains."
-    check: {auto: "TBD", manual: "TBD", expect: "TBD", fails_if: "TBD"}
-
-  - id: S2-03
-    epic: E2.2 Multi-fleet & multi-base
-    phase: "2"
-    title: "A330 as a SEPARATE problem instance, not extra dimensions"
-    size: L
-    status: todo
-    depends_on: [S2-01]
-    spec: ["4.5.1"]
-    refine_when: "slice 1e gate passed"
-    check: {auto: "TBD", manual: "TBD", expect: "two coupled sub-problems sharing a budget constraint", fails_if: "one search space with infeasible cross-fleet terms"}
-
-  - id: S2-04
-    epic: E2.3 Scale
-    phase: "2"
-    title: "joblib -> Ray on AKS"
-    size: L
-    status: todo
-    depends_on: [S2-01]
-    spec: ["4.1", "3"]
-    refine_when: "slice 1e gate passed"
-    check: {auto: "TBD", manual: "TBD", expect: "V7 still passes distributed", fails_if: "reproducibility breaks at scale"}
-
-  - id: S2-05
-    epic: E2.4 Variance reduction
-    phase: "2"
-    title: Stratified sampling by severity regime
-    size: M
-    status: todo
-    depends_on: [S2-01]
-    spec: ["3"]
-    refine_when: "slice 1e gate passed"
-    check: {auto: "TBD", manual: "TBD", expect: "narrower CI at equal scenario count", fails_if: "the point estimate shifts — stratification must be unbiased"}
-
-  - id: S2-06
-    epic: E2.5 Cabin crew
-    phase: "2"
-    title: "Cabin crew with their own cost file and multi-position complement"
-    size: L
-    status: todo
-    depends_on: [S2-03]
-    spec: ["4.5.1", "6.1"]
-    refine_when: "Crew Planning answers which group is the higher-value target"
-    check: {auto: "TBD", manual: "TBD", expect: "CUPE coefficients per local; a sick CA and FO on one trip = one cancellation", fails_if: "pilot coefficients are reused"}
-
-  - id: S3-01
-    epic: E3.1 Full legality
-    phase: "3"
-    title: Replace the surrogate with a rules engine, and quantify the bias
-    size: L
-    status: todo
-    depends_on: [S2-01]
-    spec: ["5.4", "3"]
-    refine_when: "Phase 2 in use"
-    check: {auto: "TBD", manual: "TBD", expect: "surrogate-vs-real comparison per rule, bias direction confirmed conservative", fails_if: "the surrogate turns out optimistic anywhere"}
-
-  - id: S3-02
-    epic: E3.2 Network propagation
-    phase: "3"
-    title: Delay propagation through aircraft rotations
-    size: L
-    status: todo
-    depends_on: [S3-01]
-    spec: ["1.4", "5.2"]
-    refine_when: "Phase 2 in use"
-    note: "The largest remaining realism gap; it is what CVaR currently understates."
-    check: {auto: "TBD", manual: "TBD", expect: "tail cost rises; CVaR-optimal R rises with it", fails_if: "the tail does not move — propagation is not actually binding"}
-
-  - id: S3-03
-    epic: E3.3 Drift monitoring
-    phase: "3"
-    title: Monthly refit with input-drift alerting
-    size: M
-    status: todo
-    depends_on: [S2-01]
-    spec: ["6.2", "3"]
-    refine_when: "Phase 2 in use"
-    check: {auto: "TBD", manual: "TBD", expect: "alert when sick-call intensity or the regime matrix shifts beyond tolerance", fails_if: "drift is only visible by manual inspection"}
-
-  - id: S3-04
-    epic: E3.4 Workflow integration
-    phase: "3"
-    title: Dashboard with scenario drill-down, in the bid-period workflow
-    size: L
-    status: todo
-    depends_on: [S1e-03]
-    spec: ["3"]
-    refine_when: "Phase 2 in use"
-    check: {auto: "TBD", manual: "TBD", expect: "a planner can answer 'why this number' unaided", fails_if: "drill-down is lost in the move from HTML to dashboard"}
-
-  - id: S3-05
-    epic: E3.5 Accreditation
-    phase: "3"
-    title: Formal V&V accreditation package
-    size: L
-    status: todo
-    depends_on: [S3-01]
-    spec: ["9"]
-    refine_when: "Phase 2 in use"
-    check: {auto: "TBD", manual: "TBD", expect: "trace validation, backtest bands and rule comparison in one signed package", fails_if: "any gate is advisory without that being stated on the front page"}
-
-  - id: S3-06
-    epic: E3.6 Voluntary layer
-    phase: "3"
-    title: "Model the voluntary recovery layer — IF one exists"
-    size: M
-    status: blocked
-    depends_on: [S1e-07]
-    spec: ["1.4"]
-    blocked_by: "QUESTIONS_TO_ASK.md section 1.2 — is drafting already that step?"
-    refine_when: "the IOC answers whether a separate voluntary stage exists"
-    check: {auto: "TBD", manual: "TBD", expect: "TBD — do not design this before the answer", fails_if: "a placeholder parameter is invented instead of modelling the real mechanism"}
+- id: S0-00
+  epic: E0.0 Project foundation
+  phase: '0'
+  title: Create the Python project structure
+  size: M
+  status: done
+  completed: 2026-08-05
+  depends_on: []
+  spec:
+  - '4.2'
+  check:
+    auto: pytest tests/test_project_structure.py
+    manual: 'PYTHONPATH=src python -m crewsim doctor   # or `crewsim doctor` after
+      `uv sync`'
+    expect: "every \xA74.2 module present; corpus_dir resolves to src/crewsim/data/corpus\
+      \ with 12 datasets found"
+    fails_if: the corpus is missing from the package or excluded by .gitignore, or
+      a path is hard-coded instead of read from configs/base.yaml
+- id: S0-00b
+  epic: E0.0 Project foundation
+  phase: '0'
+  title: Tooling, CI and the engine dependency rule
+  size: S
+  status: done
+  completed: 2026-08-05
+  depends_on:
+  - S0-00
+  spec:
+  - '4.1'
+  - '4.3'
+  check:
+    auto: ruff check src && mypy --strict src/crewsim/engine && pytest tests/test_dependency_rule.py
+    manual: grep -rn 'import simpy' src/crewsim/engine | wc -l
+    expect: "0 \u2014 the engine is pure; only des.py may import simpy"
+    fails_if: anything above 0, or mypy strict is not actually enforced on engine/
+- id: S0-01
+  epic: E0 Data foundation
+  phase: '0'
+  title: Typed corpus loader for D1-D12
+  size: M
+  status: done
+  depends_on:
+  - S0-00
+  spec:
+  - '6.1'
+  - '4.2'
+  - 4.4.1b
+  check:
+    auto: pytest tests/data/test_loaders.py
+    manual: crewsim data head --dataset d2_rosters --rows 5
+    expect: 5 roster rows; start_utc and start_local differ by the base offset (YUL
+      = 4h)
+    fails_if: "UTC and local are identical \u2014 timezone discipline (6.2) is not\
+      \ implemented"
+- id: S0-02
+  epic: E0 Data foundation
+  phase: '0'
+  title: Data-quality report against the 6.2 completeness gates
+  size: S
+  status: done
+  depends_on:
+  - S0-01
+  spec:
+  - '6.2'
+  check:
+    auto: pytest tests/data/test_quality_gates.py
+    manual: crewsim data quality-report
+    expect: D4 linkage ~92% (PASS, gate >=95% flagged as marginal); D9 completeness
+      ~98%
+    fails_if: "every gate passes at 100% \u2014 the injected gaps in the mock corpus\
+      \ are not being seen"
+- id: S0-02b
+  epic: E0 Data foundation
+  phase: '0'
+  title: "Descriptive data profile \u2014 distributions of everything we are about\
+    \ to fit"
+  size: M
+  status: done
+  depends_on:
+  - S0-01
+  spec:
+  - '5.2'
+  - '6.1'
+  - 4.4.1b
+  check:
+    auto: pytest tests/data/test_profile_report.py
+    manual: 'crewsim data profile --open   # -> generated/reports/data_profile.html'
+    expect: sick-call var/mean = 3.3 (overdispersed, so NegBin not Poisson); winter
+      9.6 vs summer 5.7 per day; absence duration median 1 / mean 2.0 / max 38 (right-skewed);
+      reserve outcomes 88.7% assigned, 7.3% released, 3.9% no-show; sick calls AND
+      cancellations AND delays all rise together across CALM->SEVERE
+    fails_if: var/mean is about 1.0 (S0-07's NegBin choice is then unjustified), or
+      the three streams do not move together (the severity-regime design in 5.2 has
+      no support in the data)
+- id: S0-03
+  epic: E0 Data foundation
+  phase: '0'
+  title: "Draft-event reconstruction (D6 x D7) \u2014 CRITICAL PATH"
+  size: L
+  status: done
+  depends_on:
+  - S0-01
+  spec:
+  - 6.3-1
+  - '6.2'
+  critical_path: true
+  check:
+    auto: pytest tests/data/test_draft_reconstruction.py
+    manual: python generated/data/validate_corpus.py
+    expect: "recall 87.7% against ground truth of 2,592 drafts \u2014 above the 80%\
+      \ gate"
+    fails_if: 'recall < 80%: escalate immediately, two validation gates degrade to
+      advisory'
+- id: S0-04
+  epic: E0 Data foundation
+  phase: '0'
+  title: Eligibility-rate table from history
+  size: M
+  status: done
+  depends_on:
+  - S0-01
+  spec:
+  - 6.3-2
+  check:
+    auto: pytest tests/data/test_eligibility_table.py
+    manual: crewsim data eligibility-target --season winter_sun
+    expect: 'a DISTRIBUTION, not a point: mean ~30%, with a confidence interval printed'
+    fails_if: "only a single number is printed \u2014 V3 compares distributions, not\
+      \ means"
+- id: S0-05
+  epic: E0 Data foundation
+  phase: '0'
+  title: Cascade table from reconstructed drafts
+  size: M
+  status: done
+  depends_on:
+  - S0-03
+  spec:
+  - 6.3-3
+  check:
+    auto: pytest tests/data/test_cascade_table.py
+    manual: crewsim data cascade-target
+    expect: ~20% with a CI; row count consistent with S0-03's reconstructed draft
+      count
+    fails_if: the cascade count exceeds the reconstructed draft count
+- id: S0-06
+  epic: E0 Data foundation
+  phase: '0'
+  title: Severity-regime labelling and Markov fit, per season
+  size: M
+  status: done
+  depends_on:
+  - S0-02b
+  spec:
+  - 6.3-4
+  - '5.2'
+  - 4.5.2
+  check:
+    auto: pytest tests/calibration/test_regime.py
+    manual: crewsim calibrate regime --season winter_sun --show-matrix
+    expect: 4x4 matrix, rows sum to 1.0; SEVERE->SEVERE > 0.25 (bad WEEKS, not scattered
+      days)
+    fails_if: SEVERE->SEVERE < 0.15, or one matrix is fitted across all seasons
+- id: S0-07
+  epic: E0 Data foundation
+  phase: '0'
+  title: Sick-call NHPP fit with covariates
+  size: L
+  status: done
+  depends_on:
+  - S0-02b
+  - S0-06
+  spec:
+  - '5.2'
+  check:
+    auto: pytest tests/calibration/test_nhpp.py
+    manual: crewsim calibrate sick-calls --show-coefficients
+    expect: season, day-of-week, base, fleet and regime coefficients; NegBin dispersion
+      > 1
+    fails_if: "dispersion ~= 1 (Poisson assumed) \u2014 absence counts are always\
+      \ overdispersed"
+- id: S0-08
+  epic: E0 Data foundation
+  phase: '0'
+  title: Versioned parameter store with content hash
+  size: S
+  status: done
+  depends_on:
+  - S0-06
+  - S0-07
+  spec:
+  - '2.2'
+  - '6.2'
+  check:
+    auto: pytest tests/calibration/test_param_store.py
+    manual: crewsim calibrate --emit params/ && cat params/params_v*.json | head -20
+    expect: params_version, fitted_at, data_window, season, content_hash all present
+    fails_if: "no content_hash \u2014 the data->params->results chain is broken"
+- id: S0-09
+  epic: E0 Data foundation
+  phase: '0'
+  title: Enforce the fitting/holdout split
+  size: S
+  status: done
+  depends_on:
+  - S0-08
+  spec:
+  - '6.4'
+  - '9.2'
+  check:
+    auto: pytest tests/calibration/test_holdout.py
+    manual: crewsim calibrate --window holdout --emit /tmp/x
+    expect: 'refuses to run, with an explicit error: the holdout window is never used
+      for fitting'
+    fails_if: "it runs \u2014 nothing then stops someone fitting on the validation\
+      \ data"
+- id: S1a-02
+  epic: E1a Foundation
+  phase: 1a
+  title: Pydantic config loader for base.yaml and costs
+  size: M
+  status: todo
+  depends_on:
+  - S0-00
+  spec:
+  - '4.4'
+  - '2.3'
+  check:
+    auto: pytest tests/test_config.py
+    manual: crewsim config show
+    expect: scope, horizon 42 days, roster_size 120, paths.corpus_dir=src/crewsim/data/corpus,
+      and every [CONFIRM] listed
+    fails_if: a numeric constant appears in code rather than config, or [CONFIRM]
+      items are hidden
+- id: S1a-03
+  epic: E1a Foundation
+  phase: 1a
+  title: Event-level cost ledger with root_event_uid
+  size: M
+  status: todo
+  depends_on:
+  - S1a-02
+  spec:
+  - '2.3'
+  - '5.8'
+  check:
+    auto: pytest tests/engine/test_ledger.py
+    manual: crewsim explain-cost --scenario 0 --trace-root
+    expect: every row carries a root_event_uid; a cancellation traces back to its
+      originating sick call
+    fails_if: "any cost is aggregated without a row \u2014 'why' becomes unanswerable"
+- id: S1a-04
+  epic: E1a Foundation
+  phase: 1a
+  title: Accrue reserve staffing cost per reserve-day
+  size: S
+  status: todo
+  depends_on:
+  - S1a-03
+  spec:
+  - '5.8'
+  - '7.2'
+  fixes: D1
+  check:
+    auto: pytest tests/engine/test_costs.py -k staffing
+    manual: crewsim explain-cost --policy R6 --category RESERVE_STAFFING --summary
+    expect: measured-window total 31,500 = 250 x 6 reserves x 21 measured days
+    fails_if: "the total is 0, or a single lump row appears at t=0 \u2014 the warm-up\
+      \ filter eats it"
+- id: S1a-05
+  epic: E1a Foundation
+  phase: 1a
+  title: CRN streams with process-stable seeding
+  size: M
+  status: todo
+  depends_on:
+  - S1a-02
+  spec:
+  - '5.2'
+  - '2.3'
+  - '4.3'
+  fixes: D2
+  check:
+    auto: pytest tests/test_crn.py -k reproducible
+    manual: for s in 0 1 2; do PYTHONHASHSEED=$s crewsim run --policy R6 --scenarios
+      20 --print-hash; done
+    expect: the same ledger hash three times
+    fails_if: "three different hashes \u2014 hash() is being used for seeding somewhere"
+- id: S1a-06
+  epic: E1a Foundation
+  phase: 1a
+  title: "Legality rule L0 \u2014 single assignment"
+  size: M
+  status: todo
+  depends_on:
+  - S1a-02
+  spec:
+  - '5.4'
+  - '9.2'
+  fixes: D3
+  check:
+    auto: pytest tests/engine/test_legality.py -k L0 --hypothesis-show-statistics
+    manual: crewsim run --policy R6 --scenarios 100 --assert-invariants
+    expect: 0 overlapping duty blocks across 100 scenarios
+    fails_if: "any count above 0 \u2014 v2 produced 1,030 physically impossible assignments"
+- id: S1a-07
+  epic: E1a Foundation
+  phase: 1a
+  title: Legality rules L1, L2, L6, L7
+  size: M
+  status: todo
+  depends_on:
+  - S1a-06
+  spec:
+  - '5.4'
+  check:
+    auto: pytest tests/engine/test_legality.py
+    manual: crewsim explain-legality --crew C0203 --pairing TS156
+    expect: 'ILLEGAL_L6 with a human-readable reason: A330 rating cannot fly A321neoLR'
+    fails_if: "a boolean is returned with no failing rule id \u2014 explainability\
+      \ is a requirement"
+- id: S1a-08
+  epic: E1a Foundation
+  phase: 1a
+  title: "Draft selector \u2014 impact tier, then SENIOR first"
+  size: M
+  status: todo
+  depends_on:
+  - S1a-07
+  spec:
+  - '5.6'
+  fixes: D6
+  check:
+    auto: pytest tests/engine/test_drafting.py -k senior_first
+    manual: crewsim explain-draft --scenario 0 --event 1
+    expect: tier 1 exhausted first; within it the LOWEST seniority number is chosen
+    fails_if: "the highest seniority number is chosen \u2014 the sort is inverted,\
+      \ as in v2"
+- id: S1a-09
+  epic: E1a Foundation
+  phase: 1a
+  title: Serialisable policy object, hash-pinned to a cost file
+  size: S
+  status: todo
+  depends_on:
+  - S1a-02
+  spec:
+  - '2.3'
+  - '5.9'
+  check:
+    auto: pytest tests/test_policy.py
+    manual: crewsim run --policy configs/policies/R6.yaml --print-provenance
+    expect: policy hash, costs_file version, params_version and master seed all printed
+    fails_if: "any of the four is missing \u2014 the result cannot be regenerated\
+      \ in a year"
+- id: S1a-10
+  epic: E1a Foundation
+  phase: 1a
+  title: V1 degeneracy tests
+  size: S
+  status: todo
+  depends_on:
+  - S1a-04
+  - S1a-08
+  spec:
+  - '9.2'
+  gate: V1
+  check:
+    auto: pytest tests/gates/test_v1_degeneracy.py
+    manual: crewsim gate v1
+    expect: 0 reserves + 0 sick calls => cost exactly 0.00; all-reserve => zero drafts,
+      zero cancels
+    fails_if: "any non-zero cost in the empty case \u2014 something is booked that\
+      \ should not be"
+- id: S1a-11
+  epic: E1a Foundation
+  phase: 1a
+  title: V7 reproducibility under joblib, in CI
+  size: S
+  status: todo
+  depends_on:
+  - S1a-05
+  spec:
+  - '9.2'
+  gate: V7
+  check:
+    auto: pytest tests/gates/test_v7_crn.py -n 4
+    manual: crewsim gate v7 --jobs 4
+    expect: bit-identical ledgers across 4 worker processes
+    fails_if: "identical single-process but different multi-process \u2014 the v2\
+      \ failure exactly"
+- id: S1a-12
+  epic: E1a Foundation
+  phase: 1a
+  title: "CLI \u2014 run, compare, explain"
+  size: M
+  status: todo
+  depends_on:
+  - S1a-09
+  spec:
+  - '4.2'
+  check:
+    auto: pytest tests/test_cli.py
+    manual: crewsim compare --policies R6 R10 --scenarios 100
+    expect: paired CRN diff with a CI and t-statistic, not two independent means
+    fails_if: "no paired statistic is shown \u2014 CRN's whole benefit is invisible"
+- id: S1b-01
+  epic: E1b Real rosters
+  phase: 1b
+  title: Load D1/D2 into the Crew State Engine
+  size: L
+  status: todo
+  depends_on:
+  - S1a-12
+  - S0-01
+  spec:
+  - '5.1'
+  - '5.4'
+  - '6.1'
+  check:
+    auto: pytest tests/engine/test_roster_loader.py
+    manual: crewsim roster summary --base YUL --fleet A321neoLR --position FO
+    expect: "112 crew rostered from an establishment of 120 \u2014 8 are non-ACTIVE"
+    fails_if: "120 crew load \u2014 non-ACTIVE statuses are being counted as available"
+- id: S1b-02
+  epic: E1b Real rosters
+  phase: 1b
+  title: "Headcount conservation \u2014 carve reserves out of the roster"
+  size: M
+  status: todo
+  depends_on:
+  - S1b-01
+  spec:
+  - '5.10'
+  - '7.5'
+  check:
+    auto: pytest tests/engine/test_headcount.py
+    manual: crewsim roster summary --policy R10 --show-split
+    expect: line holders + reserves = roster_size exactly, for every R
+    fails_if: "the total grows with R \u2014 reserves are being added, not carved\
+      \ out"
+- id: S1b-03
+  epic: E1b Real rosters
+  phase: 1b
+  title: Reserve lines with rotation and SC/LC split
+  size: M
+  status: todo
+  depends_on:
+  - S1b-02
+  spec:
+  - 5.0.2
+  - '5.5'
+  - '4.5'
+  check:
+    auto: pytest tests/engine/test_reserve_lines.py
+    manual: crewsim roster reserve-pattern --policy R10
+    expect: on/off rotation visible; SC/LC split roughly 60/40; NOT one flat horizon-long
+      block
+    fails_if: "every reserve is on call every day \u2014 eligibility will read ~100%,\
+      \ not ~30%"
+- id: S1b-04
+  epic: E1b Real rosters
+  phase: 1b
+  title: Bind sick calls to roster crew, and remove them
+  size: M
+  status: todo
+  depends_on:
+  - S1b-01
+  spec:
+  - 5.0.4
+  - '5.2'
+  fixes: D5
+  check:
+    auto: pytest tests/engine/test_sick_calls.py
+    manual: crewsim explain-event --scenario 0 --event SICK_CALL --first
+    expect: a named crew member is removed from the pool and their pairing becomes
+      open time
+    fails_if: "open time appears but no crew member is removed \u2014 demand is still\
+      \ exogenous"
+- id: S1b-05
+  epic: E1b Real rosters
+  phase: 1b
+  title: Events E6 DUTY_END and E7 REST_END
+  size: M
+  status: todo
+  depends_on:
+  - S1b-03
+  spec:
+  - 5.0.3
+  - 5.0.4
+  fixes: D4
+  check:
+    auto: pytest tests/engine/test_events.py -k "duty_end or rest_end"
+    manual: crewsim explain-crew --crew R001 --scenario 0 --timeline
+    expect: RESERVE -> duty -> REST -> RESERVE again; the reserve block is split,
+      not deleted
+    fails_if: the reserve disappears after one use, or is reusable during rest
+- id: S1b-06
+  epic: E1b Real rosters
+  phase: 1b
+  title: "Event E8 UNCOVERED_DEADLINE \u2014 hold before cancelling"
+  size: M
+  status: todo
+  depends_on:
+  - S1b-05
+  spec:
+  - 5.0.3
+  - 5.0.4
+  check:
+    auto: pytest tests/engine/test_events.py -k deadline
+    manual: crewsim explain-event --scenario 0 --event UNCOVERED_DEADLINE --first
+    expect: the item is held to its deadline; a reserve freeing up in between can
+      still rescue it
+    fails_if: "cancellation is booked at the moment of failure \u2014 rescues become\
+      \ impossible"
+- id: S1b-07
+  epic: E1b Real rosters
+  phase: 1b
+  title: V2 Erlang-B sanity bound
+  size: M
+  status: todo
+  depends_on:
+  - S1b-06
+  spec:
+  - '7.8'
+  - '9.2'
+  gate: V2
+  check:
+    auto: pytest tests/gates/test_v2_erlang.py
+    manual: crewsim gate v2 --show-comparison
+    expect: DES shortfall probability inside the Erlang-B confidence interval, side
+      by side
+    fails_if: "they differ by more than the CI \u2014 reserve accounting has a bug"
+- id: S1c-01
+  epic: E1c Eligibility
+  phase: 1c
+  title: Eligibility engine in FULL mode with distribution logging
+  size: M
+  status: todo
+  depends_on:
+  - S1b-07
+  spec:
+  - '5.5'
+  check:
+    auto: pytest tests/engine/test_eligibility.py
+    manual: crewsim run --policy R10 --scenarios 200 --report-eligibility
+    expect: "a histogram, not a mean \u2014 the pool is reserves on call during the\
+      \ DUTY WINDOW"
+    fails_if: eligibility is computed against reserves on call at the moment of the
+      phone call
+- id: S1c-02
+  epic: E1c Eligibility
+  phase: 1c
+  title: "Rule L8 \u2014 reserve notification time (SC 2h / LC 12h)"
+  size: S
+  status: todo
+  depends_on:
+  - S1c-01
+  - S1b-03
+  spec:
+  - '5.4'
+  check:
+    auto: pytest tests/engine/test_legality.py -k L8
+    manual: crewsim explain-legality --crew R002 --pairing TS156 --call-at "15:00"
+    expect: ILLEGAL_L8 for a long-call reserve given 1 hour of notice
+    fails_if: "long-call and short-call behave identically \u2014 L8 is not binding"
+- id: S1c-03
+  epic: E1c Eligibility
+  phase: 1c
+  title: "Rules L3/L4 \u2014 rolling 7-day and 28-day limits"
+  size: M
+  status: todo
+  depends_on:
+  - S1c-01
+  spec:
+  - '5.4'
+  check:
+    auto: pytest tests/engine/test_legality.py -k "L3 or L4"
+    manual: crewsim explain-crew --crew C0041 --show-counters
+    expect: rolling duty and flight hours accumulate and decay over the window
+    fails_if: "counters only ever increase \u2014 the rolling window is not rolling"
+- id: S1c-04
+  epic: E1c Eligibility
+  phase: 1c
+  title: "Rule L5 \u2014 one duty-free day per rolling 7"
+  size: S
+  status: todo
+  depends_on:
+  - S1c-03
+  spec:
+  - '5.4'
+  check:
+    auto: pytest tests/engine/test_legality.py -k L5
+    manual: crewsim run --policy R6 --scenarios 100 --assert-invariants
+    expect: no crew member ever works 7 consecutive days
+    fails_if: "any violation \u2014 L5 is not enforced on the drafting path"
+- id: S1c-05
+  epic: E1c Eligibility
+  phase: 1c
+  title: "V3 gate \u2014 eligibility rate on the HOLDOUT window"
+  size: M
+  status: todo
+  depends_on:
+  - S1c-04
+  - S0-04
+  - S0-09
+  spec:
+  - '9.2'
+  - '6.4'
+  gate: V3
+  check:
+    auto: pytest tests/gates/test_v3_eligibility.py
+    manual: crewsim gate v3 --window holdout
+    expect: simulated distribution vs the historical band, both plotted; verdict PASS
+      or FAIL stated
+    fails_if: it passes only on the fitting window, or inputs were tuned until it
+      passed
+- id: S1d-01
+  epic: E1d Cascades
+  phase: 1d
+  title: Future-pairing cascade from the StateDelta
+  size: M
+  status: todo
+  depends_on:
+  - S1c-05
+  spec:
+  - '5.7'
+  - 5.0.4
+  check:
+    auto: pytest tests/engine/test_cascade.py -k pairing
+    manual: crewsim explain-cascade --scenario 0 --first
+    expect: draft -> the crew member's later pairing is removed -> a new open item
+      at the right time
+    fails_if: the cascade fires immediately rather than at the future time it belongs
+      to
+- id: S1d-02
+  epic: E1d Cascades
+  phase: 1d
+  title: Future-reserve cascade (structural pool loss)
+  size: M
+  status: todo
+  depends_on:
+  - S1d-01
+  spec:
+  - '5.7'
+  check:
+    auto: pytest tests/engine/test_cascade.py -k reserve
+    manual: crewsim explain-cascade --scenario 0 --type reserve_loss
+    expect: drafting a crew member who held a later reserve block shrinks that day's
+      pool
+    fails_if: "only pairing cascades ever appear \u2014 half the mechanism is missing"
+- id: S1d-03
+  epic: E1d Cascades
+  phase: 1d
+  title: "Event E9 \u2014 terminal penalty on residual open items"
+  size: S
+  status: todo
+  depends_on:
+  - S1d-01
+  spec:
+  - 5.0.5
+  - '7.3'
+  check:
+    auto: pytest tests/engine/test_terminal.py
+    manual: crewsim explain-cost --category TERMINAL_PENALTY --summary
+    expect: charged per unresolved item at 1.5 x cancel_cost = 37,500
+    fails_if: "it is lower than cancel_cost \u2014 abandoning an item becomes cheaper\
+      \ than cancelling"
+- id: S1d-04
+  epic: E1d Cascades
+  phase: 1d
+  title: "V4 gate \u2014 cascade rate on the HOLDOUT window"
+  size: M
+  status: todo
+  depends_on:
+  - S1d-02
+  - S0-05
+  - S0-09
+  spec:
+  - '9.2'
+  - '6.4'
+  gate: V4
+  check:
+    auto: pytest tests/gates/test_v4_cascade.py
+    manual: crewsim gate v4 --window holdout
+    expect: simulated cascade rate vs the historical band, verdict stated
+    fails_if: "roster composition was adjusted to make it pass \u2014 that is calibration,\
+      \ not validation"
+- id: S1d-05
+  epic: E1d Cascades
+  phase: 1d
+  title: "V9 sensitivity sweep \u2014 terminal penalty, roster_size, lambda"
+  size: M
+  status: todo
+  depends_on:
+  - S1d-03
+  spec:
+  - '9.2'
+  gate: V9
+  check:
+    auto: pytest tests/gates/test_v9_sensitivity.py
+    manual: crewsim gate v9 --surface
+    expect: recommended R as a surface over the swept parameters, not a point
+    fails_if: R* moves a lot and the report does not say so prominently
+- id: S1e-01
+  epic: E1e Reporting
+  phase: 1e
+  title: KPI aggregation over the measurement window
+  size: M
+  status: todo
+  depends_on:
+  - S1d-05
+  spec:
+  - '2.1'
+  - 5.0.5
+  check:
+    auto: pytest tests/reporting/test_kpis.py
+    manual: crewsim run --policy R6 --scenarios 500 --kpis
+    expect: "E[C], CVaR95, uncovered, eligibility, cascade rate, draft distribution\
+      \ \u2014 warm-up excluded"
+    fails_if: warm-up rows are included, or cool-down costs are not attributed back
+      to the window
+- id: S1e-02
+  epic: E1e Reporting
+  phase: 1e
+  title: Self-contained HTML report
+  size: M
+  status: todo
+  depends_on:
+  - S1e-01
+  spec:
+  - '2.2'
+  - '9.3'
+  check:
+    auto: pytest tests/reporting/test_html.py
+    manual: crewsim report --policies R4 R6 R8 R10 R14 --open
+    expect: one HTML file; cost distributions and a U-shaped trade-off curve with
+      the optimum marked
+    fails_if: "external assets are needed \u2014 it must be emailable to Crew Planning\
+      \ as one file"
+- id: S1e-03
+  epic: E1e Reporting
+  phase: 1e
+  title: Exemplar-scenario drill-down
+  size: M
+  status: todo
+  depends_on:
+  - S1e-02
+  spec:
+  - '9.3'
+  - '2.3'
+  check:
+    auto: pytest tests/reporting/test_drilldown.py
+    manual: crewsim report --policy R6 --drilldown costliest
+    expect: the 5 costliest and 5 most typical scenarios, each an auditable event
+      timeline
+    fails_if: '''why 6 reserves?'' cannot be answered with a specific simulated Tuesday'
+- id: S1e-04
+  epic: E1e Reporting
+  phase: 1e
+  title: Policy grid runner
+  size: M
+  status: todo
+  depends_on:
+  - S1e-01
+  spec:
+  - '3'
+  check:
+    auto: pytest tests/test_grid.py
+    manual: crewsim grid --config configs/grid_mvp.yaml --scenarios 1000
+    expect: 24 combinations, all CRN-paired against the same scenario set
+    fails_if: "each combination regenerates its own scenarios \u2014 the comparison\
+      \ is unpaired"
+- id: S1e-05
+  epic: E1e Reporting
+  phase: 1e
+  title: "Counterfactual runs \u2014 junior-first and cost-ranked selection"
+  size: M
+  status: todo
+  depends_on:
+  - S1e-04
+  spec:
+  - '3'
+  - '5.6'
+  check:
+    auto: pytest tests/test_counterfactuals.py
+    manual: crewsim counterfactual --vs-mandated
+    expect: the price of the mandated rules, clearly labelled NOT A RECOMMENDATION
+    fails_if: a counterfactual can be selected as a candidate policy
+- id: S1e-06
+  epic: E1e Reporting
+  phase: 1e
+  title: V5 trace export for the SME walkthrough
+  size: M
+  status: todo
+  depends_on:
+  - S1e-03
+  spec:
+  - '9.2'
+  gate: V5
+  check:
+    auto: pytest tests/gates/test_v5_trace.py
+    manual: crewsim gate v5 --week 2026-01-12 --format timeline
+    expect: "an hour-by-hour operational timeline, readable by a duty manager \u2014\
+      \ not a log dump"
+    fails_if: it reads as debug output; you get one hour of an SME's attention, spend
+      it well
+- id: S1e-07
+  epic: E1e Reporting
+  phase: 1e
+  title: V6 cost backtest against actuals
+  size: L
+  status: todo
+  depends_on:
+  - S1e-06
+  spec:
+  - '9.2'
+  gate: V6
+  check:
+    auto: pytest tests/gates/test_v6_backtest.py
+    manual: crewsim gate v6 --period 2026-01
+    expect: simulated vs actual cost, plus the bias decomposition from 9.2's table
+    fails_if: "it lands inside tolerance with no decomposition \u2014 offsetting biases\
+      \ prove nothing"
+- id: S2-01
+  epic: E2.1 Optimisation engine
+  phase: '2'
+  title: Bayesian optimisation over the integer reserve lattice
+  size: L
+  status: todo
+  depends_on:
+  - S1e-07
+  spec:
+  - '7.7'
+  refine_when: slice 1e gate passed
+  check:
+    auto: TBD
+    manual: TBD
+    expect: converges to the grid optimum in far fewer runs
+    fails_if: it finds a different optimum than the exhaustive grid on the same seed
+- id: S2-02
+  epic: E2.1 Optimisation engine
+  phase: '2'
+  title: Ranking & selection over the (small) theta set
+  size: M
+  status: todo
+  depends_on:
+  - S2-01
+  spec:
+  - '7.3'
+  - '7.7'
+  refine_when: slice 1e gate passed
+  note: 'Scope is small: drafting has no parameters. Only reserve dispatch remains.'
+  check:
+    auto: TBD
+    manual: TBD
+    expect: TBD
+    fails_if: TBD
+- id: S2-03
+  epic: E2.2 Multi-fleet & multi-base
+  phase: '2'
+  title: A330 as a SEPARATE problem instance, not extra dimensions
+  size: L
+  status: todo
+  depends_on:
+  - S2-01
+  spec:
+  - 4.5.1
+  refine_when: slice 1e gate passed
+  check:
+    auto: TBD
+    manual: TBD
+    expect: two coupled sub-problems sharing a budget constraint
+    fails_if: one search space with infeasible cross-fleet terms
+- id: S2-04
+  epic: E2.3 Scale
+  phase: '2'
+  title: joblib -> Ray on AKS
+  size: L
+  status: todo
+  depends_on:
+  - S2-01
+  spec:
+  - '4.1'
+  - '3'
+  refine_when: slice 1e gate passed
+  check:
+    auto: TBD
+    manual: TBD
+    expect: V7 still passes distributed
+    fails_if: reproducibility breaks at scale
+- id: S2-05
+  epic: E2.4 Variance reduction
+  phase: '2'
+  title: Stratified sampling by severity regime
+  size: M
+  status: todo
+  depends_on:
+  - S2-01
+  spec:
+  - '3'
+  refine_when: slice 1e gate passed
+  check:
+    auto: TBD
+    manual: TBD
+    expect: narrower CI at equal scenario count
+    fails_if: "the point estimate shifts \u2014 stratification must be unbiased"
+- id: S2-06
+  epic: E2.5 Cabin crew
+  phase: '2'
+  title: Cabin crew with their own cost file and multi-position complement
+  size: L
+  status: todo
+  depends_on:
+  - S2-03
+  spec:
+  - 4.5.1
+  - '6.1'
+  refine_when: Crew Planning answers which group is the higher-value target
+  check:
+    auto: TBD
+    manual: TBD
+    expect: CUPE coefficients per local; a sick CA and FO on one trip = one cancellation
+    fails_if: pilot coefficients are reused
+- id: S3-01
+  epic: E3.1 Full legality
+  phase: '3'
+  title: Replace the surrogate with a rules engine, and quantify the bias
+  size: L
+  status: todo
+  depends_on:
+  - S2-01
+  spec:
+  - '5.4'
+  - '3'
+  refine_when: Phase 2 in use
+  check:
+    auto: TBD
+    manual: TBD
+    expect: surrogate-vs-real comparison per rule, bias direction confirmed conservative
+    fails_if: the surrogate turns out optimistic anywhere
+- id: S3-02
+  epic: E3.2 Network propagation
+  phase: '3'
+  title: Delay propagation through aircraft rotations
+  size: L
+  status: todo
+  depends_on:
+  - S3-01
+  spec:
+  - '1.4'
+  - '5.2'
+  refine_when: Phase 2 in use
+  note: The largest remaining realism gap; it is what CVaR currently understates.
+  check:
+    auto: TBD
+    manual: TBD
+    expect: tail cost rises; CVaR-optimal R rises with it
+    fails_if: "the tail does not move \u2014 propagation is not actually binding"
+- id: S3-03
+  epic: E3.3 Drift monitoring
+  phase: '3'
+  title: Monthly refit with input-drift alerting
+  size: M
+  status: todo
+  depends_on:
+  - S2-01
+  spec:
+  - '6.2'
+  - '3'
+  refine_when: Phase 2 in use
+  check:
+    auto: TBD
+    manual: TBD
+    expect: alert when sick-call intensity or the regime matrix shifts beyond tolerance
+    fails_if: drift is only visible by manual inspection
+- id: S3-04
+  epic: E3.4 Workflow integration
+  phase: '3'
+  title: Dashboard with scenario drill-down, in the bid-period workflow
+  size: L
+  status: todo
+  depends_on:
+  - S1e-03
+  spec:
+  - '3'
+  refine_when: Phase 2 in use
+  check:
+    auto: TBD
+    manual: TBD
+    expect: a planner can answer 'why this number' unaided
+    fails_if: drill-down is lost in the move from HTML to dashboard
+- id: S3-05
+  epic: E3.5 Accreditation
+  phase: '3'
+  title: Formal V&V accreditation package
+  size: L
+  status: todo
+  depends_on:
+  - S3-01
+  spec:
+  - '9'
+  refine_when: Phase 2 in use
+  check:
+    auto: TBD
+    manual: TBD
+    expect: trace validation, backtest bands and rule comparison in one signed package
+    fails_if: any gate is advisory without that being stated on the front page
+- id: S3-06
+  epic: E3.6 Voluntary layer
+  phase: '3'
+  title: "Model the voluntary recovery layer \u2014 IF one exists"
+  size: M
+  status: blocked
+  depends_on:
+  - S1e-07
+  spec:
+  - '1.4'
+  blocked_by: "QUESTIONS_TO_ASK.md section 1.2 \u2014 is drafting already that step?"
+  refine_when: the IOC answers whether a separate voluntary stage exists
+  check:
+    auto: TBD
+    manual: TBD
+    expect: "TBD \u2014 do not design this before the answer"
+    fails_if: a placeholder parameter is invented instead of modelling the real mechanism

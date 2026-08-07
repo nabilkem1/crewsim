@@ -31,13 +31,12 @@ data source, resolved from `configs/base.yaml → paths.corpus_dir`, never hard-
 
 ---
 
-## S0-00 — Create the Python project structure  ·  `M`
+## 🟢 [DONE] S0-00 — Create the Python project structure
+**Size:** `M` | **Depends on:** — | **Spec:** §4.2, §4.4.1b
 
 **As a** developer **I want** the repository laid out exactly as §4.2 specifies, with the corpus
 shipped inside the package **so that** a fresh checkout runs immediately, and the dependency rule and
 the no-hard-coded-paths rule are enforced from the first commit instead of retrofitted.
-
-Depends on: — · Spec §4.2, §4.4.1b
 
 **Acceptance — the tree**
 
@@ -90,89 +89,88 @@ crew-recovery-sim/
 - `generated/` — run output only — is git-ignored in full.
 - `crewsim doctor` reports the structure and resolves every configured path.
 
-🤖 `pytest tests/test_project_structure.py`
-🙋 `PYTHONPATH=src python -m crewsim doctor`  *(or `crewsim doctor` after `uv sync`)*
-   **Expect** every §4.2 module present, and `corpus_dir` resolving to `src/crewsim/data/corpus`
-   with **12 datasets found**
-   **Fails if** the corpus is missing from the package, or a path is hard-coded instead of read
-   from config
-
-> **Why this is `M` and not `S`.** Getting the shape right now is what makes the engine testable in
-> microseconds later. Shipping the corpus in-package costs a ~97 MB repository; it buys a checkout
-> that is runnable on clone, with every gate scored against the exact bytes the loaders were written
-> against. Retrofitting either decision is expensive.
+### Verification
+*   🤖 **Automated:** `pytest tests/test_project_structure.py`
+*   🙋 **Manual:** `PYTHONPATH=src python -m crewsim doctor`  *(or `crewsim doctor` after `uv sync`)*`
+    *   **Expect:** every §4.2 module present, and `corpus_dir` resolving to `src/crewsim/data/corpus`
+    *   with **12 datasets found**
+    *   **Fails if:** the corpus is missing from the package, or a path is hard-coded instead of read
+    *   from config
+    *   > **Why this is `M` and not `S`.** Getting the shape right now is what makes the engine testable in
+    *   > microseconds later. Shipping the corpus in-package costs a ~97 MB repository; it buys a checkout
+    *   > that is runnable on clone, with every gate scored against the exact bytes the loaders were written
+    *   > against. Retrofitting either decision is expensive.
 
 ---
 
-## S0-00b — Tooling, CI and the engine dependency rule  ·  `S`
+## 🟢 [DONE] S0-00b — Tooling, CI and the engine dependency rule
+**Size:** `S` | **Depends on:** S0-00 | **Spec:** §4.1, §4.3
 
 **As a** reviewer **I want** the quality bar automated **so that** §4.3's standards are enforced by
 the pipeline rather than by memory.
 
-Depends on: S0-00 · Spec §4.1, §4.3
-
-**Acceptance**
-- `uv` lockfile; ruff configured; **`mypy --strict` on `src/crewsim/engine/` specifically** — the rest
+### Acceptance Criteria
+- [x] `uv` lockfile; ruff configured; **`mypy --strict` on `src/crewsim/engine/` specifically** — the rest
   of the tree is not strict, per §4.3
-- **`engine/` must not import `simpy`.** Only `des.py` may. Enforced by a test, not by convention
-- CI runs lint, types and tests on every push, and fails the build on any of them
-- `hypothesis` wired in, ready for the L0 property test in S1a-06 (slice 1a)
+- [x] **`engine/` must not import `simpy`.** Only `des.py` may. Enforced by a test, not by convention
+- [x] CI runs lint, types and tests on every push, and fails the build on any of them
+- [x] `hypothesis` wired in, ready for the L0 property test in S1a-06 (slice 1a)
 
-🤖 `ruff check src && mypy --strict src/crewsim/engine && pytest tests/test_dependency_rule.py`
-🙋 `grep -rn 'import simpy' src/crewsim/engine | wc -l`
-   **Expect** `0`
-   **Fails if** anything above 0 — the engine stops being unit-testable without a SimPy
-   `Environment`, and the test suite goes from ~4 seconds to ~4 minutes
+### Verification
+*   🤖 **Automated:** `ruff check src && mypy --strict src/crewsim/engine && pytest tests/test_dependency_rule.py`
+*   🙋 **Manual:** `grep -rn 'import simpy' src/crewsim/engine | wc -l`
+    *   **Expect:** `0`
+    *   **Fails if:** anything above 0 — the engine stops being unit-testable without a SimPy
+    *   `Environment`, and the test suite goes from ~4 seconds to ~4 minutes
 
 ---
 
-## S0-01 — Typed corpus loader for D1–D12  ·  `M`
+## 🟢 [DONE] S0-01 — Typed corpus loader for D1–D12
+**Size:** `M` | **Depends on:** S0-00 | **Spec:** §6.1, §4.2, §4.4.1b
 
 **As a** developer **I want** every dataset to load through one typed, validated loader
 **so that** schema drift fails loudly at ingestion instead of silently at calibration.
 
-Depends on: S0-00 · Spec §6.1, §4.2, §4.4.1b
+### Acceptance Criteria
+- [x] Reads from `paths.corpus_dir` (`src/crewsim/data/corpus`) — resolved from config, never a literal
+- [x] Polars-backed loader per dataset, with a declared schema; unknown or missing columns raise
+- [x] Timestamps parsed as UTC **and** station local; legality later operates on local (§6.2)
+- [x] `crew_id` treated as an opaque surrogate key — no name or employee number anywhere (Law 25)
+- [x] Reads both `.csv` and `.csv.gz`
 
-**Acceptance**
-- Reads from `paths.corpus_dir` (`src/crewsim/data/corpus`) — resolved from config, never a literal
-- Polars-backed loader per dataset, with a declared schema; unknown or missing columns raise
-- Timestamps parsed as UTC **and** station local; legality later operates on local (§6.2)
-- `crew_id` treated as an opaque surrogate key — no name or employee number anywhere (Law 25)
-- Reads both `.csv` and `.csv.gz`
-
-🤖 `pytest tests/data/test_loaders.py`
-🙋 `crewsim data head --dataset d2_rosters --rows 5`
-   **Expect** 5 roster rows; `start_utc` and `start_local` differ by the base offset (YUL = 4h)
-   **Fails if** UTC and local are identical — timezone discipline is not implemented
+### Verification
+*   🤖 **Automated:** `pytest tests/data/test_loaders.py`
+*   🙋 **Manual:** `crewsim data head --dataset d2_rosters --rows 5`
+    *   **Expect:** 5 roster rows; `start_utc` and `start_local` differ by the base offset (YUL = 4h)
+    *   **Fails if:** UTC and local are identical — timezone discipline is not implemented
 
 ---
 
-## S0-02 — Data-quality report against the §6.2 gates  ·  `S`
+## 🟢 [DONE] S0-02 — Data-quality report against the §6.2 gates
+**Size:** `S` | **Depends on:** S0-01 | **Spec:** §6.2
 
 **As a** data lead **I want** the completeness gates checked automatically
 **so that** a corpus that cannot support validation is caught before anyone fits a model to it.
 
-Depends on: S0-01 · Spec §6.2
+### Acceptance Criteria
+- [x] Reports D4 linkage, D6/D7 join recovery, D9 completeness, each against its threshold
+- [x] States PASS / MARGINAL / FAIL per gate, never a bare percentage
+- [x] Exits non-zero when a hard gate fails, so it can run in CI
 
-**Acceptance**
-- Reports D4 linkage, D6/D7 join recovery, D9 completeness, each against its threshold
-- States PASS / MARGINAL / FAIL per gate, never a bare percentage
-- Exits non-zero when a hard gate fails, so it can run in CI
-
-🤖 `pytest tests/data/test_quality_gates.py`
-🙋 `crewsim data quality-report`
-   **Expect** D4 linkage ≈92%, D9 completeness ≈98% — the injected gaps show up
-   **Fails if** every gate reads 100% — the deliberate gaps in the mock corpus are being missed
+### Verification
+*   🤖 **Automated:** `pytest tests/data/test_quality_gates.py`
+*   🙋 **Manual:** `crewsim data quality-report`
+    *   **Expect:** D4 linkage ≈92%, D9 completeness ≈98% — the injected gaps show up
+    *   **Fails if:** every gate reads 100% — the deliberate gaps in the mock corpus are being missed
 
 ---
 
-## S0-02b — Descriptive data profile  ·  `M`
+## 🟢 [DONE] S0-02b — Descriptive data profile
+**Size:** `M` | **Depends on:** S0-01 | **Spec:** §5.2, §6.1, §4.4.1b
 
 **As a** modeller **I want** to see the distribution of every quantity I am about to fit
 **so that** I choose distribution families from evidence rather than from habit, and notice a broken
 extract before it becomes a fitted parameter.
-
-Depends on: S0-01 · Spec §5.2, §6.1, §4.4.1b
 
 > **Not the same as S0-02.** That one asks *"can we use this data?"* — completeness gates, linkage,
 > recall. This one asks *"what does this data actually say?"* Both are needed, and this one must come
@@ -200,157 +198,154 @@ Depends on: S0-01 · Spec §5.2, §6.1, §4.4.1b
 - Every distribution the spec assumes a family for gets an explicit overlay of that family against the
   empirical data, so a bad assumption is visible rather than inferred
 
-🤖 `pytest tests/data/test_profile_report.py`
-🙋 `crewsim data profile --open`
-
-**Expect** — measured on the current corpus, so these are checkable today:
-
-| | Value | Why it matters |
-|---|---|---|
-| Sick calls/day, variance ÷ mean | **3.3** | > 1 ⇒ overdispersed ⇒ NegBin, not Poisson |
-| Winter vs summer rate | **9.6** vs **5.7** per day | Season is a real covariate, not decoration |
-| Absence duration | median **1**, mean **2.0**, max **38** | Right-skewed ⇒ lognormal is the right family |
-| Reserve outcomes | 88.7% assigned · 7.3% released · **3.9% no-show** | A reserve is not a guaranteed resource |
-| Roster mix | PAIRING 62% · DAY_OFF 29% · RESERVE 3% | Explains why tier 1 absorbs nearly every draft |
-| Regime gradient (per station-day) | sick **0.039 → 0.405**, cancel **0.001 → 0.061**, delay **1.2 → 55.4 min** across CALM → SEVERE | The three streams move together — this *is* the evidence for §1.3.4 |
-| SEVERE run length | mean **1.70** days, max **12** | Bad weeks, not scattered bad days |
-
-**Fails if** the variance-to-mean ratio is ≈1.0 — S0-07's NegBin choice would then be unjustified — or
-the three streams do **not** move together across regimes, which would mean the severity-regime design
-in §5.2 has no support in the data and the correlation the model relies on is invented.
-
-> **Why this earns its place.** §1.3.4 asserts that disruption streams are correlated, and the whole
-> severity-regime machinery exists to reproduce that. This report is where that assertion is either
-> confirmed or falsified, on real data, before anything is fitted to it.
+### Verification
+*   🤖 **Automated:** `pytest tests/data/test_profile_report.py`
+*   🙋 **Manual:** `crewsim data profile --open`
+    *   **Expect:** — measured on the current corpus, so these are checkable today:
+    *   | | Value | Why it matters |
+    *   |---|---|---|
+    *   | Sick calls/day, variance ÷ mean | **3.3** | > 1 ⇒ overdispersed ⇒ NegBin, not Poisson |
+    *   | Winter vs summer rate | **9.6** vs **5.7** per day | Season is a real covariate, not decoration |
+    *   | Absence duration | median **1**, mean **2.0**, max **38** | Right-skewed ⇒ lognormal is the right family |
+    *   | Reserve outcomes | 88.7% assigned · 7.3% released · **3.9% no-show** | A reserve is not a guaranteed resource |
+    *   | Roster mix | PAIRING 62% · DAY_OFF 29% · RESERVE 3% | Explains why tier 1 absorbs nearly every draft |
+    *   | Regime gradient (per station-day) | sick **0.039 → 0.405**, cancel **0.001 → 0.061**, delay **1.2 → 55.4 min** across CALM → SEVERE | The three streams move together — this *is* the evidence for §1.3.4 |
+    *   | SEVERE run length | mean **1.70** days, max **12** | Bad weeks, not scattered bad days |
+    *   **Fails if:** the variance-to-mean ratio is ≈1.0 — S0-07's NegBin choice would then be unjustified — or
+    *   the three streams do **not** move together across regimes, which would mean the severity-regime design
+    *   in §5.2 has no support in the data and the correlation the model relies on is invented.
+    *   > **Why this earns its place.** §1.3.4 asserts that disruption streams are correlated, and the whole
+    *   > severity-regime machinery exists to reproduce that. This report is where that assertion is either
+    *   > confirmed or falsified, on real data, before anything is fitted to it.
 
 ---
 
-## S0-03 — Draft-event reconstruction (D6 × D7)  ·  `L`  ·  ★ CRITICAL PATH
+## 🟢 [DONE] S0-03 — Draft-event reconstruction (D6 × D7)  ·  ★ CRITICAL PATH
+**Size:** `L` | **Depends on:** S0-01 | **Spec:** §6.3-1, §6.2
 
 **As a** data lead **I want** historical drafts reconstructed from schedule changes and pay codes
 **so that** the tier distribution and the cascade target have a factual basis.
 
-Depends on: S0-01 · Spec §6.3-1, §6.2
-
-**Acceptance**
-- Join is configurable, not hard-coded: premium pay codes, the short-notice window, the initiator
+### Acceptance Criteria
+- [x] Join is configurable, not hard-coded: premium pay codes, the short-notice window, the initiator
   filter are all parameters, because every one of them is an assumption about Air Transat's systems
-- Emits the draft-event table: timestamp, crew, **prior status** (→ tier distribution), covering pairing
-- Reports recall against a labelled sample; on the mock corpus, against `_ground_truth.json`
-- Handles null `initiator` on older records without dropping the row silently
+- [x] Emits the draft-event table: timestamp, crew, **prior status** (→ tier distribution), covering pairing
+- [x] Reports recall against a labelled sample; on the mock corpus, against `_ground_truth.json`
+- [x] Handles null `initiator` on older records without dropping the row silently
 
-🤖 `pytest tests/data/test_draft_reconstruction.py`
-🙋 `python generated/data/validate_corpus.py`
-   **Expect** recall **87.7%** against a ground truth of 2,592 drafts — above the 80% gate
-   **Fails if** recall < 80% — escalate immediately; two validation gates degrade to advisory
-
-> **When this runs on real data**, the ground-truth file will not exist. Recall must instead be measured
-> against a week that an IOC duty manager has labelled by hand — see `QUESTIONS_TO_ASK.md` §6.1.
+### Verification
+*   🤖 **Automated:** `pytest tests/data/test_draft_reconstruction.py`
+*   🙋 **Manual:** `python generated/data/validate_corpus.py`
+    *   **Expect:** recall **87.7%** against a ground truth of 2,592 drafts — above the 80% gate
+    *   **Fails if:** recall < 80% — escalate immediately; two validation gates degrade to advisory
+    *   > **When this runs on real data**, the ground-truth file will not exist. Recall must instead be measured
+    *   > against a week that an IOC duty manager has labelled by hand — see `QUESTIONS_TO_ASK.md` §6.1.
 
 ---
 
-## S0-04 — Eligibility-rate table from history  ·  `M`
+## 🟢 [DONE] S0-04 — Eligibility-rate table from history
+**Size:** `M` | **Depends on:** S0-01 | **Spec:** §6.3-2
 
 **As a** modeller **I want** the historical eligible fraction as a *distribution*
 **so that** gate V3 has something to compare a distribution against.
 
-Depends on: S0-01 · Spec §6.3-2
+### Acceptance Criteria
+- [x] For each historical sick call, reconstruct the reserve pool on call **for that duty window**
+- [x] Apply surrogate rules L0–L8; emit the eligible fraction per event
+- [x] Output carries mean, CI and the full distribution — not a point estimate
+- [x] Computed per season (§4.5.2)
 
-**Acceptance**
-- For each historical sick call, reconstruct the reserve pool on call **for that duty window**
-- Apply surrogate rules L0–L8; emit the eligible fraction per event
-- Output carries mean, CI and the full distribution — not a point estimate
-- Computed per season (§4.5.2)
-
-🤖 `pytest tests/data/test_eligibility_table.py`
-🙋 `crewsim data eligibility-target --season winter_sun`
-   **Expect** a distribution with mean ≈30% and a printed confidence interval
-   **Fails if** only a single number appears — V3 compares distributions
+### Verification
+*   🤖 **Automated:** `pytest tests/data/test_eligibility_table.py`
+*   🙋 **Manual:** `crewsim data eligibility-target --season winter_sun`
+    *   **Expect:** a distribution with mean ≈30% and a printed confidence interval
+    *   **Fails if:** only a single number appears — V3 compares distributions
 
 ---
 
-## S0-05 — Cascade table from reconstructed drafts  ·  `M`
+## 🟢 [DONE] S0-05 — Cascade table from reconstructed drafts
+**Size:** `M` | **Depends on:** S0-03 | **Spec:** §6.3-3
 
 **As a** modeller **I want** the historical cascade frequency **so that** gate V4 has a target.
 
-Depends on: S0-03 · Spec §6.3-3
+### Acceptance Criteria
+- [x] For each reconstructed draft, scan the drafted crew's next 7 days in D6 for follow-on IOC changes
+- [x] Emit rate + CI; inherits and **reports** S0-03's recall limitation
 
-**Acceptance**
-- For each reconstructed draft, scan the drafted crew's next 7 days in D6 for follow-on IOC changes
-- Emit rate + CI; inherits and **reports** S0-03's recall limitation
-
-🤖 `pytest tests/data/test_cascade_table.py`
-🙋 `crewsim data cascade-target`
-   **Expect** ≈20% with a CI; count consistent with S0-03's reconstructed drafts
-   **Fails if** cascades outnumber drafts
+### Verification
+*   🤖 **Automated:** `pytest tests/data/test_cascade_table.py`
+*   🙋 **Manual:** `crewsim data cascade-target`
+    *   **Expect:** ≈20% with a CI; count consistent with S0-03's reconstructed drafts
+    *   **Fails if:** cascades outnumber drafts
 
 ---
 
-## S0-06 — Severity regime, fitted per season  ·  `M`
+## 🟢 [DONE] S0-06 — Severity regime, fitted per season
+**Size:** `M` | **Depends on:** S0-01 | **Spec:** §6.3-4, §5.2, §4.5.2
 
 **As a** modeller **I want** a per-season Markov chain over daily disruption state
 **so that** bad *weeks* are generated, not scattered bad days.
 
-Depends on: S0-01 · Spec §6.3-4, §5.2, §4.5.2
+### Acceptance Criteria
+- [x] Cluster station-days by delay-code density, cancellation count and sick-call count into 4 states
+- [x] Fit the transition matrix **per season** — one matrix for the year describes neither season
+- [x] Emit intensity multipliers alongside the matrix
 
-**Acceptance**
-- Cluster station-days by delay-code density, cancellation count and sick-call count into 4 states
-- Fit the transition matrix **per season** — one matrix for the year describes neither season
-- Emit intensity multipliers alongside the matrix
-
-🤖 `pytest tests/calibration/test_regime.py`
-🙋 `crewsim calibrate regime --season winter_sun --show-matrix`
-   **Expect** 4×4 matrix, rows summing to 1.0, `SEVERE→SEVERE` > 0.25
-   **Fails if** `SEVERE→SEVERE` < 0.15, or one matrix is fitted across all seasons
-
----
-
-## S0-07 — Sick-call NHPP with covariates  ·  `L`
-
-Depends on: S0-01, S0-06 · Spec §5.2
-
-**Acceptance**
-- Poisson / NegBin GLM on daily counts with season, day-of-week, base, fleet, category, regime
-- Negative Binomial where overdispersed — absence counts always are
-- Thinning to continuous time is tested against the fitted daily intensity
-- Absence duration fitted separately (lognormal)
-
-🤖 `pytest tests/calibration/test_nhpp.py`
-🙋 `crewsim calibrate sick-calls --show-coefficients`
-   **Expect** coefficients per covariate; NegBin dispersion > 1
-   **Fails if** dispersion ≈ 1 — Poisson has been assumed where it does not hold
+### Verification
+*   🤖 **Automated:** `pytest tests/calibration/test_regime.py`
+*   🙋 **Manual:** `crewsim calibrate regime --season winter_sun --show-matrix`
+    *   **Expect:** 4×4 matrix, rows summing to 1.0, `SEVERE→SEVERE` > 0.25
+    *   **Fails if:** `SEVERE→SEVERE` < 0.15, or one matrix is fitted across all seasons
 
 ---
 
-## S0-08 — Versioned parameter store  ·  `S`
+## 🟢 [DONE] S0-07 — Sick-call NHPP with covariates
+**Size:** `L` | **Depends on:** S0-01, S0-06 | **Spec:** §5.2
 
-Depends on: S0-06, S0-07 · Spec §2.2, §6.2
+### Acceptance Criteria
+- [x] Poisson / NegBin GLM on daily counts with season, day-of-week, base, fleet, category, regime
+- [x] Negative Binomial where overdispersed — absence counts always are
+- [x] Thinning to continuous time is tested against the fitted daily intensity
+- [x] Absence duration fitted separately (lognormal)
 
-**Acceptance**
-- One artefact per calibration run: version, fitted-at, data window, season, coefficients,
+### Verification
+*   🤖 **Automated:** `pytest tests/calibration/test_nhpp.py`
+*   🙋 **Manual:** `crewsim calibrate sick-calls --show-coefficients`
+    *   **Expect:** coefficients per covariate; NegBin dispersion > 1
+    *   **Fails if:** dispersion ≈ 1 — Poisson has been assumed where it does not hold
+
+---
+
+## 🟢 [DONE] S0-08 — Versioned parameter store
+**Size:** `S` | **Depends on:** S0-06, S0-07 | **Spec:** §2.2, §6.2
+
+### Acceptance Criteria
+- [x] One artefact per calibration run: version, fitted-at, data window, season, coefficients,
   diagnostics, validation targets, **content hash**
-- Every simulation run records that version and hash in its metadata
+- [x] Every simulation run records that version and hash in its metadata
 
-🤖 `pytest tests/calibration/test_param_store.py`
-🙋 `crewsim calibrate --emit params/ && cat params/params_v*.json | head -20`
-   **Expect** all of `params_version`, `fitted_at`, `data_window`, `season`, `content_hash`
-   **Fails if** there is no content hash — the data → params → results chain is broken
+### Verification
+*   🤖 **Automated:** `pytest tests/calibration/test_param_store.py`
+*   🙋 **Manual:** `crewsim calibrate --emit params/ && cat params/params_v*.json | head -20`
+    *   **Expect:** all of `params_version`, `fitted_at`, `data_window`, `season`, `content_hash`
+    *   **Fails if:** there is no content hash — the data → params → results chain is broken
 
 ---
 
-## S0-09 — Enforce the fitting / holdout split  ·  `S`
+## 🟢 [DONE] S0-09 — Enforce the fitting / holdout split
+**Size:** `S` | **Depends on:** S0-08 | **Spec:** §6.4, §9.2
 
 **As a** reviewer **I want** it to be impossible to fit on the validation window
 **so that** V3 and V4 mean something.
 
-Depends on: S0-08 · Spec §6.4, §9.2
+### Acceptance Criteria
+- [x] Windows declared in config; the fitter refuses the holdout window with an explicit error
+- [x] Validation commands refuse the *fitting* window unless `--i-know` is passed, and say why
+- [x] The window used is stamped into every emitted artefact
 
-**Acceptance**
-- Windows declared in config; the fitter refuses the holdout window with an explicit error
-- Validation commands refuse the *fitting* window unless `--i-know` is passed, and say why
-- The window used is stamped into every emitted artefact
+### Verification
+*   🤖 **Automated:** `pytest tests/calibration/test_holdout.py`
+*   🙋 **Manual:** `crewsim calibrate --window holdout --emit /tmp/x`
+    *   **Expect:** a refusal with a clear message
+    *   **Fails if:** it runs — nothing then prevents fitting on validation data
 
-🤖 `pytest tests/calibration/test_holdout.py`
-🙋 `crewsim calibrate --window holdout --emit /tmp/x`
-   **Expect** a refusal with a clear message
-   **Fails if** it runs — nothing then prevents fitting on validation data
