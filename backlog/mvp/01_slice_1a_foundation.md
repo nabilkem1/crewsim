@@ -18,6 +18,9 @@ slice is built on top of this code:
 ## ⏳ [TODO] S1a-02 — Pydantic config loader
 **Size:** `M` | **Depends on:** S0-00 | **Spec:** §4.4, §2.3
 
+**As a** developer **I want** all configurations loaded via Pydantic and no hard-coded values
+**so that** the settings are strictly validated and traceable.
+
 ### Acceptance Criteria
 - [ ] `configs/base.yaml` and `configs/costs_pilots.yaml` load into validated Pydantic models
 - [ ] **No numeric constant anywhere outside `configs/`** — a test greps for them
@@ -56,6 +59,9 @@ slice is built on top of this code:
 ## ⏳ [TODO] S1a-04 — Accrue reserve staffing per reserve-day  ·  fixes **D1**
 **Size:** `S` | **Depends on:** S1a-03 | **Spec:** §5.8, §7.2
 
+**As a** planner **I want** reserve staffing costs to accrue precisely per day
+**so that** the total cost scales correctly and isn't distorted by warm-up periods.
+
 ### Acceptance Criteria
 - [ ] `RESERVE_STAFFING` booked once per reserve per day, at **that day's** timestamp
 - [ ] The warm-up filter prorates it exactly as it does every other category
@@ -73,6 +79,9 @@ slice is built on top of this code:
 
 ## ⏳ [TODO] S1a-05 — CRN streams with process-stable seeding  ·  fixes **D2**
 **Size:** `M` | **Depends on:** S1a-02 | **Spec:** §5.2, §2.3/C1, §4.3
+
+**As a** researcher **I want** reproducible and stable CRN streams
+**so that** comparing different policies yields statistically valid paired differences without random noise.
 
 ### Acceptance Criteria
 - [ ] Master seed → `SeedSequence.spawn(N)` → named streams per scenario
@@ -111,6 +120,9 @@ slice is built on top of this code:
 ## ⏳ [TODO] S1a-07 — Legality rules L1, L2, L6, L7
 **Size:** `M` | **Depends on:** S1a-06 | **Spec:** §5.4
 
+**As a** reviewer **I want** comprehensive legality rules enforced
+**so that** generated schedules comply with real-world aviation constraints.
+
 ### Acceptance Criteria
 - [ ] L1 max duty 13 h · L2 min rest 11 h home / 10 h away · L6 type rating **and** position · L7 base
 - [ ] Each rule has a test that makes *that rule* the binding one
@@ -127,6 +139,9 @@ slice is built on top of this code:
 
 ## ⏳ [TODO] S1a-08 — Draft selector: tier, then senior-first  ·  fixes **D6**
 **Size:** `M` | **Depends on:** S1a-07 | **Spec:** §5.6
+
+**As a** planner **I want** the draft selector to strictly follow tier and seniority order
+**so that** the simulated drafting exactly matches the mandated real-world process.
 
 ### Acceptance Criteria
 - [ ] Exhaust tier *k* before tier *k+1*; within a tier take the **lowest seniority number**
@@ -145,6 +160,9 @@ slice is built on top of this code:
 ## ⏳ [TODO] S1a-09 — Serialisable policy, hash-pinned
 **Size:** `S` | **Depends on:** S1a-02 | **Spec:** §2.3/C3, §5.9
 
+**As a** data scientist **I want** policies to be serialisable and hash-pinned
+**so that** I can definitively trace any simulation result back to its exact policy configuration.
+
 ### Acceptance Criteria
 - [ ] Policy is a Pydantic object, round-trips through YAML, and hashes stably
 - [ ] Pinned to a `costs_*.yaml` version; the hash is recorded in run metadata
@@ -160,6 +178,9 @@ slice is built on top of this code:
 
 ## ⏳ [TODO] S1a-10 — V1 degeneracy tests  ·  **gate V1**
 **Size:** `S` | **Depends on:** S1a-04, S1a-08 | **Spec:** §9.2
+
+**As a** reviewer **I want** degeneracy tests to verify zero costs under empty conditions
+**so that** I am confident the engine does not fabricate phantom costs.
 
 **Acceptance** — three configurations whose answers are computable on paper:
 - 0 reserves, 0 sick calls → total cost exactly **$0.00**
@@ -177,6 +198,9 @@ slice is built on top of this code:
 ## ⏳ [TODO] S1a-11 — V7 reproducibility under joblib, in CI  ·  **gate V7**
 **Size:** `S` | **Depends on:** S1a-05 | **Spec:** §9.2
 
+**As a** developer **I want** bit-identical results under multiprocessing
+**so that** I can scale the simulation across a cluster without losing reproducibility.
+
 ### Acceptance Criteria
 - [ ] Same policy, same master seed, twice → **bit-identical** ledger
 - [ ] Run **multi-process**, not single-process — that is the configuration v2 failed
@@ -192,6 +216,9 @@ slice is built on top of this code:
 
 ## ⏳ [TODO] S1a-12 — CLI: run, compare, explain
 **Size:** `M` | **Depends on:** S1a-09 | **Spec:** §4.2
+
+**As a** user **I want** a unified CLI to run, compare, and explain scenarios
+**so that** I can easily extract, contrast, and audit simulation insights.
 
 ### Acceptance Criteria
 - [ ] `crewsim run | compare | explain-* | gate | config`

@@ -76,3 +76,31 @@ sensitivity:
 
 mode: FULL                   # REDUCED is for smoke tests only — never a recommendation
 costs_file: costs_pilots.yaml
+
+# =============================================================================
+# The two sections below (S1a-02) absorb numeric literals that pre-dated the
+# "no numeric constant outside configs/" rule (§4.4) -- they were written
+# in-line in quality.py/delays.py/regime.py/profile.py during Phase 0
+# (S0-02/S0-06/S0-07/S0-07b), before this file's own rule existed to catch
+# them. Moved here verbatim, no value changed. Two, `d4_link_marginal` and
+# `d9_completeness_pass`, have no citation anywhere in the spec -- they were
+# an implementation judgment call, not a business or spec-mandated figure.
+# Flagged rather than silently re-homed as if confirmed.
+# =============================================================================
+quality_gates:                       # §6.2 data quality gates
+  d4_link_pass:        0.95          # §6.2 "The Sick Call Link Test"
+  d4_link_marginal:     0.90         # [CONFIRM: Data Science] -- not spec-cited
+  d6_d7_join_pass:      0.80         # §6.2 "The Payroll Link Test"
+  d9_completeness_pass: 0.98         # [CONFIRM: Data Science] -- not spec-cited
+
+calibration:                         # S0-06/S0-07/S0-07b fitting choices
+  delay_gmm_components:   2          # short-delay / long-delay mixture (S0-07b)
+  delay_gmm_random_state: 42         # NOTE: a literal seed, not a CRN/stable_seed()
+                                      # stream (§4.3) -- this is an offline sklearn
+                                      # fit at calibration time, not scenario RNG.
+                                      # Flagged as tech debt, not fixed, by S1a-02.
+  regime_quantiles:                  # chaos-count cut points -> CALM/NORMAL/DISRUPTED/SEVERE
+    p_calm:      0.5
+    p_normal:    0.8
+    p_disrupted: 0.95
+  overdispersion_threshold: 1.5      # var/mean bar for "clearly overdispersed" (§5.2)
