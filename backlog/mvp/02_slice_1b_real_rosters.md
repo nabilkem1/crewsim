@@ -55,6 +55,9 @@ makes `roster_size` stop being inert.
 ## ⏳ [TODO] S1b-03 — Reserve lines with rotation and SC/LC split
 **Size:** `M` | **Depends on:** S1b-02 | **Spec:** §5.0.2, §5.5, §4.5
 
+**As a** planner **I want** reserve lines to follow rotational rules and Short-Call/Long-Call splits
+**so that** I model realistic reserve availability instead of uniform pools.
+
 ### Acceptance Criteria
 - [ ] Reserve blocks follow an on/off rotation from D2 — **not** one flat horizon-long block
 - [ ] Short-call and long-call are distinct, carried through from `d2_rosters.reserve_call_type`
@@ -91,6 +94,9 @@ makes `roster_size` stop being inert.
 
 ## ⏳ [TODO] S1b-05 — Events E6 DUTY_END and E7 REST_END  ·  fixes **D4**
 **Size:** `M` | **Depends on:** S1b-03 | **Spec:** §5.0.3, §5.0.4
+
+**As a** modeller **I want** duties and rest periods to explicitly end on schedule
+**so that** crews are returned to availability correctly.
 
 ### Acceptance Criteria
 - [ ] Duty closes at E6; REST inserted per L2; rolling counters updated

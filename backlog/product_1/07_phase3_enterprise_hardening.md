@@ -12,6 +12,9 @@
 ### ⏳ [TODO] S3-01 — Replace the surrogate with a rules engine, and quantify the bias
 **Size:** `L`
 
+**As a** developer **I want** to replace the surrogate legality rules with a true rules engine
+**so that** fidelity is maximized and bias is quantified.
+
 Depends on S2-01. Spec §5.4, §3.
 
 The surrogate implements L0–L8 with a documented **conservative** bias: surrogate-legal ⇒ almost always
@@ -29,6 +32,9 @@ result needs revisiting.
 
 ### ⏳ [TODO] S3-02 — Delay propagation through aircraft rotations
 **Size:** `L`
+
+**As a** modeller **I want** delay propagation modeled through aircraft rotations
+**so that** aircraft-driven delays properly impact crew availability.
 
 Depends on S3-01. Spec §1.4, §5.2.
 
@@ -49,6 +55,9 @@ propagation is not actually binding and the reduced form was adequate, which is 
 ### ⏳ [TODO] S3-03 — Monthly refit with input-drift alerting
 **Size:** `M`
 
+**As a** data scientist **I want** automated monthly refitting with input-drift alerting
+**so that** the system degrades gracefully when reality shifts.
+
 Depends on S2-01. Spec §6.2, §3.
 
 Matters more for a leisure carrier than for a scheduled network carrier: route structure changes
@@ -65,6 +74,9 @@ seasonally, so a model fitted on last winter's sun programme may not describe th
 
 ### ⏳ [TODO] S3-04 — Dashboard with scenario drill-down
 **Size:** `L`
+
+**As a** stakeholder **I want** a dashboard with scenario drill-down
+**so that** I can interactively explore the data instead of just reading static reports.
 
 Depends on S1e-03. Spec §3.
 
@@ -83,6 +95,9 @@ losing it to make the charts prettier would be a net loss.
 ### ⏳ [TODO] S3-05 — Formal V&V accreditation package
 **Size:** `L`
 
+**As a** stakeholder **I want** a formal V&V accreditation package
+**so that** I can defend the system's recommendations to executive leadership.
+
 Depends on S3-01. Spec §9.
 
 Trace validation, Turing-style controller test, historical backtesting bands and the surrogate-vs-rules
@@ -99,6 +114,9 @@ reads as fully validated when two gates are advisory is worse than no package.
 
 ### ⏳ [TODO] S3-06 — Model the voluntary layer, if one exists
 **Size:** `M`
+
+**As a** planner **I want** to model the voluntary layer of open-time pickups
+**so that** I can account for cheaper coverage options before forced drafting.
 
 Depends on S1e-07. Spec §1.4.
 

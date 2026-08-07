@@ -37,6 +37,9 @@ It is the first slice whose gate can genuinely fail on the merits rather than on
 ## ⏳ [TODO] S1c-02 — Rule L8, reserve notification time
 **Size:** `S` | **Depends on:** S1c-01, S1b-03 | **Spec:** §5.4
 
+**As a** reviewer **I want** reserve notification limits enforced
+**so that** I don't model assigning crews who cannot make it to the airport in time.
+
 ### Acceptance Criteria
 - [ ] Short-call minimum notice 2 h, long-call 12 h — from config, per §4.4
 - [ ] Applied against the **call time**, not the report time
@@ -56,6 +59,9 @@ It is the first slice whose gate can genuinely fail on the merits rather than on
 ## ⏳ [TODO] S1c-03 — Rules L3 and L4, rolling limits
 **Size:** `M` | **Depends on:** S1c-01 | **Spec:** §5.4
 
+**As a** reviewer **I want** rolling block and duty limits enforced
+**so that** the simulation does not assign illegal schedules leading to violations.
+
 ### Acceptance Criteria
 - [ ] L3: 60 h duty / 35 h flight in a rolling 7 days · L4: 190 h duty in a rolling 28 days
 - [ ] Counters **roll** — hours leave the window as time passes
@@ -72,6 +78,9 @@ It is the first slice whose gate can genuinely fail on the merits rather than on
 
 ## ⏳ [TODO] S1c-04 — Rule L5, one duty-free day per rolling 7
 **Size:** `S` | **Depends on:** S1c-03 | **Spec:** §5.4
+
+**As a** reviewer **I want** the mandatory one-duty-free-day-in-seven rule enforced
+**so that** long-term fatigue compliance is properly modeled.
 
 ### Acceptance Criteria
 - [ ] Enforced on **both** the reserve-assignment and drafting paths

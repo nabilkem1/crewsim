@@ -39,6 +39,9 @@ dispatch**, not drafting.
 ### ⏳ [TODO] S2-01 — Bayesian optimisation over the integer reserve lattice
 **Size:** `L`
 
+**As a** researcher **I want** Bayesian optimization over reserve levels
+**so that** I can efficiently find the optimal staffing without an exhaustive grid search.
+
 Optuna TPE over R, relaxed-and-rounded. Depends on S1e-07. Spec §7.7.
 **Refine when** slice 1e has passed.
 *Sketch of the check:* converges to the exhaustive grid's optimum in far fewer runs; **fails if** it
@@ -48,6 +51,9 @@ finds a different optimum on the same seed — that is a search bug, not a bette
 
 ### ⏳ [TODO] S2-02 — Ranking & selection over θ
 **Size:** `M`
+
+**As a** researcher **I want** ranking and selection over secondary parameters
+**so that** I can finely tune the rules efficiently.
 
 OCBA or similar over the small discrete set. Depends on S2-01. Spec §7.3, §7.7.
 **Scope note:** θ holds two levers. This is a small story wearing a large story's name.
@@ -60,6 +66,9 @@ OCBA or similar over the small discrete set. Depends on S2-01. Spec §7.3, §7.7
 
 ### ⏳ [TODO] S2-03 — A330 as a separate problem instance
 **Size:** `L`
+
+**As a** modeller **I want** the A330 treated as a separate problem instance
+**so that** the optimization isn't muddied by infeasible cross-fleet interactions.
 
 Depends on S2-01. Spec §4.5.1.
 **Not one larger search space.** No common type rating between A321 and A330 means cross-fleet
@@ -77,6 +86,9 @@ with infeasible cross-fleet terms.
 ### ⏳ [TODO] S2-04 — joblib → Ray on AKS
 **Size:** `L`
 
+**As a** developer **I want** the simulation to run on Ray across an AKS cluster
+**so that** it can scale massively without losing reproducibility.
+
 Depends on S2-01. Spec §4.1, §3. Aligns with the existing digital-twin AKS stack.
 *Sketch:* **V7 must still pass distributed.** Reproducibility that holds on one machine and breaks
 across a cluster is the same class of defect as D2, one layer up.
@@ -90,6 +102,9 @@ across a cluster is the same class of defect as D2, one layer up.
 ### ⏳ [TODO] S2-05 — Stratified sampling by severity regime
 **Size:** `M`
 
+**As a** researcher **I want** stratified sampling by severity regime
+**so that** confidence intervals are narrower and results converge faster.
+
 Depends on S2-01. Spec §3.
 *Sketch:* narrower CI at the same scenario count; **fails if** the point estimate shifts —
 stratification must be unbiased, or it is just a different model.
@@ -102,6 +117,9 @@ stratification must be unbiased, or it is just a different model.
 
 ### ⏳ [TODO] S2-06 — Cabin crew, own cost file, multi-position complement
 **Size:** `L`
+
+**As a** planner **I want** cabin crew modeled with their own cost file and multi-position rules
+**so that** I can optimize their distinct staffing requirements.
 
 Depends on S2-03. Spec §4.5.1, §6.1.
 **Refine when** Crew Planning answers which group is the higher-value target

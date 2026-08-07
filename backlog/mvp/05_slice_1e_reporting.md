@@ -11,6 +11,9 @@ gates that require humans: an IOC duty manager (V5) and Finance's actual payroll
 ## ⏳ [TODO] S1e-01 — KPI aggregation over the measurement window
 **Size:** `M` | **Depends on:** S1d-05 | **Spec:** §2.1, §5.0.5
 
+**As a** planner **I want** KPIs aggregated accurately over the measurement window
+**so that** warm-up noise is excluded and metrics are comparable.
+
 ### Acceptance Criteria
 - [ ] E[C], CVaR₀.₉₅, uncovered legs, reserve utilisation, eligibility, cascade rate, draft distribution
 - [ ] **Warm-up rows booked but excluded**; cool-down costs attributed back when their cause is in-window
@@ -27,6 +30,9 @@ gates that require humans: an IOC duty manager (V5) and Finance's actual payroll
 
 ## ⏳ [TODO] S1e-02 — Self-contained HTML report
 **Size:** `M` | **Depends on:** S1e-01 | **Spec:** §2.2, §9.3
+
+**As a** stakeholder **I want** a self-contained HTML report
+**so that** I can easily digest and share the results of the simulation.
 
 ### Acceptance Criteria
 - [ ] **One file**, no external assets — it has to be emailable to Crew Planning
@@ -63,6 +69,9 @@ gates that require humans: an IOC duty manager (V5) and Finance's actual payroll
 
 ## ⏳ [TODO] S1e-04 — Policy grid runner
 **Size:** `M` | **Depends on:** S1e-01 | **Spec:** §3
+
+**As a** researcher **I want** an automated runner for grid searches
+**so that** I can evaluate multiple policies systematically without manual intervention.
 
 ### Acceptance Criteria
 - [ ] Grid from config: R × reserve-selection × cross-base (24 combinations)
@@ -103,6 +112,9 @@ gates that require humans: an IOC duty manager (V5) and Finance's actual payroll
 ## ⏳ [TODO] S1e-06 — V5 trace export for the SME walkthrough  ·  **gate V5**
 **Size:** `M` | **Depends on:** S1e-03 | **Spec:** §9.2
 
+**As a** SME **I want** a detailed trace export
+**so that** I can manually step through a simulation day and verify the engine's logical decisions.
+
 ### Acceptance Criteria
 - [ ] Replay a real disruption week; export an **operational timeline**, not a log dump
 - [ ] Each decision shows the alternatives considered and why they were rejected
@@ -121,6 +133,9 @@ gates that require humans: an IOC duty manager (V5) and Finance's actual payroll
 
 ## ⏳ [TODO] S1e-07 — V6 cost backtest against actuals  ·  **gate V6**
 **Size:** `L` | **Depends on:** S1e-06 | **Spec:** §9.2
+
+**As a** reviewer **I want** a backtest against historical costs
+**so that** I can validate that the simulation's baseline matches reality.
 
 ### Acceptance Criteria
 - [ ] Feed **actual** historical disruption streams through the model; compare against real payroll and

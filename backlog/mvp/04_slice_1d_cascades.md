@@ -32,6 +32,9 @@ $800 tier-2 draft that ends in a $25,800 chain. This slice makes that emergent a
 ## ⏳ [TODO] S1d-02 — Future-reserve cascade
 **Size:** `M` | **Depends on:** S1d-01 | **Spec:** §5.7
 
+**As a** planner **I want** drafting a future reserve to create a cascade cancellation on their original day
+**so that** the true downstream cost of borrowing from the future is captured.
+
 ### Acceptance Criteria
 - [ ] Drafting a crew member who held a **later RESERVE block** shrinks that day's pool structurally
 - [ ] Distinct from a pairing cascade in the ledger, so the two can be counted separately
@@ -68,6 +71,9 @@ $800 tier-2 draft that ends in a $25,800 chain. This slice makes that emergent a
 
 ## ⏳ [TODO] S1d-04 — V4 gate on the HOLDOUT window  ·  **gate V4**
 **Size:** `M` | **Depends on:** S1d-02, S0-05, S0-09 | **Spec:** §9.2, §6.4
+
+**As a** data scientist **I want** the validation gate run exclusively on the holdout window
+**so that** the cascade accuracy metric is unbiased and reliable.
 
 ### Acceptance Criteria
 - [ ] Realised cascade frequency — the share of drafts producing ≥1 downstream open item or reserve loss —
