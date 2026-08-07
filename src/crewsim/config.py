@@ -74,10 +74,10 @@ class WindowsConfig(_Model):
     holdout: Window
 
     def get(self, name: str) -> Window:
-        try:
-            return getattr(self, name)
-        except AttributeError as exc:
-            raise KeyError(f"unknown window {name!r}; known: fitting, holdout") from exc
+        if name not in ("fitting", "holdout"):
+            raise KeyError(f"unknown window {name!r}; known: fitting, holdout")
+        window: Window = getattr(self, name)
+        return window
 
 
 class ScopeConfig(_Model):
@@ -113,6 +113,10 @@ class DemandConfig(_Model):
 
     pairings_per_bid_period: int | None = None
     credit_hours_per_bid_period: int | None = None
+    
+    # Hours before departure to hold an open item before cancelling.
+    # e.g., {"short_haul": 2.0, "long_haul": 4.0, "default": 2.0}
+    uncovered_deadline_hours: dict[str, float] | float = 0.0
 
 
 class SensitivityConfig(_Model):
@@ -141,6 +145,27 @@ class CalibrationConfig(_Model):
     overdispersion_threshold: float
 
 
+class DraftReconstructionConfig(_Model):
+    """S0-03, §6.3-1: the D6 x D7 join, spelled out as data.
+
+    A NULL `initiator` always passes regardless of `initiator_filter` --
+    that is enforced by the reconstruction code, not expressible as a config
+    value, because "handle it, don't drop it silently" is the requirement.
+    """
+
+    premium_pay_codes: list[str]
+    short_notice_reason_codes: list[str]
+    initiator_filter: list[str]
+
+
+class CascadeReconstructionConfig(_Model):
+    """S0-05, §6.3-3: the 7-day follow-on scan."""
+
+    window_days: int
+    cascade_reason_codes: list[str]
+    confidence_level: float
+
+
 class BaseConfig(_Model):
     paths: PathsConfig
     scope: ScopeConfig
@@ -148,6 +173,8 @@ class BaseConfig(_Model):
     population: PopulationConfig
     quality_gates: QualityGateThresholds
     calibration: CalibrationConfig
+    draft_reconstruction: DraftReconstructionConfig
+    cascade_reconstruction: CascadeReconstructionConfig
     mode: str
     costs_file: str
     windows: WindowsConfig | None = None
@@ -285,14 +312,21 @@ def find_confirm_markers(path: pathlib.Path) -> list[ConfirmMarker]:
     this scanned the parsed mapping instead of the file's own bytes. Never
     tie a placeholder to a default: the marker must stay visible, not be
     silently resolved into a plausible-looking number (§4.4).
+
+    Deliberately does not try to distinguish a real marker from the
+    `[CONFIRM: <owner>]` convention example in base.yaml's own header
+    comment (§4.4): a value-based filter on the literal text `<owner>` would
+    also hide a genuine, unfilled placeholder someone pastes from that same
+    template -- exactly the "placeholder hardens into a fact" failure this
+    function exists to prevent. Surfacing one harmless extra line is the
+    safer failure mode.
     """
     markers = []
     for n, line in enumerate(path.read_text().splitlines(), 1):
         for m in _CONFIRM_RE.finditer(line):
-            owner = m.group(1).strip()
-            if owner == "<owner>":
-                continue  # the marker-convention doc line itself, not a real marker
-            markers.append(ConfirmMarker(file=path, line=n, owner=owner, text=line.strip()))
+            markers.append(
+                ConfirmMarker(file=path, line=n, owner=m.group(1).strip(), text=line.strip())
+            )
     return markers
 
 

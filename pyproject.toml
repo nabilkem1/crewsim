@@ -29,7 +29,7 @@ crewsim = "crewsim.cli:main"
 # disappearing from .venv after S0-01: `uv sync --extra dev` installed them,
 # then a later plain `uv run mypy ...` re-synced to the base project and
 # silently removed them.
-dev = ["pytest>=8", "hypothesis>=6", "ruff", "mypy"]
+dev = ["pytest>=8", "hypothesis>=6", "ruff", "mypy", "types-PyYAML"]
 
 [build-system]
 requires = ["hatchling"]

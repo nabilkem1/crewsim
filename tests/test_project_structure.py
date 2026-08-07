@@ -172,7 +172,8 @@ def test_configured_paths_resolve() -> None:
 def test_output_dirs_are_created_on_demand(tmp_path: pathlib.Path) -> None:
     """ensure_dir is the single way an output location comes into existence."""
     cfg = config.load()
-    cfg["paths"] = dict(cfg["paths"]) | {"reports_dir": str(tmp_path / "nested" / "reports")}
+    new_paths = cfg.paths.model_copy(update={"reports_dir": tmp_path / "nested" / "reports"})
+    cfg = cfg.model_copy(update={"paths": new_paths})
     created = config.ensure_dir(cfg, "reports_dir")
     assert created.is_dir()
 

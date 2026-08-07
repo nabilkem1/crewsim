@@ -104,3 +104,20 @@ calibration:                         # S0-06/S0-07/S0-07b fitting choices
     p_normal:    0.8
     p_disrupted: 0.95
   overdispersion_threshold: 1.5      # var/mean bar for "clearly overdispersed" (§5.2)
+
+draft_reconstruction:                 # S0-03, §6.3-1 -- the D6 x D7 join, spelled out as data
+  # No `was_drafted` column exists anywhere in Air Transat's systems (§6.3-1):
+  # a draft is the join of "D6 schedule change looks urgent" and "D7 payroll
+  # actually paid a premium for it". Every part of that recipe is a
+  # parameter, not a hard-coded assumption about how Air Transat's systems
+  # happen to be coded today.
+  premium_pay_codes:        [DRAFT_PREM]          # D7 pay_code values that count as a draft premium
+  short_notice_reason_codes: [SHORT_NOTICE_COVER]  # D6 reason_code values that count as "urgent"
+  initiator_filter:          [IOC]                 # D6 initiator values accepted -- a NULL initiator
+                                                    # always passes regardless of this list (older
+                                                    # records; must not be silently dropped, §6.3-1)
+
+cascade_reconstruction:               # S0-05, §6.3-3 -- the 7-day follow-on scan
+  window_days: 7                      # spec §6.3-3: "scan that exact pilot's schedule for the next 7 days"
+  cascade_reason_codes: [CASCADE_UNCOVERED]   # D6 reason_code values that count as "a flight broke"
+  confidence_level: 0.95              # for the reported rate's CI -- a reporting choice, not a formula constant

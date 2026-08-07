@@ -12,6 +12,9 @@ $800 tier-2 draft that ends in a $25,800 chain. This slice makes that emergent a
 **Size:** `M` | **Depends on:** S1c-05 | **Spec:** §5.7, §5.0.4/E5
 
 **As a** modeller **I want** a draft to break the drafted crew member's later trips automatically
+
+### Description
+Drafting a pilot today might ruin their scheduled trip tomorrow. Automatically breaking their future pairings ensures we accurately price the cascading disruption.
 **so that** cascade frequency is a consequence of the schedule, not a probability.
 
 ### Acceptance Criteria
@@ -33,6 +36,9 @@ $800 tier-2 draft that ends in a $25,800 chain. This slice makes that emergent a
 **Size:** `M` | **Depends on:** S1d-01 | **Spec:** §5.7
 
 **As a** planner **I want** drafting a future reserve to create a cascade cancellation on their original day
+
+### Description
+Pulling a reserve meant for Thursday to fly on Tuesday leaves Thursday exposed. Capturing this models the true hidden cost of aggressively borrowing from the future.
 **so that** the true downstream cost of borrowing from the future is captured.
 
 ### Acceptance Criteria
@@ -53,6 +59,9 @@ $800 tier-2 draft that ends in a $25,800 chain. This slice makes that emergent a
 **Size:** `S` | **Depends on:** S1d-01 | **Spec:** §5.0.5, §7.3
 
 **As a** reviewer **I want** unresolved work at the horizon to be charged
+
+### Description
+The horizon boundary shouldn't erase consequences. If a flight is uncovered on the very last day of the simulation, it must still incur a massive cancellation penalty.
 **so that** a policy cannot look cheap by pushing problems past the boundary.
 
 ### Acceptance Criteria
@@ -73,6 +82,9 @@ $800 tier-2 draft that ends in a $25,800 chain. This slice makes that emergent a
 **Size:** `M` | **Depends on:** S1d-02, S0-05, S0-09 | **Spec:** §9.2, §6.4
 
 **As a** data scientist **I want** the validation gate run exclusively on the holdout window
+
+### Description
+Using the holdout data for cascade verification prevents cheating. The model must prove it can accurately forecast cascade rates on flights it was never trained on.
 **so that** the cascade accuracy metric is unbiased and reliable.
 
 ### Acceptance Criteria
@@ -94,6 +106,9 @@ $800 tier-2 draft that ends in a $25,800 chain. This slice makes that emergent a
 **Size:** `M` | **Depends on:** S1d-03 | **Spec:** §9.2
 
 **As a** planner **I want** to know which of my inputs the answer actually depends on
+
+### Description
+Parameters are estimates. By sweeping a range of values (like terminal penalty), we can prove to stakeholders whether a specific assumption fundamentally changes the answer.
 **so that** a recommendation resting on a judgement call is visible as such.
 
 ### Acceptance Criteria

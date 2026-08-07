@@ -848,7 +848,7 @@ per season by `S0-06`. This is the form that story validates:
 | **SEVERE** | 0.02 | 0.18 | 0.40 | **0.40** | 1.00 |
 | *intensity ×* | 0.5 | 1.0 | 2.0 | 3.5 | — |
 
-The chain starts each scenario in `NORMAL` and is drawn from the `severity` stream, once per simulated
+The chain starts each scenario by drawing the Day 1 state from the historical steady-state probability vector $\pi_0$. The daily state is drawn from the `severity` stream, once per simulated
 day, before any event is materialised.
 
 **The stickiness is the point.** The 0.40 `SEVERE → SEVERE` self-transition produces *multi-day* bad

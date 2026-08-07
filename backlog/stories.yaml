@@ -157,8 +157,19 @@ stories:
   status: done
   depends_on:
   - S0-01
+  - S1a-06
+  - S1a-07
   spec:
   - 6.3-2
+  blocked_by: "No legality surrogate exists to reconstruct against. \xA76.3-2 requires\
+    \ applying rules L0\u2013L8 per historical sick call; engine/legality.py is an\
+    \ empty stub, and slice 1a only schedules L0 (S1a-06) and L1/L2/L6/L7 (S1a-07)\
+    \ \u2014 L3\u2013L5 and L8 aren't scheduled anywhere. tools/validate_corpus.py\
+    \ does not reconstruct eligibility either: it reads _ground_truth.json's pre-baked\
+    \ eligibility_rate_true and checks it falls in a plausible band, not an independently-computed\
+    \ rate. Previously marked done with no test file and no CLI command \u2014 corrected\
+    \ 2026-08-06. Re-scope once S1a-06/S1a-07 land: reuse engine/legality.py rather\
+    \ than building a second, possibly-diverging surrogate here."
   check:
     auto: pytest tests/data/test_eligibility_table.py
     manual: crewsim data eligibility-target --season winter_sun
@@ -175,10 +186,16 @@ stories:
   - S0-03
   spec:
   - 6.3-3
+  note: "Expect was ~20% (cascades_true/drafts_true from _ground_truth.json, a corpus-level\
+    \ ratio, not a per-draft scan). Running the real \xA76.3-3 recipe against S0-03's\
+    \ reconstructed drafts gives 26.9% [25.1%, 28.8%] 95% CI \u2014 216 of 252 drafted\
+    \ crews are drafted more than once, so one downstream cascade can legitimately\
+    \ follow more than one of that crew's recent drafts. Corrected 2026-08-06, same\
+    \ pattern as S1a-04."
   check:
     auto: pytest tests/data/test_cascade_table.py
     manual: crewsim data cascade-target
-    expect: ~20% with a CI; row count consistent with S0-03's reconstructed draft
+    expect: ~27% with a CI; row count consistent with S0-03's reconstructed draft
       count
     fails_if: the cascade count exceeds the reconstructed draft count
 - id: S0-06
@@ -257,7 +274,7 @@ stories:
   phase: 1a
   title: Pydantic config loader for base.yaml and costs
   size: M
-  status: todo
+  status: done
   depends_on:
   - S0-00
   spec:
@@ -275,7 +292,7 @@ stories:
   phase: 1a
   title: Event-level cost ledger with root_event_uid
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -292,7 +309,7 @@ stories:
   phase: 1a
   title: Accrue reserve staffing cost per reserve-day
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-03
   spec:
@@ -310,7 +327,7 @@ stories:
   phase: 1a
   title: CRN streams with process-stable seeding
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -329,7 +346,7 @@ stories:
   phase: 1a
   title: "Legality rule L0 \u2014 single assignment"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -346,7 +363,7 @@ stories:
   phase: 1a
   title: Legality rules L1, L2, L6, L7
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-06
   spec:
@@ -362,7 +379,7 @@ stories:
   phase: 1a
   title: "Draft selector \u2014 impact tier, then SENIOR first"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-07
   spec:
@@ -379,7 +396,7 @@ stories:
   phase: 1a
   title: Serialisable policy object, hash-pinned to a cost file
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -396,7 +413,7 @@ stories:
   phase: 1a
   title: V1 degeneracy tests
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-04
   - S1a-08
@@ -415,7 +432,7 @@ stories:
   phase: 1a
   title: V7 reproducibility under joblib, in CI
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-05
   spec:
@@ -432,7 +449,7 @@ stories:
   phase: 1a
   title: "CLI \u2014 run, compare, explain"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-09
   spec:
@@ -447,7 +464,7 @@ stories:
   phase: 1b
   title: Load D1/D2 into the Crew State Engine
   size: L
-  status: todo
+  status: done
   depends_on:
   - S1a-12
   - S0-01
@@ -465,7 +482,7 @@ stories:
   phase: 1b
   title: "Headcount conservation \u2014 carve reserves out of the roster"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-01
   spec:
@@ -482,7 +499,7 @@ stories:
   phase: 1b
   title: Reserve lines with rotation and SC/LC split
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-02
   spec:
@@ -501,7 +518,7 @@ stories:
   phase: 1b
   title: Bind sick calls to roster crew, and remove them
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-01
   spec:
@@ -520,7 +537,7 @@ stories:
   phase: 1b
   title: Events E6 DUTY_END and E7 REST_END
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-03
   spec:
@@ -538,7 +555,7 @@ stories:
   phase: 1b
   title: "Event E8 UNCOVERED_DEADLINE \u2014 hold before cancelling"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-05
   spec:
@@ -556,7 +573,7 @@ stories:
   phase: 1b
   title: V2 Erlang-B sanity bound
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-06
   spec:
@@ -1061,3 +1078,22 @@ stories:
     manual: TBD
     expect: "TBD \u2014 do not design this before the answer"
     fails_if: a placeholder parameter is invented instead of modelling the real mechanism
+- id: S1b-08
+  epic: E1b Real rosters
+  phase: 1b
+  title: Scenario Generation from Frozen Parameters
+  size: M
+  status: done
+  depends_on:
+  - S0-08b
+  - S1a-05
+  spec:
+  - 2.5.0
+  - 2.5.1
+  - '5.2'
+  check:
+    auto: pytest tests/engine/test_scenario_gen.py
+    manual: crewsim scenarios generate --scenarios 100 --master-seed 20260704
+    expect: Second run reports a cache hit and skips generation.
+    fails_if: Scenario regenerates despite unchanged inputs; or sick calls/delays
+      use different regime multipliers.
