@@ -12,9 +12,6 @@ gates that require humans: an IOC duty manager (V5) and Finance's actual payroll
 **Size:** `M` | **Depends on:** S1d-05 | **Spec:** §2.1, §5.0.5
 
 **As a** planner **I want** KPIs aggregated accurately over the measurement window
-
-### Description
-The first 7 days of the simulation are noisy as the engine spins up. Throwing out this warm-up period ensures the final financial KPIs are perfectly stable and trustworthy.
 **so that** warm-up noise is excluded and metrics are comparable.
 
 ### Acceptance Criteria
@@ -35,9 +32,6 @@ The first 7 days of the simulation are noisy as the engine spins up. Throwing ou
 **Size:** `M` | **Depends on:** S1e-01 | **Spec:** §2.2, §9.3
 
 **As a** stakeholder **I want** a self-contained HTML report
-
-### Description
-Decision makers need readable dashboards, not terminal output. Generating an HTML artifact lets executives quickly compare policy tradeoffs visually.
 **so that** I can easily digest and share the results of the simulation.
 
 ### Acceptance Criteria
@@ -58,9 +52,6 @@ Decision makers need readable dashboards, not terminal output. Generating an HTM
 **Size:** `M` | **Depends on:** S1e-02 | **Spec:** §9.3, §2.3/C2
 
 **As a** planner **I want** to interrogate a recommendation
-
-### Description
-"Why 6 reserves?" needs proof. The ability to drill down into a specific day and see exactly how the 6th reserve prevented a massive cascade builds trust.
 **so that** "why 6 reserves?" resolves to a specific simulated Tuesday.
 
 ### Acceptance Criteria
@@ -80,9 +71,6 @@ Decision makers need readable dashboards, not terminal output. Generating an HTM
 **Size:** `M` | **Depends on:** S1e-01 | **Spec:** §3
 
 **As a** researcher **I want** an automated runner for grid searches
-
-### Description
-Testing one policy at a time is too slow. An automated grid runner lets us effortlessly compute the entire cost surface across dozens of reserve counts overnight.
 **so that** I can evaluate multiple policies systematically without manual intervention.
 
 ### Acceptance Criteria
@@ -103,9 +91,6 @@ Testing one policy at a time is too slow. An automated grid runner lets us effor
 **Size:** `M` | **Depends on:** S1e-04 | **Spec:** §3, §5.6
 
 **As a** decision-maker **I want** the price of the mandated rules quantified
-
-### Description
-Union rules cost money. Running counterfactual scenarios (e.g. what if L5 was relaxed?) quantifies exactly how much a specific rule constraints operations.
 **so that** keeping them is a choice made with a number attached.
 
 ### Acceptance Criteria
@@ -128,9 +113,6 @@ Union rules cost money. Running counterfactual scenarios (e.g. what if L5 was re
 **Size:** `M` | **Depends on:** S1e-03 | **Spec:** §9.2
 
 **As a** SME **I want** a detailed trace export
-
-### Description
-Subject Matter Experts need to trust the engine's logic. Exporting a detailed, step-by-step trace allows a planner to verify the engine handles Edge Case X correctly.
 **so that** I can manually step through a simulation day and verify the engine's logical decisions.
 
 ### Acceptance Criteria
@@ -153,9 +135,6 @@ Subject Matter Experts need to trust the engine's logic. Exporting a detailed, s
 **Size:** `L` | **Depends on:** S1e-06 | **Spec:** §9.2
 
 **As a** reviewer **I want** a backtest against historical costs
-
-### Description
-The ultimate proof is historical accuracy. If the simulation's baseline cost is drastically different from what finance actually paid last year, the model is invalid.
 **so that** I can validate that the simulation's baseline matches reality.
 
 ### Acceptance Criteria

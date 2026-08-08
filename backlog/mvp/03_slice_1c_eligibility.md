@@ -16,9 +16,6 @@ It is the first slice whose gate can genuinely fail on the merits rather than on
 **Size:** `M` | **Depends on:** S1b-07 | **Spec:** §5.5
 
 **As a** modeller **I want** eligibility computed per event from crew state
-
-### Description
-Real eligibility depends on real schedules. We cannot just assume 30% of pilots are eligible; we must check their actual calendar availability and legality dynamically.
 **so that** the ≈30% figure is an output to be validated, not an input to be assumed.
 
 ### Acceptance Criteria
@@ -41,9 +38,6 @@ Real eligibility depends on real schedules. We cannot just assume 30% of pilots 
 **Size:** `S` | **Depends on:** S1c-01, S1b-03 | **Spec:** §5.4
 
 **As a** reviewer **I want** reserve notification limits enforced
-
-### Description
-Calling a reserve 30 minutes before a flight is physically impossible. This rule ensures the engine only drafts crew who can realistically commute to the airport.
 **so that** I don't model assigning crews who cannot make it to the airport in time.
 
 ### Acceptance Criteria
@@ -66,9 +60,6 @@ Calling a reserve 30 minutes before a flight is physically impossible. This rule
 **Size:** `M` | **Depends on:** S1c-01 | **Spec:** §5.4
 
 **As a** reviewer **I want** rolling block and duty limits enforced
-
-### Description
-A pilot cannot fly indefinitely. Rolling limits (e.g. 100 hours in 28 days) prevent the engine from over-working a single crew member beyond union constraints.
 **so that** the simulation does not assign illegal schedules leading to violations.
 
 ### Acceptance Criteria
@@ -89,9 +80,6 @@ A pilot cannot fly indefinitely. Rolling limits (e.g. 100 hours in 28 days) prev
 **Size:** `S` | **Depends on:** S1c-03 | **Spec:** §5.4
 
 **As a** reviewer **I want** the mandatory one-duty-free-day-in-seven rule enforced
-
-### Description
-Fatigue mitigation is paramount. This guarantees that even heavily drafted crew receive mandatory days off, avoiding structural violations.
 **so that** long-term fatigue compliance is properly modeled.
 
 ### Acceptance Criteria
@@ -110,9 +98,6 @@ Fatigue mitigation is paramount. This guarantees that even heavily drafted crew 
 **Size:** `M` | **Depends on:** S1c-04, S0-04, S0-09 | **Spec:** §9.2, §6.4
 
 **As a** reviewer **I want** the emergent eligibility rate compared against history it has never seen
-
-### Description
-Validating the eligibility logic against unseen historical data proves it works. If we predict 30% eligibility but history shows 10%, our rules are too loose.
 **so that** the model's central claim is actually tested.
 
 ### Acceptance Criteria

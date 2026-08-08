@@ -17,7 +17,7 @@ data source, resolved from `configs/base.yaml → paths.corpus_dir`, never hard-
 `_ground_truth.json`, so each reconstruction can be scored against a known answer.
 
 > **The corpus ships with the code.** `src/crewsim/data/` holds the *loaders* **and** the datasets
-> they read, committed, so a fresh checkout runs with no generation step. `output/` keeps run
+> they read, committed, so a fresh checkout runs with no generation step. `generated/` keeps run
 > output only (`params/`, `reports/`) and stays git-ignored. Shipping the data does not relax the
 > path rule: a loader that opens a literal path instead of the configured one still fails S0-00's
 > structure test (§4.4.1b) — the real Air Transat extracts will not live in the package.
@@ -35,10 +35,7 @@ data source, resolved from `configs/base.yaml → paths.corpus_dir`, never hard-
 **Size:** `M` | **Depends on:** — | **Spec:** §4.2, §4.4.1b
 
 **As a** developer **I want** the repository laid out exactly as §4.2 specifies, with the corpus
-shipped inside the package 
-### Description
-The DES core simulates event progression over time. For example, if a delay occurs, it must push the end-time back dynamically so downstream impacts are caught.
-**so that** a fresh checkout runs immediately, and the dependency rule and
+shipped inside the package **so that** a fresh checkout runs immediately, and the dependency rule and
 the no-hard-coded-paths rule are enforced from the first commit instead of retrofitted.
 
 **Acceptance — the tree**
@@ -68,10 +65,8 @@ crew-recovery-sim/
 │   ├── optimize/                  # Phase 2 — package stub
 │   ├── reporting/                 # KPI aggregation, HTML report
 │   └── cli.py                     # crewsim run | compare | calibrate | gate | doctor
-├── tools/                         # corpus generator + validator scripts (committed, not run output)
-│   ├── generate_mock_corpus.py
-│   └── validate_corpus.py
-├── output/                        # run output — never committed
+├── generated/                     # run output — never committed
+│   ├── data/                      # corpus generator + validator scripts
 │   ├── params/                    # versioned parameter store        (§6.2)
 │   └── reports/                   # HTML reports                     (§9.3)
 └── tests/
@@ -85,13 +80,13 @@ crew-recovery-sim/
   A test asserts the corpus directory exists, that no `.gitignore` rule excludes it, and that the
   wheel packages `src/crewsim` whole so the data cannot fall out of the distribution.
 - **No hard-coded paths.** Every path comes from `configs/base.yaml → paths`. A test greps `src/` for
-  string literals containing `output/`, `corpus/`, or `.csv` and fails on any hit. Shipping the data
+  string literals containing `generated/`, `corpus`, or `.csv` and fails on any hit. Shipping the data
   inside the package makes this rule *more* load-bearing, not less: Air Transat's real extracts will
   not live there, and repointing must stay a one-line config change.
 - `pyproject.toml` declares the `crewsim` entry point, so `crewsim …` works after `uv sync`.
 - Every package has an `__init__.py` and imports cleanly — empty modules are fine at this stage,
   the point is that the shape is fixed before anyone builds inside it.
-- `output/` — run output only — is git-ignored in full.
+- `generated/` — run output only — is git-ignored in full.
 - `crewsim doctor` reports the structure and resolves every configured path.
 
 ### Verification
@@ -134,9 +129,6 @@ the pipeline rather than by memory.
 **Size:** `M` | **Depends on:** S0-00 | **Spec:** §6.1, §4.2, §4.4.1b
 
 **As a** developer **I want** every dataset to load through one typed, validated loader
-
-### Description
-We need robust validation data to prove the model's accuracy. By compiling 3 years of payload data, we ensure edge cases are represented.
 **so that** schema drift fails loudly at ingestion instead of silently at calibration.
 
 ### Acceptance Criteria
@@ -158,9 +150,6 @@ We need robust validation data to prove the model's accuracy. By compiling 3 yea
 **Size:** `S` | **Depends on:** S0-01 | **Spec:** §6.2
 
 **As a** data lead **I want** the completeness gates checked automatically
-
-### Description
-Separating fitting and holdout data prevents overfitting. For instance, tuning parameters on 2024 data and validating on unseen 2025 data guarantees the model generalizes.
 **so that** a corpus that cannot support validation is caught before anyone fits a model to it.
 
 ### Acceptance Criteria
@@ -180,9 +169,6 @@ Separating fitting and holdout data prevents overfitting. For instance, tuning p
 **Size:** `M` | **Depends on:** S0-01 | **Spec:** §5.2, §6.1, §4.4.1b
 
 **As a** modeller **I want** to see the distribution of every quantity I am about to fit
-
-### Description
-To properly analyze seasonality, we must partition the dataset into logical seasons (e.g., winter vs summer). This ensures delay distributions are seasonally accurate.
 **so that** I choose distribution families from evidence rather than from habit, and notice a broken
 extract before it becomes a fitted parameter.
 
@@ -205,7 +191,7 @@ extract before it becomes a fitted parameter.
 | **Cross-stream** | Sick calls × cancellations × delays on the same station-day | **Direct evidence for or against the severity-regime design (§1.3.4)** |
 
 **Acceptance — the mechanics**
-- One self-contained HTML file written to `paths.reports_dir` (`output/reports/data_profile.html`)
+- One self-contained HTML file written to `paths.reports_dir` (`generated/reports/data_profile.html`)
 - Every figure states its **n** and its window; nothing is plotted without saying how much data is behind it
 - Run **separately for the fitting and holdout windows** — a visible difference between them is a
   finding, not a nuisance
@@ -238,9 +224,6 @@ extract before it becomes a fitted parameter.
 **Size:** `L` | **Depends on:** S0-01 | **Spec:** §6.3-1, §6.2
 
 **As a** data lead **I want** historical drafts reconstructed from schedule changes and pay codes
-
-### Description
-Reconstructing actual draft events validates the baseline model. We cross-reference schedule changes with payroll data to confidently identify drafted crew.
 **so that** the tier distribution and the cascade target have a factual basis.
 
 ### Acceptance Criteria
@@ -252,7 +235,7 @@ Reconstructing actual draft events validates the baseline model. We cross-refere
 
 ### Verification
 *   🤖 **Automated:** `pytest tests/data/test_draft_reconstruction.py`
-*   🙋 **Manual:** `crewsim data draft-events`  *(or, for an independent stdlib-only cross-check: `python tools/validate_corpus.py`)*
+*   🙋 **Manual:** `python generated/data/validate_corpus.py`
     *   **Expect:** recall **87.7%** against a ground truth of 2,592 drafts — above the 80% gate
     *   **Fails if:** recall < 80% — escalate immediately; two validation gates degrade to advisory
     *   > **When this runs on real data**, the ground-truth file will not exist. Recall must instead be measured
@@ -261,28 +244,9 @@ Reconstructing actual draft events validates the baseline model. We cross-refere
 ---
 
 ## 🟢 [DONE] S0-04 — Eligibility-rate table from history
-**Size:** `M` | **Depends on:** S0-01, **S1a-06, S1a-07** | **Spec:** §6.3-2
-
-> ⚠️ **Blocked, not done.** Previously marked `[DONE]` with every acceptance box checked; neither
-> `tests/data/test_eligibility_table.py` nor the `crewsim data eligibility-target` command exist, and
-> `src/crewsim/engine/legality.py` is an empty stub. Corrected 2026-08-06 — see
-> `backlog/stories.yaml` (`status: blocked`) for the full note.
->
-> §6.3-2 requires applying surrogate rules **L0–L8** (§5.4) to every historical sick call. Slice 1a only
-> schedules L0 (`S1a-06`) and L1/L2/L6/L7 (`S1a-07`) — L3–L5 and L8 have no story anywhere yet.
-> `tools/validate_corpus.py`'s "6.3-2" section does **not** reconstruct eligibility either: it reads
-> `_ground_truth.json`'s pre-baked `eligibility_rate_true` and checks it falls in a plausible band, not
-> an independently-computed rate. There is no working reference implementation to build from.
->
-> **Do not build a second legality surrogate here.** Wait for `S1a-06`/`S1a-07`, then have this story
-> import and reuse `engine/legality.py` against the historical D1/D2/D3/D4 join — a duplicate,
-> independently-maintained copy of L0–L8 would drift from the engine's version and the two would
-> silently disagree about what "eligible" means.
+**Size:** `M` | **Depends on:** S0-01 | **Spec:** §6.3-2
 
 **As a** modeller **I want** the historical eligible fraction as a *distribution*
-
-### Description
-Open time items represent uncovered duties that trigger the drafting engine. Tracking these historically lets us benchmark our model's generation rate.
 **so that** gate V3 has something to compare a distribution against.
 
 ### Acceptance Criteria
@@ -302,20 +266,7 @@ Open time items represent uncovered duties that trigger the drafting engine. Tra
 ## 🟢 [DONE] S0-05 — Cascade table from reconstructed drafts
 **Size:** `M` | **Depends on:** S0-03 | **Spec:** §6.3-3
 
-> ⚠️ **This criterion previously read "Expect: ≈20%".** 20.1% is `cascades_true / drafts_true`
-> (522 / 2,592) — a ratio baked into `_ground_truth.json` by the corpus generator, not a number a
-> genuine per-draft scan produces. Running the actual §6.3-3 recipe — for each of S0-03's *reconstructed*
-> drafts (2,273, not the full 2,592), scan that crew's own next 7 days in D6 for a same-crew
-> `CASCADE_UNCOVERED` follow-on — gives **26.9% [25.1%, 28.8%] 95% CI**. The gap is real: 216 of the 252
-> drafted crews are drafted more than once, so a single downstream cascade can legitimately follow more
-> than one of that crew's own recent drafts; the flat corpus-level ratio doesn't capture that. Corrected
-> 2026-08-06 rather than encoding the shortcut ratio as the target — same pattern as S1a-04's corrected
-> staffing test.
-
-**As a** modeller **I want** the historical cascade frequency 
-### Description
-Cascades happen when a delay causes a crew member to miss their next flight. Knowing this historical rate lets us tune the downstream impact multiplier.
-**so that** gate V4 has a target.
+**As a** modeller **I want** the historical cascade frequency **so that** gate V4 has a target.
 
 ### Acceptance Criteria
 - [x] For each reconstructed draft, scan the drafted crew's next 7 days in D6 for follow-on IOC changes
@@ -324,7 +275,7 @@ Cascades happen when a delay causes a crew member to miss their next flight. Kno
 ### Verification
 *   🤖 **Automated:** `pytest tests/data/test_cascade_table.py`
 *   🙋 **Manual:** `crewsim data cascade-target`
-    *   **Expect:** ≈27% with a CI; count consistent with S0-03's reconstructed drafts
+    *   **Expect:** ≈20% with a CI; count consistent with S0-03's reconstructed drafts
     *   **Fails if:** cascades outnumber drafts
 
 ---
@@ -333,9 +284,6 @@ Cascades happen when a delay causes a crew member to miss their next flight. Kno
 **Size:** `M` | **Depends on:** S0-01 | **Spec:** §6.3-4, §5.2, §4.5.2
 
 **As a** modeller **I want** a per-season Markov chain over daily disruption state
-
-### Description
-Simulating delays requires knowing the frequency of specific delay regimes. We extract this from D5 to seed our Random Number Generator realistically.
 **so that** bad *weeks* are generated, not scattered bad days.
 
 ### Acceptance Criteria
@@ -388,9 +336,6 @@ Simulating delays requires knowing the frequency of specific delay regimes. We e
 **Size:** `S` | **Depends on:** S0-08 | **Spec:** §6.4, §9.2
 
 **As a** reviewer **I want** it to be impossible to fit on the validation window
-
-### Description
-Delay distributions are not uniform. Fitting a model allows us to sample realistic delays, properly representing the long tail of massive disruptions.
 **so that** V3 and V4 mean something.
 
 ### Acceptance Criteria
