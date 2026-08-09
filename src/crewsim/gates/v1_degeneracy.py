@@ -94,6 +94,18 @@ def run_v1_gate(
     """
     headcount = scoped_headcount(cfg)
     zero_arrivals = [0] * cfg.horizon.horizon_days
+    # Pin displaced_flying for all three configurations rather than inheriting
+    # base.yaml. This gate asks one question -- does the engine fabricate cost
+    # in a degenerate case -- and reserve bidders' displaced flying (S1b-02 AC2)
+    # is a real, correctly-booked cost that would drown it out: with everyone on
+    # reserve and displaced_flying=open_time, ALL the flying becomes open time,
+    # so configuration 2 books utilisation and cancellations and its "staffing
+    # only" claim stops being about staffing at all. Isolating it here keeps the
+    # gate deterministic regardless of how base.yaml is set; configurations 1
+    # and 3 carve out zero reserves, so for them this is a no-op either way.
+    cfg = cfg.model_copy(
+        update={"population": cfg.population.model_copy(update={"displaced_flying": "absorb"})}
+    )
     configurations: list[dict[str, Any]] = []
 
     # -- 1: no reserves, no sick calls -> nothing to pay for at all ----------

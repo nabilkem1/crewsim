@@ -61,8 +61,14 @@ def test_cascade_items_get_distinct_nonzero_uids():
     re-assign uid') -- the pipeline must give each a real, unique uid before
     booking, or two cascades from the same draft would collide in the ledger."""
     sim = _run(master_seed="cascade-uid-check")
-    event_uids = [row.event_uid for row in sim.ledger.rows if row.event_uid != 0]
-    assert len(event_uids) == len(set(event_uids)), "Every non-structural ledger row must have a unique event_uid"
+    # (event_uid, category), not event_uid alone: since S1b-06 a cancellation
+    # books TWO rows for the same event -- CANCELLATION and APPR_COMPENSATION,
+    # a different payee and a different tariff. The invariant being guarded is
+    # that two distinct ITEMS never share a uid, which duplicate
+    # (uid, category) pairs would still catch: two colliding cascades would
+    # each book the same category under the same uid.
+    keys = [(row.event_uid, row.category) for row in sim.ledger.rows if row.event_uid != 0]
+    assert len(keys) == len(set(keys)), "Two ledger rows share an (event_uid, category)"
     assert sim.n_cascading_drafts <= sim.n_drafts
 
 
@@ -114,7 +120,8 @@ def test_cascade_path_fires_end_to_end():
     categories = [row.category for row in sim.ledger.rows]
     assert "CANCELLATION" in categories, "The cascaded item has nowhere to go once C1 is booked"
     event_uids = [row.event_uid for row in sim.ledger.rows]
-    assert len(event_uids) == len(set(event_uids)), "Original item (uid=1) and its cascade must not collide"
+    keys = [(uid, cat) for uid, cat in zip(event_uids, categories, strict=True)]
+    assert len(keys) == len(set(keys)), "Original item (uid=1) and its cascade must not collide"
     assert 1 in event_uids
     assert any(uid not in (0, 1) for uid in event_uids), (
         "The cascaded item must get a real uid distinct from the original item it came from"

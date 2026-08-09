@@ -106,6 +106,22 @@ class HorizonConfig(_Model):
 
 class PopulationConfig(_Model):
     roster_size: int
+    displaced_flying: str      # S1b-02 AC2: "open_time" | "absorb"
+    reserve_bid_rule: str      # S1b-02 AC3: "junior_first" | "senior_first"
+
+    @field_validator("displaced_flying")
+    @classmethod
+    def _known_displaced_flying(cls, v: str) -> str:
+        if v not in ("open_time", "absorb"):
+            raise ValueError(f"displaced_flying must be 'open_time' or 'absorb', got {v!r}")
+        return v
+
+    @field_validator("reserve_bid_rule")
+    @classmethod
+    def _known_bid_rule(cls, v: str) -> str:
+        if v not in ("junior_first", "senior_first"):
+            raise ValueError(f"reserve_bid_rule must be 'junior_first' or 'senior_first', got {v!r}")
+        return v
 
 
 class DemandConfig(_Model):
@@ -242,9 +258,22 @@ class DisruptionCosts(_Model):
 
 
 class APPRCompensation(_Model):
+    cancellation_band: str
     hours_3_to_6: float
     hours_6_to_9: float
     hours_9_plus: float
+
+    @property
+    def on_cancellation(self) -> float:
+        """The APPR amount a cancellation attracts, per `cancellation_band`."""
+        return float(getattr(self, self.cancellation_band))
+
+    @field_validator("cancellation_band")
+    @classmethod
+    def _known_band(cls, v: str) -> str:
+        if v not in ("hours_3_to_6", "hours_6_to_9", "hours_9_plus"):
+            raise ValueError(f"unknown appr cancellation_band {v!r}")
+        return v
 
 
 class CostsConfig(_Model):

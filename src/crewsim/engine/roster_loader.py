@@ -263,8 +263,13 @@ def load_rosters(
                     clean_cal = [b for b in c.calendar if b.btype != BlockType.PAIRING]
                     authentic_reserve_calendars.append(clean_cal)
                     
-            # Sort by seniority BOTTOM_UP (highest number is most junior)
-            crew_list.sort(key=lambda c: c.seniority, reverse=True)
+            # S1b-02 AC3: who ends up on reserve, from configs/base.yaml ->
+            # population.reserve_bid_rule rather than hardcoded. junior_first
+            # (the default, and the previous hardcoded behaviour) matches how a
+            # seniority bid resolves: senior crew bid lines, reserve is what is
+            # left over.
+            junior_first = cfg.population.reserve_bid_rule == "junior_first"
+            crew_list.sort(key=lambda c: c.seniority, reverse=junior_first)
             
             res = crew_list[:n_res]
             lin = crew_list[n_res:]
@@ -278,8 +283,16 @@ def load_rosters(
                 
             for c in res:
                 c._is_reserve = True
-                # Give them a real reserve pattern from the pool
-                c.calendar = next(pattern_cycle)
+                # S1b-02 AC2: remember the line they gave up before overwriting
+                # it. Without this the flying silently ceased to exist, so a
+                # higher R carried no opportunity cost at all.
+                c._displaced_pairings = [b for b in c.calendar if b.btype == BlockType.PAIRING]
+                # list(...) copies: pattern_cycle repeats once the reserve count
+                # exceeds the number of distinct authentic patterns (18 in the
+                # current scope), and without a copy several crew would share ONE
+                # calendar object -- which copy.deepcopy preserves, so drafting
+                # one reserve mutated the others.
+                c.calendar = list(next(pattern_cycle))
             reserve_crew_all.extend(res)
             
             for c in lin:

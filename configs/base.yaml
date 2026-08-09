@@ -56,6 +56,20 @@ population:
   # compare recommendations against (§1.5).
   roster_size: 120           # [CONFIRM: Crew Planning]
 
+  # S1b-02 AC2. A reserve bidder stops flying their line; that flying does not
+  # stop existing. "open_time" hands it to the recovery pipeline, which is what
+  # gives a reserve a real opportunity cost and stops higher R being free.
+  # "absorb" models it as picked up outside this scope at no cost -- which is
+  # what the engine silently did before this key existed. Materially changes
+  # both total cost and the recommended reserve level; decision recorded with
+  # the user 2026-08-08.
+  displaced_flying: open_time         # open_time | absorb
+
+  # S1b-02 AC3. Which crew end up on reserve. Junior-first matches how a
+  # seniority bid actually resolves (senior crew bid lines; reserve is what is
+  # left), and is what the engine hardcoded before this key existed.
+  reserve_bid_rule: junior_first      # [CONFIRM: Crew Planning] junior_first | senior_first
+
 demand:
   # roster_size is meaningless on its own: it is only meaningful against how
   # much flying that population covers. Supply one of these for the same scope

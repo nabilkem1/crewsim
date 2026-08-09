@@ -469,3 +469,127 @@ Unchanged from the list above. The two most consequential:
 Also still open: the R>18 calendar aliasing (one-word fix, unreachable by any shipped policy), the
 tautological headcount assertion, the loose SC/LC bound, `flight_mins` on sick-call items, and the
 phantom `apply_headcount_target()` in the story notes.
+
+---
+
+# P1 / P2 / P3 — what was done
+
+Applied 2026-08-08. **329 passed, ruff clean, `mypy --strict` on the engine clean, suite 4m29s.**
+
+> **Every cost figure in this document and in CODE_REVIEW_S1a.md predates this pass and is now
+> stale.** `population.displaced_flying` defaults to `open_time`, which adds real cost to every
+> scenario, and sick-call items now carry `flight_mins`. Re-measure before quoting any number.
+
+## P1 #5 — displaced flying now has a cost (S1b-02 AC2)
+
+`population.displaced_flying: open_time | absorb`, defaulting to **open_time** on your decision.
+A reserve bidder's PAIRING blocks are captured on `CrewMember._displaced_pairings` before their
+calendar is overwritten, and offered to the recovery pipeline. Measured at R10, scenario 0:
+
+| | absorb | open_time |
+|---|---|---|
+| items | 417 | 521 |
+| drafts | 160 | 240 |
+| total | $5,244,500 | **$5,805,700** |
+
+Most displaced flying is *covered* by drafting a line holder, not cancelled — so the restored
+opportunity cost is mostly draft premium. It grows with R (27 duty periods at R4 → 115 at R14),
+which is exactly the bias the story exists to remove: higher R used to be free of this cost.
+
+**A first implementation emitted these at t=0** — the bid is a stage-1 commitment, so the flying is
+known from the start of the bid period. That was wrong twice over. Operationally it re-decides a
+known-open trip at every reserve-block start for weeks, when the E8 hold exists for *unexpected*
+disruption. Mechanically it made each item retry across the whole horizon and **took the suite from
+4 to 18.5 minutes**. They now surface through the existing `_delayed_pipeline`, at
+`cascade.visibility_lag_hours` before their own pairing — an existing named mechanism for "when the
+IOC would see this", not a new parameter. Runtime is back to 1.2s per scenario.
+
+## P1 #6 — APPR compensation is booked
+
+`appr_compensation` was defined in `costs_pilots.yaml`, modelled in `config.py`, and booked nowhere
+in `src/`. A cancellation now books `CANCELLATION` and `APPR_COMPENSATION` together at the deadline —
+separate categories, because they are a different payee and a different tariff.
+
+Which band a cancellation attracts is **named in config, not assumed in code**: passenger
+re-accommodation is not modelled, so the delay a cancelled flight causes is unknown.
+`appr_compensation.cancellation_band` defaults to `hours_9_plus` (the conservative choice, matching
+the legality rules' documented bias) and carries a `[CONFIRM: Legal]` marker.
+
+## P1 #7 — S1b-06's test tests the hold
+
+Three tests that drive the real `recovery_pipeline`: retries occur before cancellation, at least one
+item is held for a *strictly positive* duration (a retry at the same instant is not a hold), and
+every cancellation books APPR at the same instant against the same causal chain. The original test
+was renamed `test_open_time_item_deadline_is_report_time_minus_the_configured_lead` — it checks
+deadline arithmetic and nothing else, which its old name ("...held") misrepresented.
+
+## P1 #8 / P2 #10 — headcount tests are non-tautological
+
+`tests/engine/test_headcount.py` is parametrised over R4/R6/R8/R10/R14 and compares against the same
+population loaded with **no policy** — an external reference, not a re-partition of the list under
+test. The old assertion (`lines + reserves == total`) partitioned one list by a boolean and asserted
+the parts summed to the whole.
+
+`population.reserve_bid_rule` (`junior_first` default, matching the previous hardcoded behaviour)
+satisfies AC3, with a test proving `senior_first` actually inverts the selection — a knob that did
+nothing would satisfy the AC in name only.
+
+## P2 #9 — the R>18 aliasing is fixed
+
+`list(next(pattern_cycle))` in `roster_loader`. Verified: 20 reserves → 20 distinct calendars, 112 →
+112. A test at R=20 guards it, deep-copying first because `copy.deepcopy` preserved the sharing that
+made `run_scenario`'s defensive copy ineffective.
+
+## P2 #11 — SC/LC measured in days
+
+The split is now computed from reserve-**days**, not block counts (a block is an arbitrary unit), and
+the bound is `0.55 ≤ SC ≤ 0.75` against the story's stated "roughly 60/40" — measured at 60.7–69.6%
+across the candidate policies. The old bound, `0.3 < sc < 0.9`, admitted 30/70. A second test proves
+reserve lines rotate: no reserve is on call for the whole horizon, and the pool presents fewer
+servers than heads.
+
+## P2 #12 — `flight_mins` carried through
+
+`_break_pairings` sets it, matching `cascade.py`. L3's rolling-flight check saw 0 added flight time
+for every sick-call-origin item and under-rejected candidates near the 35h limit. This is a
+correctness fix and it moves the numbers.
+
+## P3 #13 — the notes describe the code
+
+All six "How it was implemented" blocks rewritten. `apply_headcount_target()` never existed; S1b-03
+claimed the engine assigns SC/LC when it inherits them from D2; S1b-07's note described the test as
+enforcing tolerance "against the DES mock", which was accurate and was the clearest admission in the
+file that the gate was not real.
+
+## P3 #14 — the `[DONE]` markers are now accurate
+
+S1b-02 and S1b-07 were the two that did not meet their acceptance criteria. Both now do — AC2 and
+AC3 are implemented and tested, and V2 measures a real simulation — so the existing `🟢 [DONE]`
+markers became correct without needing to be flipped. Nothing in the backlog's status column was
+edited.
+
+## Four tests changed because the behaviour changed, not to make them pass
+
+Worth stating explicitly, since "fix the test" is how a real regression gets buried:
+
+- **V1 configurations now pin `displaced_flying=absorb`.** With everyone on reserve and
+  `open_time`, *all* the flying becomes open time, so configuration 2 books utilisation and
+  cancellations and its "staffing only" claim stops being about staffing. The gate isolates the one
+  question it asks; configurations 1 and 3 carve out zero reserves, so for them it is a no-op.
+- **The staffing end-to-end test pins `absorb`** — it recomputes staffing from *post*-simulation
+  calendars and compares against what was booked from *pre*-simulation ones. With displaced flying
+  on, a drafted reserve's block is legitimately split, so the comparison would measure
+  `assign_reserve`, not staffing.
+- **Two uid-uniqueness assertions moved to `(event_uid, category)`.** A cancellation now books two
+  rows under one event uid. The invariant being guarded — that two distinct *items* never share a
+  uid — is unchanged, and duplicate `(uid, category)` pairs would still catch it.
+- **The drilldown test accepts `DISPLACED_LINE`** alongside `SICK_CALL` as a chain origin. There are
+  genuinely two origins now; what must not happen is a chain with no origin, which is still asserted.
+
+## Still open
+
+- **The zero-hold-window case** (an absence notified after its pairing has begun is born past its own
+  deadline). Real, modelled, and now warned about rather than papered over — but it means S1b-06's
+  "held to its deadline" is not demonstrable on scenario 0. Needs its own story.
+- **Gate V3/V4 historical bands** were calibrated before displaced flying existed and should be
+  re-checked against the new arrival mix.

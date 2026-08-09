@@ -41,6 +41,12 @@ disruption:
 # Statutory passenger compensation, Canadian APPR, large carrier.
 # [CONFIRM: Legal — verify against the current CTA schedule]
 appr_compensation:
+  # S1b-06 AC2: which band a CANCELLATION attracts. Passenger re-accommodation
+  # is not modelled, so the delay a cancelled flight actually causes is unknown;
+  # this names the assumption instead of burying it in code. hours_9_plus is the
+  # conservative choice (same bias convention as the legality rules) -- a
+  # cancelled flight with no modelled rebooking is not a short delay.
+  cancellation_band: hours_9_plus       # [CONFIRM: Legal] hours_3_to_6 | hours_6_to_9 | hours_9_plus
   hours_3_to_6:  400
   hours_6_to_9:  700
   hours_9_plus:  1000

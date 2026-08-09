@@ -1,4 +1,9 @@
+import pytest
+
+from crewsim import config
+from crewsim.engine import des
 from crewsim.engine.events import assign_reserve
+from crewsim.engine.policy import load_policy
 from crewsim.engine.state import Block, BlockType, CrewMember
 
 
@@ -51,8 +56,11 @@ def test_duty_end_and_rest_end_splits_reserve():
     for i in range(1, len(crew.calendar)):
         assert crew.calendar[i-1].end <= crew.calendar[i].start
 
-def test_uncovered_deadline_held():
-    """Verify that an uncovered item is held until its deadline instead of being cancelled immediately."""
+def test_open_time_item_deadline_is_report_time_minus_the_configured_lead():
+    """The deadline ARITHMETIC only -- renamed, because the previous name
+    ("...held") promised something this test never checked: it drives no
+    pipeline, holds nothing and books nothing. The hold itself is covered by
+    test_uncoverable_items_are_retried_before_being_cancelled below."""
     import pathlib
 
     from crewsim.config import (
@@ -78,7 +86,8 @@ def test_uncovered_deadline_held():
         ),
         scope=ScopeConfig(base="YUL", fleet="A321", position="FO", crew_group="pilots", season="winter", bid_period="2027-01"),
         horizon=HorizonConfig(warmup_days=7, measurement_days=28, cooldown_days=7),
-        population=PopulationConfig(roster_size=120),
+        population=PopulationConfig(roster_size=120, displaced_flying="absorb",
+                                     reserve_bid_rule="junior_first"),
         quality_gates=QualityGateThresholds(d4_link_pass=0.9, d4_link_marginal=0.8, d6_d7_join_pass=0.9, d9_completeness_pass=0.9),
         calibration=CalibrationConfig(delay_gmm_components=2, delay_gmm_random_state=42, regime_quantiles=RegimeQuantiles(p_calm=0.5, p_normal=0.8, p_disrupted=0.9), overdispersion_threshold=1.5, sick_call_min_duration_days=0.5),
         draft_reconstruction=DraftReconstructionConfig(premium_pay_codes=[], short_notice_reason_codes=[], initiator_filter=[]),
@@ -105,3 +114,88 @@ def test_uncovered_deadline_held():
     # Report time is 1000.0.
     # We configured 2.0 hours hold time => deadline should be 1000.0 - 2 * 60 = 880.0
     assert oti.deadline == 1000.0 - (2.0 * 60)
+
+
+# ==================== S1b-06: E8 hold-to-deadline, on the real pipeline ======
+# test_uncovered_deadline_held above asserts the DEADLINE ARITHMETIC only. It
+# builds a config, calls apply_sick_call, and checks `deadline == report - 2h`.
+# Nothing is held, no retry happens, no cancellation books -- despite the name.
+# These drive the real recovery_pipeline instead.
+
+
+@pytest.fixture(scope="module")
+def traced_scenario():
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    policy = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
+    return cfg, costs, des.run_scenario(
+        cfg, costs, policy, scenario_id=0, master_seed="master", n_scenarios=1,
+        trace=True, verbose_trace=True,
+    )
+
+
+def test_uncoverable_items_are_retried_before_being_cancelled(traced_scenario):
+    """AC1: "held, not cancelled on the spot; the pipeline retries as state
+    changes". Counts real retry lines in a real scenario's trace."""
+    _cfg, _costs, sim = traced_scenario
+    retries = [line for line in sim.trace if "unresolved for now" in line]
+    cancels = [line for line in sim.trace if "CANCELLED at deadline" in line]
+
+    assert cancels, "no item reached its deadline in this scenario -- nothing to check"
+    assert retries, (
+        "items were cancelled without a single retry -- E8 is cancelling on the spot, "
+        "which makes a late rescue impossible and overstates cancellations"
+    )
+
+
+def test_at_least_one_item_is_genuinely_held_open(traced_scenario):
+    """A retry at the same instant is not a hold. At least one item must be
+    cancelled STRICTLY LATER than it arrived.
+
+    (Not every item: an absence notified after its pairing has already begun is
+    born past its own deadline, because `deadline = start - lead` is absolute.
+    That is a real modelled case, tracked separately, and `explain-event` warns
+    about it rather than claiming a hold that did not happen.)
+    """
+    import re
+
+    _cfg, _costs, sim = traced_scenario
+    arrival = {}
+    held = []
+    for line in sim.trace:
+        m = re.match(r"\[t=(-?[\d.]+)\].*?item (\d+)", line)
+        if not m:
+            continue
+        t, uid = float(m.group(1)), m.group(2)
+        arrival.setdefault(uid, t)
+        if "CANCELLED at deadline" in line and t > arrival[uid]:
+            held.append((uid, t - arrival[uid]))
+
+    assert held, "no item was held open for any positive duration before cancelling"
+
+
+def test_cancellation_books_appr_compensation_at_the_deadline(traced_scenario):
+    """AC2: "Cancellation AND APPR compensation book at the deadline."
+
+    APPR was defined in costs_pilots.yaml and modelled in config.py but booked
+    nowhere in src/ -- a costed, declared, never-consumed key.
+    """
+    _cfg, costs, sim = traced_scenario
+    rows = sim.ledger.rows
+    cancellations = [r for r in rows if r.category == "CANCELLATION"]
+    appr = [r for r in rows if r.category == "APPR_COMPENSATION"]
+
+    assert cancellations, "no cancellation in this scenario"
+    assert len(appr) == len(cancellations), "every cancellation must attract APPR compensation"
+
+    expected = costs.appr_compensation.on_cancellation
+    assert expected > 0.0
+    assert all(r.amount == expected for r in appr)
+
+    # Booked at the same instant and against the same causal chain, not as a
+    # detached lump -- otherwise it would not follow the cancellation through
+    # measurement-window attribution.
+    by_event = {r.event_uid: r.sim_time for r in cancellations}
+    for r in appr:
+        assert r.event_uid in by_event
+        assert r.sim_time == by_event[r.event_uid]

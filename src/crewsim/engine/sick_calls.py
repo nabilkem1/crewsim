@@ -36,14 +36,13 @@ def _break_pairings(
             deadline=deadline,
             origin="SICK_CALL",
             root_event_uid=uid_counter,
-            # NOT b.flight_mins: apply_sick_call never set this (always the
-            # OpenTimeItem default 0.0), unlike cascade.py's own item
-            # construction which does. That's a real, pre-existing gap
-            # (legality.py's rolling-flight-hour check then undercounts a
-            # sick-call-origin item's added flight time) -- found while
-            # extracting this shared helper, deliberately NOT fixed here:
-            # changing it would alter every existing CRN scenario's
-            # legality outcomes, well outside this story's scope.
+            # S1b-04 (P2): carried through, matching cascade.py's own item
+            # construction. Without it L3's rolling-flight-hour check saw 0
+            # added flight time for every sick-call-origin item and so
+            # under-rejected candidates who were near the 35h limit. This does
+            # change legality outcomes on existing CRN scenarios -- it is a
+            # correctness fix, not a refactor, and the numbers move.
+            flight_mins=b.flight_mins,
         )
         uid_counter += 1
         open_time.append(oti)

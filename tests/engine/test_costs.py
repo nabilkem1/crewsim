@@ -126,6 +126,14 @@ def test_real_simulation_books_staffing_through_this_module(policy_name: str) ->
     two stop agreeing.
     """
     cfg = config.load()
+    # displaced_flying=absorb: this test recomputes staffing from the
+    # POST-simulation reserve calendars and compares it to what was booked at
+    # construction from the PRE-simulation ones. With displaced flying on, those
+    # legitimately differ -- a drafted reserve's RESERVE block gets split -- so
+    # the comparison would be measuring assign_reserve, not staffing.
+    cfg = cfg.model_copy(
+        update={"population": cfg.population.model_copy(update={"displaced_flying": "absorb"})}
+    )
     costs = config.load_costs(cfg)
     policy = load_policy(config.repo_root() / "configs" / "policies" / f"{policy_name}.yaml")
     sim = des.run_scenario(cfg, costs, policy, daily_sick_calls=[0] * cfg.horizon.horizon_days)

@@ -71,6 +71,11 @@ class CrewMember:
     # (which is why des.py deep-copies instead), so the split between line
     # holders and reserves could vanish in a refactor with nothing failing.
     _is_reserve: bool = False
+    # S1b-02 AC2: the PAIRING blocks this crew member gave up by bidding
+    # reserve. Kept alongside the crew rather than returned separately so
+    # load_rosters' signature (ten call sites) is unchanged, and so the flying
+    # stays attributable to whose line it was.
+    _displaced_pairings: list[Block] = field(default_factory=list)
 
     def blocks_in(self, start: float, end: float) -> list[Block]:
         """Return all blocks that overlap the interval [start, end]."""

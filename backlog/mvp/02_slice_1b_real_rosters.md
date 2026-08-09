@@ -33,9 +33,15 @@ We need real crew state, not synthetic models. By loading D2 rosters, the engine
 
 
 ### How it was implemented
-- Implemented `src/crewsim/engine/roster_loader.py` dynamically ingesting `d2_rosters.csv`.
-- Filtered `ACTIVE` pilots exclusively, deliberately dropping `LONG_TERM_ABSENCE` and `TERMINATED` profiles.
-- Instantiated `CrewMember` dataclass arrays validating `Block` chronological sorting natively.
+- `src/crewsim/engine/roster_loader.py::load_rosters` builds `CrewMember` from D1 and their
+  `Block` calendar from D2, restricted to the S1d-04b template window and converted to minutes
+  since that window's start.
+- Only `employment_status == ACTIVE` is rostered; every other status is counted by reason and
+  reported (112 of 120 in the current scope, 8 excluded).
+- Each calendar is sorted and checked for overlaps at load time, raising rather than warning --
+  which is why L0 holds on input.
+- `_load_pairing_duty_periods` replaces D2's flat multi-day PAIRING span with D3's real duty
+  periods; without it every pairing would breach L1's 13h max duty by construction.
 
 
 ---
@@ -65,9 +71,18 @@ Reserves are carved out of the existing pool. If an airline has 120 pilots, allo
 
 
 ### How it was implemented
-- Engineered `apply_headcount_target()` inside `src/crewsim/engine/policy.py`.
-- Truncated `line_holders` converting the lowest seniority ranks explicitly to `reserves` to match `roster_size`.
-- Added automated checks within `tests/engine/test_headcount.py` asserting the population size is strictly conserved.
+- The carve-out lives in `roster_loader.load_rosters`, not in a separate function: crew in scope
+  are partitioned into reserves and line holders, so the population is conserved by construction
+  rather than adjusted afterwards. (An earlier version of this note named
+  `apply_headcount_target()` in `policy.py`; no such function has ever existed.)
+- Who ends up on reserve is `population.reserve_bid_rule` (`junior_first` by default -- senior crew
+  bid lines, reserve is what is left).
+- The flying a reserve bidder gives up is captured on `CrewMember._displaced_pairings` and, when
+  `population.displaced_flying == "open_time"`, offered to the recovery pipeline at t=0. It used to
+  be discarded silently, so a higher R carried no opportunity cost at all.
+- `tests/engine/test_headcount.py` is parametrised over R4/R6/R8/R10/R14 and compares against the
+  same population loaded with no policy -- an external reference, not a re-partition of the list
+  under test.
 
 
 ---
@@ -95,9 +110,14 @@ Reserves don't work 24/7. Modeling their realistic on/off rotations ensures we d
 
 
 ### How it was implemented
-- Extended `roster_loader.py` to parse reserve cyclic patterns directly from `d2_rosters`.
-- Dynamically assigned `reserve_call_type` (`SC` vs `LC`) adhering to authentic distributions.
-- Built `crewsim roster reserve-pattern` in `cli.py` providing real-time visibility into the availability matrix.
+- A minted reserve inherits a complete on/off rotation from a D2 crew member who actually flew a
+  reserve line in the template window (PAIRING blocks stripped), so the pattern is authentic
+  rather than generated.
+- `reserve_call_type` is CARRIED THROUGH from `d2_rosters.reserve_call_type` -- the engine does not
+  assign SC/LC, it reads it. Measured 60.7-69.6% SC by reserve-day across the candidate policies.
+- `crewsim roster reserve-pattern` reports the rotation. It divided by 86400 (seconds per day) on
+  values that are minutes, reporting every figure 60x low (3.7 reserve-days where the truth is
+  223.0) until that was fixed.
 
 
 ---
@@ -125,9 +145,13 @@ Sick calls must hit real people. This prevents the model from generating phantom
 
 
 ### How it was implemented
-- Developed `apply_sick_call(cfg, crew_list, timestamp)` inside `src/crewsim/engine/sick_calls.py`.
-- Mutated the targeted `CrewMember` calendar dropping `PAIRING` blocks matching the disruption range.
-- Generated standard `OpenTimeItem` instances signaling unmet demand to the DES engine.
+- `apply_sick_call` samples a crew member who has a PAIRING overlapping the absence window, removes
+  the affected blocks from their calendar, and returns them alongside the resulting items.
+- `_break_pairings` builds one `OpenTimeItem` per broken pairing, with
+  `deadline = report - demand.uncovered_deadline_hours` and `flight_mins` carried through (it was
+  left at 0.0 until S1b-04's P2 pass, which made L3's rolling-flight check undercount).
+- `apply_named_absence` is the sibling used by V5/V6 replay: same pairing-breaking logic, a named
+  real crew member instead of a random one.
 
 
 ---
@@ -235,9 +259,18 @@ Airlines hold open flights to the last minute hoping someone frees up. Delaying 
 
 
 ### How it was implemented
-- Parameterized `uncovered_deadline_hours` within `DemandConfig` supporting tiered TTLs per route.
-- Modified `sick_calls.py` to decrement the `OpenTimeItem.deadline` mathematically from the `report` time.
-- Updated `cli.py`'s `explain-event` tracing to verify recursive DES pipeline retries preceding expiration.
+- `demand.uncovered_deadline_hours` accepts a scalar or a per-route-type mapping; `_break_pairings`
+  sets `deadline = report - lead`.
+- The hold itself is `des.py::recovery_pipeline`: an unresolvable item is re-attempted at each
+  future reserve-block start up to its deadline -- retry times derived from real calendar data, not
+  an arbitrary polling interval -- and cancels only on reaching it.
+- Cancellation books `CANCELLATION` and `APPR_COMPENSATION` together at the deadline. APPR was
+  defined in `costs_pilots.yaml` and booked nowhere until S1b-06's P1 pass; which band a
+  cancellation attracts is named in `disruption`/`appr_compensation.cancellation_band`, not assumed
+  in code.
+- Known limitation: an absence notified after its pairing has already begun is born past its own
+  deadline, so its retries all fire at the arrival instant. `explain-event` prints the measured hold
+  and warns rather than claiming one.
 
 
 ---
@@ -272,7 +305,17 @@ Queueing theory acts as a mathematical backstop. If the DES engine's shortfall r
     *   Neither is a gate here. Both are observations that tell you whether 1c is worth starting.
 
 ### How it was implemented
-- Wrote analytical `erlang_b(s, a)` function calculating exact mathematical shortfalls within `cli.py`.
-- Established `tests/gates/test_v2_erlang.py` enforcing strict `< 5%` tolerance bounds against the DES mock.
-- Wired `--show-comparison` flag in `gate_parser` outputting the theory versus measured delta side-by-side.
+- `src/crewsim/gates/v2_erlang.py` runs the DES with cascades disabled and MEASURES the shortfall:
+  arrivals, blocked-on-arrival, arrival rate, mean reserve occupancy, and the time-average number of
+  reserves on call (the effective `s`, well below headcount because lines rotate).
+- One `erlang_b`, shared by the CLI, the test and the report. There were two independent copies, and
+  the DES side was the literal `prob_shortfall_des = 0.098  # Stubbed DES mock value` -- no
+  simulation was involved, so the gate could not detect the reserve-accounting bug it exists to
+  catch.
+- The verdict is the directional bound `p_hat >= B(s, a)`: every departure from M/M/s/s in this
+  model can only make a reserve LESS available, so a violation means the sim found availability the
+  calendars and rules forbid. Strict containment is printed alongside but is informational and not
+  satisfiable by this model -- see the module docstring for the measurement table.
+- `gate v2` returns a real exit code. It used to fall through to the unknown-gate handler, printing
+  `[PASS]` and then exiting 2.
 

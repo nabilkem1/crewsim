@@ -241,6 +241,48 @@ class Simulation:
                         self.log(f"SICK_CALL: {sick_crew.crew_id} -> item {item.uid} ({item.pairing_id})")
                         self.env.process(self.recovery_pipeline(item))
 
+    def displaced_flying_source(
+        self, displaced: list[tuple[CrewMember, Any]]
+    ) -> Generator[simpy.Event, None, None]:
+        """S1b-02 AC2: the flying reserve bidders gave up, offered as open time.
+
+        Routed through _delayed_pipeline, so each item surfaces when the IOC
+        would actually work it -- cascade.visibility_lag_hours before its own
+        pairing -- rather than all at t=0.
+
+        Emitting at t=0 was the first implementation and is wrong on two counts.
+        Operationally, it means re-deciding a known-open trip at every reserve
+        block start for weeks; the E8 hold exists for unexpected disruption, not
+        for flying that has been open since the bid closed. Mechanically, it
+        made each item retry across the whole horizon, which multiplied the
+        legality checks per scenario by roughly two orders of magnitude and took
+        the test suite from 4 minutes to 18.
+
+        Before any of this the blocks were simply discarded, so a higher R
+        carried no opportunity cost at all and R* was biased upward.
+        """
+        for crew, block in displaced:
+            dl_hours = 0.0
+            if self.cfg.demand is not None:
+                raw = self.cfg.demand.uncovered_deadline_hours
+                dl_hours = raw.get("default", 0.0) if isinstance(raw, dict) else float(raw)
+            item = OpenTimeItem(
+                uid=self.next_uid(),
+                pairing_id=block.pairing_id or "UNKNOWN",
+                base=crew.base,
+                fleet=next(iter(crew.fleet_quals)) if crew.fleet_quals else "UNKNOWN",
+                position=crew.position,
+                start=block.start, end=block.end,
+                deadline=block.start - (dl_hours * 60.0),
+                origin="DISPLACED_LINE",
+                root_event_uid=0,   # structural: caused by the bid, not by an event
+                flight_mins=block.flight_mins,
+            )
+            self.log(f"DISPLACED_LINE: {crew.crew_id} bid reserve -> item {item.uid} ({item.pairing_id})")
+            self.env.process(self._delayed_pipeline(item))
+        return
+        yield  # pragma: no cover - generator protocol; nothing to wait for
+
     def real_absence_source(self, absences: list[dict[str, Any]]) -> Generator[simpy.Event, None, None]:
         """S1e-06 (V5 replay): drives arrivals from REAL D4 absences (a
         real crew_id, a real [start_min, end_min) window) instead of
@@ -299,6 +341,17 @@ class Simulation:
             scenario_id=self.scenario_id, policy_id=self.policy_id,
             sim_time=self.env.now, event_uid=item.uid, root_event_uid=item.root_event_uid,
             crew_id=None, category="CANCELLATION", amount=self.costs.disruption.cancellation,
+        )
+        # S1b-06 AC2: statutory passenger compensation books at the deadline
+        # alongside the airline's own cancellation cost -- a separate category
+        # because it is a different payee and a different tariff. Which APPR
+        # band a cancellation attracts is named in costs_pilots.yaml rather
+        # than assumed here (passenger re-accommodation is not modelled).
+        self.ledger.book(
+            scenario_id=self.scenario_id, policy_id=self.policy_id,
+            sim_time=self.env.now, event_uid=item.uid, root_event_uid=item.root_event_uid,
+            crew_id=None, category="APPR_COMPENSATION",
+            amount=self.costs.appr_compensation.on_cancellation,
         )
         self.log(f"item {item.uid} ({item.pairing_id}) CANCELLED at deadline, still uncovered")
 
@@ -525,6 +578,18 @@ def run_scenario(
         trace=trace, draft_mode=draft_mode, verbose_trace=verbose_trace,
         cascades_enabled=cascades_enabled,
     )
+    # S1b-02 AC2: reserve bidders' displaced flying, if configured as open time.
+    # Registered BEFORE the sick-call source so it is already on the queue when
+    # the first absence arrives -- it was known weeks earlier.
+    if cfg.population.displaced_flying == "open_time":
+        displaced = [
+            (crew, block)
+            for crew in reserves
+            for block in getattr(crew, "_displaced_pairings", [])
+        ]
+        if displaced:
+            env.process(sim.displaced_flying_source(displaced))
+
     env.process(sim.sick_call_source(daily_counts))
     env.run(until=horizon_minutes)
 

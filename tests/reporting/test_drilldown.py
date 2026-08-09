@@ -95,4 +95,10 @@ def test_drilldown_real_scenarios_end_to_end():
         chain = d["chains"][0]
         assert chain["rows"]
         assert chain["trace_lines"], "a real uncovered leg must have matching trace lines"
-        assert any("SICK_CALL" in line for line in chain["trace_lines"])
+        # Two legitimate origins since S1b-02 AC2: an absence (SICK_CALL) or a
+        # reserve bidder's displaced line (DISPLACED_LINE). Both must be
+        # traceable; what must NOT happen is a chain with no origin at all.
+        assert any(
+            "SICK_CALL" in line or "DISPLACED_LINE" in line
+            for line in chain["trace_lines"]
+        )
