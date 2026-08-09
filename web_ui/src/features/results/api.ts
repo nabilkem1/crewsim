@@ -1,0 +1,11 @@
+export const fetchSummaries = () => fetch('/api/results/summaries').then(res => res.json());
+export const fetchArtifacts = () => fetch('/api/results/artifacts').then(res => res.json());
+export const fetchMetrics = () => fetch('/api/results/metrics/comparison').then(res => res.json());
+export const fetchGantt = () => fetch('/api/results/charts/gantt').then(res => res.json());
+export const fetchWaterfall = () => fetch('/api/results/charts/waterfall').then(res => res.json());
+export const fetchHeatmap = () => fetch('/api/results/charts/heatmap').then(res => res.json());
+export const fetchTimeseries = () => fetch('/api/results/charts/timeseries').then(res => res.json());
+export const fetchEligibility = () => fetch('/api/results/charts/eligibility').then(res => res.json());
+export const fetchGrid = () => fetch('/api/results/charts/grid').then(res => res.json());
+export const fetchGates = () => fetch('/api/results/charts/gates').then(res => res.json());
+export const fetchDataQuality = () => fetch('/api/results/charts/data-quality').then(res => res.json());

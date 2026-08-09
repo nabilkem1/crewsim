@@ -482,17 +482,17 @@ _PAGE_CSS = f"""
 def _stats_table(profiles: dict[str, profile.WindowProfile]) -> str:
     names = _window_names(profiles)
     rows = [
-        ("window", [profiles[n].window.label for n in names]),
-        ("sick calls: n days", [str(profiles[n].sick_calls.n_days) for n in names]),
-        ("sick calls: var/mean", [f"{profiles[n].sick_calls.var_over_mean:.2f}" for n in names]),
-        ("absence duration: n", [str(profiles[n].absence_duration.n) for n in names]),
-        ("reserve callouts: n", [str(profiles[n].reserve_outcomes.n) for n in names]),
-        ("SEVERE runs: n", [str(profiles[n].severe_runs.n_runs) for n in names]),
+        ("window", "The date range of the dataset split.", [profiles[n].window.label for n in names]),
+        ("sick calls: n days", "Total number of calendar days recorded in the absence log.", [str(profiles[n].sick_calls.n_days) for n in names]),
+        ("sick calls: var/mean", "Variance-to-mean ratio of daily counts (indicates overdispersion).", [f"{profiles[n].sick_calls.var_over_mean:.2f}" for n in names]),
+        ("absence duration: n", "Total number of distinct absence events recorded.", [str(profiles[n].absence_duration.n) for n in names]),
+        ("reserve callouts: n", "Total number of instances where a reserve crew member was called out to cover a duty.", [str(profiles[n].reserve_outcomes.n) for n in names]),
+        ("SEVERE runs: n", "Total number of continuous clusters of SEVERE disruption days.", [str(profiles[n].severe_runs.n_runs) for n in names]),
     ]
-    head = "<tr><th></th>" + "".join(f"<th>{n}</th>" for n in names) + "</tr>"
+    head = "<tr><th>Metric</th><th>Definition</th>" + "".join(f"<th>{n}</th>" for n in names) + "</tr>"
     body = "".join(
-        "<tr><th>" + label + "</th>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>"
-        for label, vals in rows
+        "<tr><th>" + label + "</th><td style='color: " + SECONDARY_INK + "; font-style: italic;'>" + definition + "</td>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>"
+        for label, definition, vals in rows
     )
     return f'<table class="stats">{head}{body}</table>'
 
