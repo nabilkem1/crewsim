@@ -1,3 +1,5 @@
+from datetime import UTC
+
 import pytest
 
 from crewsim import config
@@ -38,15 +40,15 @@ def test_pipeline_determinism(monkeypatch: pytest.MonkeyPatch) -> None:
     
     cfg = config.load()
 
-    res1 = pipeline.run_pipeline(cfg, "winter_sun")
+    pipeline.run_pipeline(cfg, "winter_sun")
     
     # Run again, verify determinism
     # wait, fitted_at might differ by a microsecond, so let's mock datetime
     class MockDatetime:
         @classmethod
         def now(cls, tz=None):
-            from datetime import datetime, timezone
-            return datetime(2023, 1, 1, tzinfo=timezone.utc)
+            from datetime import datetime
+            return datetime(2023, 1, 1, tzinfo=UTC)
             
     monkeypatch.setattr(pipeline, "datetime", MockDatetime)
     

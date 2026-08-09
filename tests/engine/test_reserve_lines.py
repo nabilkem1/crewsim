@@ -1,8 +1,8 @@
-import pytest
 from crewsim import config
 from crewsim.engine import roster_loader
 from crewsim.engine.policy import load_policy
 from crewsim.engine.state import BlockType
+
 
 def test_reserve_rotation_and_split():
     """Verify that minted reserves inherit authentic D2 on/off rotations and SC/LC labels."""

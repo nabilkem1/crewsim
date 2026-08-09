@@ -35,6 +35,6 @@ def event_rng(scenario_stream: SeedSequence, event_uid: str) -> Generator:
     """Derive an isolated PRNG for a single event to maintain CRN alignment."""
     event_seed = stable_seed(event_uid)
     seq = SeedSequence(
-        entropy=scenario_stream.entropy, spawn_key=scenario_stream.spawn_key + (event_seed,)
+        entropy=scenario_stream.entropy, spawn_key=(*scenario_stream.spawn_key, event_seed)
     )
     return Generator(PCG64(seq))

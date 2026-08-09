@@ -348,11 +348,24 @@ class MockCorpus:
                         pid_n += 1
                         pid = f"{base}{fleet[:4]}-{pid_n:06d}"
                         span = int(self.rng.integers(2, 6))
-                        legs = self._make_pairing(pid, base, fleet, d, span,
-                                                  pairing_rows, leg_rows)
+                        legs, last_release = self._make_pairing(
+                            pid, base, fleet, d, span, pairing_rows, leg_rows)
                         self.pairings[pid] = dict(base=base, fleet=fleet,
                                                   start=d, days=span, legs=legs)
-                        self._block(roster_rows, c, d, span, "PAIRING", pid)
+                        # D2's PAIRING block (day-granular) must fully contain
+                        # D3's real duty-period timing (report/release, which
+                        # can run past midnight of the pairing's last nominal
+                        # day) -- otherwise the next block scheduled for this
+                        # crew member starts before the pairing actually
+                        # releases them. Pad the block's day-span (not the
+                        # pairing's real duty_periods count, which stays
+                        # `span`) up to whatever covers the true last release.
+                        block_span = max(span, math.ceil(
+                            (last_release - datetime.combine(d, datetime.min.time()))
+                            .total_seconds() / 86400))
+                        self._block(roster_rows, c, d, block_span, "PAIRING", pid)
+                        d += timedelta(days=block_span)
+                        continue
                     d += timedelta(days=span)
         self.write("d3_pairings.csv",
                    ["pairing_id", "base", "fleet", "position_complement",
@@ -383,11 +396,19 @@ class MockCorpus:
         season = season_of(d0)
         prim, wp, sec, ws, dom, _ = SEASON_DESTS[season]
         legs, layovers, credit = [], [], 0.0
+        last_release = datetime.combine(d0, datetime.min.time())
         for dp in range(days):
             r = self.rng.random()
             dest = (self.pick(prim) if r < wp
                     else self.pick(sec) if r < wp + ws else self.pick(dom))
             rep = float(self.rng.uniform(5.0, 18.0))
+            # An overnight duty (previous dp) can release after this day's
+            # start; report can't precede that. Reuses the same 0.5h buffer
+            # already used below for release (dep+block+0.5), rather than
+            # inventing a new rest constant.
+            day_start = datetime.combine(d0, datetime.min.time()) + timedelta(days=dp)
+            if last_release > day_start:
+                rep = max(rep, (last_release - day_start).total_seconds() / 3600.0 + 0.5)
             blk = self._block_hours(dest)
             n_legs = 1 if dest in LONG_HAUL else int(self.rng.integers(1, 3))
             t = rep + 1.0
@@ -400,6 +421,8 @@ class MockCorpus:
                               self._hm(d0, dp, t + blk),
                               self._hm(d0, dp, t + blk + 0.5), round(blk, 2)])
                 credit += blk
+                last_release = (datetime.combine(d0, datetime.min.time())
+                                 + timedelta(days=dp, hours=t + blk + 0.5))
                 t += blk + 1.2
             legs.append(dest)
             if dp < days - 1:
@@ -407,7 +430,7 @@ class MockCorpus:
         comp = "CA:1,FO:1,FA:5" if FLEET_FAMILY[fleet] == "A321" else "CA:1,FO:2,FA:8"
         prows.append([pid, base, fleet, comp, days, round(credit * 1.18, 2),
                       "|".join(layovers), d0.isoformat(), days])
-        return legs
+        return legs, last_release
 
     @staticmethod
     def _hm(d0, dayoff, hours):

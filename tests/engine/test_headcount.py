@@ -1,7 +1,7 @@
-import pytest
 from crewsim import config
 from crewsim.engine import roster_loader
 from crewsim.engine.policy import load_policy
+
 
 def test_headcount_conservation():
     """Verify that carving out reserves conserves total active headcount."""
@@ -20,7 +20,7 @@ def test_headcount_conservation():
     
     # Check that exactly N reserves were carved out
     n_reserves = pol.total_reserves(base="YUL", fleet="A321neoLR", position="FO")
-    assert n_reserves == 10 or n_reserves == 12, "R10 policy should have 10 or 12 max daily reserves"
+    assert n_reserves in {10, 12}, "R10 policy should have 10 or 12 max daily reserves"
     
     reserves_marked = sum(getattr(c, "_is_reserve", False) for c in active_with_policy)
     lines_marked = sum(not getattr(c, "_is_reserve", False) for c in active_with_policy)

@@ -15,6 +15,9 @@ dependencies = [
     "scipy>=1.17.1",
     "pyarrow>=25.0.0",
     "scikit-learn>=1.9.0",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "sqlalchemy>=2.0.30",
 ]
 
 [project.scripts]
@@ -29,7 +32,14 @@ crewsim = "crewsim.cli:main"
 # disappearing from .venv after S0-01: `uv sync --extra dev` installed them,
 # then a later plain `uv run mypy ...` re-synced to the base project and
 # silently removed them.
-dev = ["pytest>=8", "hypothesis>=6", "ruff", "mypy", "types-PyYAML"]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6",
+    "ruff",
+    "mypy",
+    "types-PyYAML",
+    "scipy-stubs>=1.17.1.5",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -43,6 +53,51 @@ packages = ["src/crewsim"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# src/crewsim/api/ is the web-API workstream (backlog/mvp/web/), excluded while
+# it is in flight so slice-1a CI is meaningful rather than permanently red on
+# another stream's files. Mirrors EXCLUDED_TREES in tests/test_config.py, which
+# carries the same note and self-deletes once that tree is clean.
+exclude = ["src/crewsim/api"]
+
+[tool.ruff.lint]
+# Pinned EXPLICITLY rather than inheriting ruff's default selection. Left
+# implicit, a ruff upgrade silently changes what CI enforces -- which is how a
+# lint config becomes untrustworthy: it either starts failing on unrelated
+# upgrades or quietly stops checking something. This is the set the tree was
+# cleaned against.
+select = [
+    "F",      # pyflakes: real errors (undefined names, unused imports/vars)
+    "E4", "E7", "E9",  # pycodestyle: imports, statements, syntax
+    "I",      # import sorting
+    "UP",     # pyupgrade: keep to the 3.11 baseline in pyproject
+    "B",      # bugbear
+    "C4",     # comprehensions
+    "SIM",    # simplify
+    "RUF",    # ruff-specific
+    "BLE",    # blind except -- deliberate ones carry a noqa with a reason
+    "DTZ",    # naive datetimes: this project is strict about them (see roster_loader)
+    "ISC",    # implicit string concat
+    "PIE",
+    "PLR", "PLW",  # pylint refactor/warning subsets
+]
+ignore = [
+    # Long-ish boolean/branch counts are normal in the legality and CLI
+    # dispatch layers; splitting them for a metric would hurt readability.
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+    # Magic-value comparison: this project already enforces the far stricter
+    # "no numeric constant outside configs/" rule in tests/test_config.py,
+    # which is AST-based and has an audited allowlist. PLR2004 would duplicate
+    # it with worse signal.
+    "PLR2004",
+    # legality.py's rule chain is 19 lines of `if not rN.legal: return rN`.
+    # That compact one-per-rule shape is the file's deliberate style and reads
+    # better than 38 lines; E701 would only churn it.
+    "E701",
+    # Engine functions genuinely take many positional parameters (crew, item,
+    # cfg, now, costs...). Capping the count would push them into ad-hoc
+    # parameter objects for a metric, not for clarity.
+    "PLR0917",
+]
 
 [tool.mypy]
 python_version = "3.11"

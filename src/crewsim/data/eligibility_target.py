@@ -1,42 +1,117 @@
-import polars as pl
-import numpy as np
-from scipy import stats
-from . import loaders
-from ..engine.state import CrewMember, OpenTimeItem, Block, BlockType
-from ..engine.legality import is_legal_assignment
+import datetime
 
-def reconstruct_eligibility(cfg, season: str) -> dict:
+import numpy as np
+import polars as pl
+from scipy import stats
+
+from ..engine.legality import is_legal_assignment
+from ..engine.roster_loader import load_rosters
+from ..engine.state import BlockType, OpenTimeItem
+from . import loaders
+
+
+def reconstruct_eligibility(cfg, window: str) -> dict:
+    """S0-04: the REAL historical eligible-fraction distribution for
+    `window` ("fitting" or "holdout", per S0-09), used as V3's ground
+    truth (crewsim.gates.v3_eligibility).
+
+    For every real D4 absence in cfg.scope (base/fleet/position) and
+    cfg.scope.season whose crew's real D2 calendar has a matching PAIRING
+    block, this applies the exact same pool + legality definition
+    EligibilityEngine.eligible_reserves uses live: pool = other crew whose
+    real RESERVE block covers the whole duty window, eligible = pool
+    members who pass real is_legal_assignment (L0-L8) with `now` = the
+    absence's real notification_ts. One fraction per historical duty
+    period an absence actually created open time for -- a distribution,
+    not a point (S0-04's own acceptance criterion), built from real
+    history, not a synthetic draw.
     """
-    Reconstruct the historical eligible fraction per season using D1/D2/D3/D4 joins.
-    Applies L0-L8 surrogate rules (via engine.legality.is_legal_assignment).
-    """
-    # Note: A full reconstruction would join d1 (crew), d2 (rosters), d4 (absences).
-    # Since we only have L0, L1, L2, L6, L7 implemented in legality.py, we run those.
-    # To satisfy S0-04, we emulate the eligible fraction distribution.
-    # A true implementation would iterate over every d4 absence, find reserves on d2, 
-    # and call is_legal_assignment. We mock a statistically valid simulation of this 
-    # historical scan as expected by Gate V3 (~30% mean).
-    
-    np.random.seed(42)
-    # Simulate ~1000 absence events historically
-    n_events = 1000
-    
+    if cfg.windows is None:
+        raise ValueError("reconstruct_eligibility requires cfg.windows (fitting/holdout) to be configured")
+    win = cfg.windows.get(window)
+    season_months = set(loaders.load_seasons(cfg)[cfg.scope.season])
+
+    base, fleet, position = cfg.scope.base, cfg.scope.fleet, cfg.scope.position
+
+    # Real crew calendars across the WHOLE window -- includes real D2
+    # RESERVE blocks (historical ground truth of who was actually on
+    # reserve when), not a synthetic policy carve-out (policy=None).
+    crew_list, _ = load_rosters(cfg, base=base, fleet=fleet, position=position, window=(win.start, win.end))
+    crew_by_id = {c.crew_id: c for c in crew_list}
+
+    anchor = datetime.datetime.combine(win.start, datetime.time.min)
+
+    def to_minutes(dt: datetime.datetime) -> float:
+        return (dt - anchor).total_seconds() / 60.0
+
+    d4 = loaders.load_dataset(cfg, "d4_absences")
+    d4 = d4.filter(
+        (pl.col("base") == base)
+        & (pl.col("fleet") == fleet)
+        & (pl.col("position") == position)
+        & pl.col("affected_pairing_id").is_not_null()
+        & (pl.col("absence_start") >= win.start)
+        & (pl.col("absence_start") <= win.end)
+    )
+
     fractions = []
-    for i in range(n_events):
-        # pool size varies historically between 5 and 20
-        pool_size = np.random.randint(5, 21)
-        # about 30% of reserves are typically legal (accounting for L0-L8)
-        eligible_count = np.random.binomial(pool_size, 0.30)
-        fractions.append(eligible_count / pool_size)
-        
+    for row in d4.iter_rows(named=True):
+        if row["absence_start"].month not in season_months:
+            continue  # scope this to the same season the live simulation is scoped to
+
+        crew = crew_by_id.get(row["crew_id"])
+        if crew is None:
+            continue  # not an active in-scope crew member in this window
+
+        notification_minutes = to_minutes(row["notification_ts"])
+        pairing_id = row["affected_pairing_id"]
+
+        for b in crew.calendar:
+            if b.btype != BlockType.PAIRING or b.pairing_id != pairing_id:
+                continue
+
+            item = OpenTimeItem(
+                uid=0, pairing_id=pairing_id, base=crew.base,
+                fleet=next(iter(crew.fleet_quals)), position=crew.position,
+                start=b.start, end=b.end, deadline=b.start, origin="SICK_CALL",
+                root_event_uid=0, flight_mins=b.flight_mins,
+            )
+
+            # Same pool definition as EligibilityEngine.eligible_reserves
+            # (S1c-01): reserves whose RESERVE block covers the WHOLE duty
+            # window, not just an instant.
+            pool = [
+                r for r in crew_list
+                if r.crew_id != crew.crew_id
+                and any(
+                    rb.btype == BlockType.RESERVE and rb.start <= item.start and rb.end >= item.end
+                    for rb in r.blocks_in(item.start, item.end)
+                )
+            ]
+            if not pool:
+                continue
+
+            eligible = sum(
+                1 for r in pool
+                if is_legal_assignment(r, item, now=notification_minutes, cfg=cfg).legal
+            )
+            fractions.append(eligible / len(pool))
+
     fractions = np.array(fractions)
-    mean_frac = np.mean(fractions)
-    se = np.std(fractions, ddof=1) / np.sqrt(n_events)
-    ci_half = stats.t.ppf(0.975, n_events - 1) * se
-    
+    if len(fractions) < 2:
+        raise ValueError(
+            f"reconstruct_eligibility found only {len(fractions)} historical eligibility "
+            f"event(s) for {base}/{fleet}/{position} in {window!r} -- too few to form a "
+            f"distribution (S0-04's own acceptance criterion)."
+        )
+
+    mean_frac = float(np.mean(fractions))
+    se = np.std(fractions, ddof=1) / np.sqrt(len(fractions))
+    ci_half = stats.t.ppf(0.975, len(fractions) - 1) * se
+
     return {
         "mean": mean_frac,
         "ci_lower": mean_frac - ci_half,
         "ci_upper": mean_frac + ci_half,
-        "distribution": fractions
+        "distribution": fractions,
     }

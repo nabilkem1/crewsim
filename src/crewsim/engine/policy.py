@@ -1,10 +1,21 @@
 import hashlib
 import json
-import yaml
 from pathlib import Path
-from pydantic import BaseModel
 
-class ReserveConfig(BaseModel):
+import yaml
+from pydantic import BaseModel, ConfigDict
+
+
+class _Model(BaseModel):
+    """extra="forbid": an unrecognised policy-file key is a typo, not a
+    silent no-op. S1e-05 depends on this directly -- its own AC requires a
+    counterfactual (e.g. junior_first) to be structurally impossible to
+    select via a policy YAML, not merely unconsumed; without this, an extra
+    key would validate silently and do nothing, which is safe but not the
+    loud rejection the AC asks for."""
+    model_config = ConfigDict(extra="forbid")
+
+class ReserveConfig(_Model):
     base: str
     fleet: str
     position: str
@@ -12,14 +23,14 @@ class ReserveConfig(BaseModel):
     short_call: int
     long_call: int
 
-class Stage1Config(BaseModel):
+class Stage1Config(_Model):
     reserves: list[ReserveConfig]
 
-class Stage2Config(BaseModel):
+class Stage2Config(_Model):
     allow_cross_base_reserve: bool
     reserve_selection: str
 
-class Policy(BaseModel):
+class Policy(_Model):
     policy_id: str
     costs_file: str
     stage1: Stage1Config
@@ -33,31 +44,40 @@ class Policy(BaseModel):
         json_str = json.dumps(data, sort_keys=True)
         return hashlib.sha256(json_str.encode("utf-8")).hexdigest()[:12]
         
-    def total_reserves(self, base: str = None, fleet: str = None, position: str = None) -> int:
+    def total_reserves(
+        self, base: str | None = None, fleet: str | None = None, position: str | None = None
+    ) -> int:
+        """Reserve headcount this policy carves out, optionally within one group.
+
+        The PEAK daily target: max(short_call + long_call) over the matching
+        stage-1 entries. A policy states a target per day-of-week group (e.g.
+        4+2 Mon-Fri, 5+2 Sat-Sun); the headcount that has to exist is the
+        largest of those, since the same carved-out pool covers every day.
+
+        This is the definition roster_loader.load_rosters implements when it
+        carves the pool, so the two agree by construction -- see its
+        `target_reserves` computation, which is the same max over the same key.
+
+        Known simplification, deliberately not hidden: a reserve line is an
+        on/off rotation (roughly 18 days on, 12 off in this corpus), so a pool
+        of exactly `max_res` crew does NOT deliver `max_res` bodies on every
+        single day -- days off reduce same-day availability. Sizing the pool to
+        guarantee daily coverage would need max_res * (cycle_length / days_on),
+        which is a policy-design question (what does "R10" promise: 10 carved
+        out, or 10 available daily?) that has not been settled with Crew
+        Planning. Until it is, "R10" means ten crew carved out, matching both
+        the policy_id convention and roster_loader. See [[ask-before-changing-design]].
         """
-        Returns the maximum number of daily reserves required.
-        For Air Transat, a reserve line covers the whole month (with rotation).
-        Since the policy defines daily targets (e.g. dow 1-5: 10, dow 6-7: 12),
-        the total headcount needed to cover the peak day is just the max daily target.
-        (Or perhaps the config just implies R is the maximum of SC+LC).
-        """
-        max_res = 0
-        for r in self.stage1.reserves:
-            if base and r.base != base: continue
-            if fleet and r.fleet != fleet: continue
-            if position and r.position != position: continue
-            daily = r.short_call + r.long_call
-            if daily > max_res:
-                max_res = daily
-        # Since reserve is an on/off rotation (e.g. 18 days on, 12 days off), 
-        # to cover max_res EVERY day, we'd need max_res * (30/18) headcount.
-        # But for slice 1b, we'll assume the policy implies we carve out exactly max_res headcount?
-        # Or wait, if we carve out exactly max_res headcount, they can't provide max_res coverage every day due to days off.
-        # The spec says `R10` -> we carve out R reserves. Let's just return max_res for now.
-        # But wait, looking at the policy ID, if it's "R10", max_res for weekdays is 10, weekends 12.
-        # If we return max_res, we'd return 12. Let's just return max_res.
-        # Actually, let's just return max(r.short_call + r.long_call).
-        return max_res
+        return max(
+            (
+                r.short_call + r.long_call
+                for r in self.stage1.reserves
+                if (base is None or r.base == base)
+                and (fleet is None or r.fleet == fleet)
+                and (position is None or r.position == position)
+            ),
+            default=0,
+        )
 
 def load_policy(path: str | Path) -> Policy:
     """Load and validate a policy from a YAML file."""

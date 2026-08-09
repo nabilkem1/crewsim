@@ -1,0 +1,57 @@
+# crewsim CI
+#
+# S1a-11's acceptance criterion says the V7 reproducibility gate "runs in CI on
+# every push". Until this file existed there was no CI of any kind in the tree,
+# so that claim was simply false -- and the two quality gates pyproject.toml
+# already declares (ruff, and mypy --strict on crewsim.engine.*) were unmet and
+# unenforced, which is how they drifted to 113 and 17 errors respectively.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref; the simulation suite
+  # is ~4 minutes and there is no value in finishing a superseded one.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        # Matches requires-python = ">=3.11" and [tool.mypy] python_version.
+        run: uv python install 3.11
+
+      - name: Sync dependencies
+        # --frozen: fail if uv.lock is out of date with pyproject.toml rather
+        # than silently resolving something different from what runs locally.
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        # Rule selection is pinned explicitly in pyproject.toml so a ruff
+        # upgrade cannot silently change what this step enforces.
+        run: uv run ruff check src tests
+
+      - name: Type-check the engine (mypy --strict)
+        # Strict on crewsim.engine.* only, per pyproject and spec Sec4.3: that is
+        # where a silent type error becomes a wrong dollar figure.
+        run: uv run mypy src/crewsim/engine
+
+      - name: Tests
+        # Includes gate V7 (S1a-11), which runs real scenarios sequentially and
+        # then under joblib and compares real ledger hashes -- the
+        # multi-process configuration is the one v2 failed, so running it
+        # single-process here would defeat the point.
+        run: uv run pytest -q

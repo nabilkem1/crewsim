@@ -19,7 +19,7 @@ import re
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 # The one bootstrap literal in the codebase. See the module docstring.
 _CONFIG_RELPATH = "configs/base.yaml"
@@ -116,13 +116,14 @@ class DemandConfig(_Model):
     
     # Hours before departure to hold an open item before cancelling.
     # e.g., {"short_haul": 2.0, "long_haul": 4.0, "default": 2.0}
-    uncovered_deadline_hours: dict[str, float] | float = 0.0
+    uncovered_deadline_hours: dict[str, float] | float
 
 
 class SensitivityConfig(_Model):
     roster_size: list[int]
     terminal_penalty: list[float]
     lambda_risk_dial: list[float]
+    instability_threshold: int
 
 
 class QualityGateThresholds(_Model):
@@ -143,6 +144,7 @@ class CalibrationConfig(_Model):
     delay_gmm_random_state: int
     regime_quantiles: RegimeQuantiles
     overdispersion_threshold: float
+    sick_call_min_duration_days: float
 
 
 class DraftReconstructionConfig(_Model):
@@ -165,6 +167,20 @@ class CascadeReconstructionConfig(_Model):
     cascade_reason_codes: list[str]
     confidence_level: float
 
+class LegalityConfig(_Model):
+    max_duty_hours: float
+    min_rest_hours_home: float
+    min_rest_hours_away: float
+    short_call_notice_hours: float
+    long_call_notice_hours: float
+    rolling_7d_duty_limit_hours: float
+    rolling_7d_flight_limit_hours: float
+    rolling_28d_duty_limit_hours: float
+
+
+class CascadeConfig(_Model):
+    visibility_lag_hours: float
+
 
 class BaseConfig(_Model):
     paths: PathsConfig
@@ -175,6 +191,8 @@ class BaseConfig(_Model):
     calibration: CalibrationConfig
     draft_reconstruction: DraftReconstructionConfig
     cascade_reconstruction: CascadeReconstructionConfig
+    legality: LegalityConfig | None = None
+    cascade: CascadeConfig | None = None
     mode: str
     costs_file: str
     windows: WindowsConfig | None = None
@@ -209,6 +227,13 @@ class DisruptionCosts(_Model):
     cancellation: float
     delay_per_minute: float
     terminal_penalty_multiple: float
+    
+    @field_validator("terminal_penalty_multiple")
+    @classmethod
+    def check_terminal_penalty(cls, v):
+        if v <= 1.0:
+            raise ValueError(f"terminal_penalty_multiple must strictly exceed 1.0, got {v}")
+        return v
 
 
 class APPRCompensation(_Model):

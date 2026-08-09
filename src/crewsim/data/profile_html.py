@@ -516,7 +516,7 @@ def render(profiles: dict[str, profile.WindowProfile], overdispersion_threshold:
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M UTC")
     sections = "".join(
         f'<div class="section"><h2>{title}</h2>{div}{narrative}</div>'
-        for (title, _fig, narrative), div in zip(figures, chart_divs)
+        for (title, _fig, narrative), div in zip(figures, chart_divs, strict=False)
     )
 
     return f"""<!doctype html>

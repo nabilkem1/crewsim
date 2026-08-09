@@ -1,6 +1,7 @@
-from enum import Enum
-from dataclasses import dataclass, field
 import bisect
+from dataclasses import dataclass, field
+from enum import Enum
+
 
 class BlockType(Enum):
     PAIRING = "PAIRING"
@@ -20,6 +21,7 @@ class Block:
     btype: BlockType = field(compare=False)
     pairing_id: str | None = field(default=None, compare=False)
     reserve_call_type: str | None = field(default=None, compare=False)
+    flight_mins: float = field(default=0.0, compare=False)
 
 @dataclass
 class DutyPeriod:
@@ -47,6 +49,13 @@ class OpenTimeItem:
     deadline: float       # cancel if not covered by this time
     origin: str           # "SICK_CALL" | "CASCADE" | "DELAY"
     root_event_uid: int   # for cost attribution across cascade levels
+    flight_mins: float = 0.0
+
+@dataclass
+class StateDelta:
+    crew_id: str
+    added_blocks: list[Block] = field(default_factory=list)
+    removed_blocks: list[Block] = field(default_factory=list)
 
 @dataclass
 class CrewMember:
@@ -56,6 +65,12 @@ class CrewMember:
     position: str
     seniority: int
     calendar: list[Block] = field(default_factory=list)
+    # Set by roster_loader.load_rosters when it carves the reserve pool. A
+    # real field, not an attribute stuck on at runtime: as a dynamic attr it
+    # was invisible to mypy AND silently dropped by dataclasses.replace
+    # (which is why des.py deep-copies instead), so the split between line
+    # holders and reserves could vanish in a refactor with nothing failing.
+    _is_reserve: bool = False
 
     def blocks_in(self, start: float, end: float) -> list[Block]:
         """Return all blocks that overlap the interval [start, end]."""
@@ -82,3 +97,31 @@ class CrewMember:
                 break
                 
         return result
+
+    def get_rolling_counters(self, end_time: float, days: int) -> tuple[float, float]:
+        """
+        Calculate (duty_mins, flight_mins) in the rolling `days` prior to `end_time`.
+        Accounts for partial overlap of blocks that cross the window boundaries.
+        """
+        window_start = end_time - (days * 24 * 60.0)
+        duty_mins = 0.0
+        flight_mins = 0.0
+        
+        # DUTY_BLOCKS as defined in legality.py
+        duty_btypes = {
+            BlockType.PAIRING, BlockType.RESERVE, BlockType.DRAFTED_DUTY, 
+            BlockType.DEADHEAD, BlockType.SIMULATOR, BlockType.TRAINING
+        }
+        
+        for b in self.blocks_in(window_start, end_time):
+            if b.btype in duty_btypes:
+                overlap_start = max(b.start, window_start)
+                overlap_end = min(b.end, end_time)
+                overlap_mins = max(0.0, overlap_end - overlap_start)
+                duty_mins += overlap_mins
+                
+                if b.btype in {BlockType.PAIRING, BlockType.DRAFTED_DUTY} and b.end > b.start:
+                    ratio = overlap_mins / (b.end - b.start)
+                    flight_mins += (b.flight_mins or 0.0) * ratio
+                    
+        return duty_mins, flight_mins

@@ -83,12 +83,22 @@ def cascade_rate(cfg: config.BaseConfig, cascades: pl.DataFrame, draft_recall: d
     }
 
 
-def cascade_target(cfg: config.BaseConfig) -> dict[str, Any]:
+def cascade_target(cfg: config.BaseConfig, window_name: str | None = None) -> dict[str, Any]:
     """Convenience entry point: reconstruct S0-03's drafts, then this story's cascades.
 
     Loads D6 once and shares it with both reconstructions.
     """
     d6 = loaders.load_dataset(cfg, "d6_schedule_changes")
+    
+    if window_name:
+        import datetime
+        window_bounds = getattr(cfg.windows, window_name, None)
+        if window_bounds is None:
+            raise ValueError(f"Unknown window: {window_name}")
+        start_ts = datetime.datetime.combine(window_bounds.start, datetime.time.min).timestamp()
+        end_ts = datetime.datetime.combine(window_bounds.end, datetime.time.max).timestamp()
+        d6 = d6.filter((pl.col("change_ts") >= start_ts) & (pl.col("change_ts") <= end_ts))
+        
     reconstructed = drafts.reconstruct_drafts(cfg, d6=d6)
     recall = drafts.score_recall(cfg, reconstructed)
     cascades = reconstruct_cascades(cfg, reconstructed, d6=d6)

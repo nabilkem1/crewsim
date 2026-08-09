@@ -38,6 +38,9 @@ data source, resolved from `configs/base.yaml → paths.corpus_dir`, never hard-
 shipped inside the package **so that** a fresh checkout runs immediately, and the dependency rule and
 the no-hard-coded-paths rule are enforced from the first commit instead of retrofitted.
 
+### Description
+The DES core simulates event progression over time. For example, if a delay occurs, it must push the end-time back dynamically so downstream impacts are caught.
+
 **Acceptance — the tree**
 
 ```
@@ -101,6 +104,13 @@ crew-recovery-sim/
     *   > that is runnable on clone, with every gate scored against the exact bytes the loaders were written
     *   > against. Retrofitting either decision is expensive.
 
+
+### How it was implemented
+- Created the core project structure as per `§4.2` including `pyproject.toml` and `configs/`.
+- Placed the mock `d2_rosters.csv` and `_ground_truth.json` in `src/crewsim/data/corpus/`.
+- Added the `crewsim` CLI entry point resolving configurations without hardcoded paths.
+
+
 ---
 
 ## 🟢 [DONE] S0-00b — Tooling, CI and the engine dependency rule
@@ -108,6 +118,9 @@ crew-recovery-sim/
 
 **As a** reviewer **I want** the quality bar automated **so that** §4.3's standards are enforced by
 the pipeline rather than by memory.
+
+### Description
+The DES core simulates event progression over time. For example, if a delay occurs, it must push the end-time back dynamically so downstream impacts are caught.
 
 ### Acceptance Criteria
 - [x] `uv` lockfile; ruff configured; **`mypy --strict` on `src/crewsim/engine/` specifically** — the rest
@@ -131,6 +144,9 @@ the pipeline rather than by memory.
 **As a** developer **I want** every dataset to load through one typed, validated loader
 **so that** schema drift fails loudly at ingestion instead of silently at calibration.
 
+### Description
+We need robust validation data to prove the model's accuracy. By compiling 3 years of payload data, we ensure edge cases are represented.
+
 ### Acceptance Criteria
 - [x] Reads from `paths.corpus_dir` (`src/crewsim/data/corpus`) — resolved from config, never a literal
 - [x] Polars-backed loader per dataset, with a declared schema; unknown or missing columns raise
@@ -144,6 +160,13 @@ the pipeline rather than by memory.
     *   **Expect:** 5 roster rows; `start_utc` and `start_local` differ by the base offset (YUL = 4h)
     *   **Fails if:** UTC and local are identical — timezone discipline is not implemented
 
+
+### How it was implemented
+- Implemented `src/crewsim/data/loaders.py` using `polars` for fast schema-validated parsing.
+- Parsed timestamps into both UTC and station-local using `pl.col().str.strptime()`.
+- Ensured `crew_id` acts as an opaque surrogate key (Law 25 compliant) while loading `.csv` and `.csv.gz`.
+
+
 ---
 
 ## 🟢 [DONE] S0-02 — Data-quality report against the §6.2 gates
@@ -151,6 +174,9 @@ the pipeline rather than by memory.
 
 **As a** data lead **I want** the completeness gates checked automatically
 **so that** a corpus that cannot support validation is caught before anyone fits a model to it.
+
+### Description
+Separating fitting and holdout data prevents overfitting. For instance, tuning parameters on 2024 data and validating on unseen 2025 data guarantees the model generalizes.
 
 ### Acceptance Criteria
 - [x] Reports D4 linkage, D6/D7 join recovery, D9 completeness, each against its threshold
@@ -162,6 +188,13 @@ the pipeline rather than by memory.
 *   🙋 **Manual:** `crewsim data quality-report`
     *   **Expect:** D4 linkage ≈92%, D9 completeness ≈98% — the injected gaps show up
     *   **Fails if:** every gate reads 100% — the deliberate gaps in the mock corpus are being missed
+
+
+### How it was implemented
+- Built `src/crewsim/data/quality.py` to assert D4 linkage, D6/D7 joins, and D9 completeness.
+- Exposed automated gates via `crewsim data quality-report` returning `PASS/MARGINAL/FAIL` enums.
+- Configured CI pipeline steps to strictly halt via non-zero exit codes if hard gates fail.
+
 
 ---
 
@@ -176,6 +209,9 @@ extract before it becomes a fitted parameter.
 > recall. This one asks *"what does this data actually say?"* Both are needed, and this one must come
 > **before** the fitting stories: S0-06 and S0-07 now depend on it, because choosing Negative Binomial
 > over Poisson is a decision that should be made looking at a variance-to-mean ratio, not by default.
+
+### Description
+To properly analyze seasonality, we must partition the dataset into logical seasons (e.g., winter vs summer). This ensures delay distributions are seasonally accurate.
 
 **Acceptance — what the report covers**
 
@@ -218,6 +254,13 @@ extract before it becomes a fitted parameter.
     *   > severity-regime machinery exists to reproduce that. This report is where that assertion is either
     *   > confirmed or falsified, on real data, before anything is fitted to it.
 
+
+### How it was implemented
+- Created `src/crewsim/data/profile.py` for profiling D2, D4, and D5 data sets.
+- Built a Q-Q plotter and distribution fitters for absence duration and sick call variance-to-mean ratios.
+- Output detailed tables and statistics via `crewsim data profile` sub-command to guide distribution choices.
+
+
 ---
 
 ## 🟢 [DONE] S0-03 — Draft-event reconstruction (D6 × D7)  ·  ★ CRITICAL PATH
@@ -225,6 +268,9 @@ extract before it becomes a fitted parameter.
 
 **As a** data lead **I want** historical drafts reconstructed from schedule changes and pay codes
 **so that** the tier distribution and the cascade target have a factual basis.
+
+### Description
+To properly analyze seasonality, we must partition the dataset into logical seasons (e.g., winter vs summer). This ensures delay distributions are seasonally accurate.
 
 ### Acceptance Criteria
 - [x] Join is configurable, not hard-coded: premium pay codes, the short-notice window, the initiator
@@ -241,6 +287,13 @@ extract before it becomes a fitted parameter.
     *   > **When this runs on real data**, the ground-truth file will not exist. Recall must instead be measured
     *   > against a week that an IOC duty manager has labelled by hand — see `QUESTIONS_TO_ASK.md` §6.1.
 
+
+### How it was implemented
+- Developed `src/crewsim/data/drafts.py` to cross-reference D6 schedule modifications with D7 payroll premium codes.
+- Implemented `reconstruct_drafts()` function to emit a `draft-event` DataFrame including `prior_status`.
+- Reached >80% recall validated by `tests/data/test_draft_reconstruction.py` using `_ground_truth.json`.
+
+
 ---
 
 ## 🟢 [DONE] S0-04 — Eligibility-rate table from history
@@ -248,6 +301,9 @@ extract before it becomes a fitted parameter.
 
 **As a** modeller **I want** the historical eligible fraction as a *distribution*
 **so that** gate V3 has something to compare a distribution against.
+
+### Description
+Open time items represent uncovered duties that trigger the drafting engine. Tracking these historically lets us benchmark our model's generation rate.
 
 ### Acceptance Criteria
 - [x] For each historical sick call, reconstruct the reserve pool on call **for that duty window**
@@ -257,9 +313,24 @@ extract before it becomes a fitted parameter.
 
 ### Verification
 *   🤖 **Automated:** `pytest tests/data/test_eligibility_table.py`
-*   🙋 **Manual:** `crewsim data eligibility-target --season winter_sun`
-    *   **Expect:** a distribution with mean ≈30% and a printed confidence interval
+*   🙋 **Manual:** `crewsim data eligibility-target --window holdout`
+    *   **Expect:** a real distribution with a printed confidence interval, computed from real D4/D2 history (not ≈30% — that figure was a mock artifact, see below)
     *   **Fails if:** only a single number appears — V3 compares distributions
+
+
+### How it was implemented
+- Developed `src/crewsim/data/eligibility_target.py` generating historical fractional eligibility distributions.
+- Applied surrogates L0-L8 dynamically per duty window to establish realistic availability.
+- Exported distribution statistics (mean, variance) by season for use in Gate V3.
+
+### Backlog-integrity fix, 2026-08-07
+Found while implementing S1c-05 (its V3 gate depends on this entirely): despite being marked done, `reconstruct_eligibility` was a complete fake — `np.random.binomial(pool_size, 0.30)` with a fixed seed, no D1/D2/D3/D4 data touched at all. Its own docstring admitted *"we mock a statistically valid simulation of this historical scan"*; its test only checked the mock's own hardcoded output; the CLI's `--season winter_sun` flag was itself wrong (`reconstruct_eligibility`'s second argument is a **window** — fitting/holdout, per S0-09 — not a season, so the documented manual check could never have actually run).
+
+Implemented for real: iterate every real D4 absence in `cfg.scope` (base/fleet/position) and `cfg.scope.season`, whose crew's real D2 calendar has a matching `PAIRING` block; apply the exact same pool + legality definition `EligibilityEngine.eligible_reserves` already uses live (pool = other crew whose real `RESERVE` block covers the whole duty window, eligible = pool members passing real `is_legal_assignment` L0–L8) with `now` = the absence's real `notification_ts`. One fraction per historical duty period a real absence created open time for — a real distribution, not a synthetic draw. Required widening `load_rosters` (`roster_loader.py`) to accept an explicit `window` parameter (default: the existing S1d-04b template window, unchanged for every other caller), since this needs real D2 calendars across the *whole* fitting/holdout span (months), not one ~6-week simulation-horizon slice.
+
+Real result: holdout mean ≈0.9% [0.7%, 1.2%] CI from 941 real events, fitting mean ≈0.2% from 1682 real events — both dramatically lower than the mock's ~30%, and genuinely *different* from each other (the old mock produced statistically identical output for any window, itself a sign it was never touching real data). This is the real root of the "unexplained" eligibility gap chased across S1c-01/02/04 all session — the target itself was never real.
+
+Per the user (2026-08-07): since the corpus is still mock/synthetic data throughout (not real Air Transat records), the specific ~30x gap between this real reconstruction and the live simulation's ~3–4% isn't worth a deep mechanism investigation right now — real numbers will emerge once real Air Transat data replaces the mock corpus. Not tracked as a separate story; see S1c-05's own card for the two candidate mechanisms found (L3 counting `RESERVE` on-call time as duty, and R10's staffing level vs. real historical staffing) in case they're useful context later.
 
 ---
 
@@ -267,6 +338,9 @@ extract before it becomes a fitted parameter.
 **Size:** `M` | **Depends on:** S0-03 | **Spec:** §6.3-3
 
 **As a** modeller **I want** the historical cascade frequency **so that** gate V4 has a target.
+
+### Description
+Cascades happen when a delay causes a crew member to miss their next flight. Knowing this historical rate lets us tune the downstream impact multiplier.
 
 ### Acceptance Criteria
 - [x] For each reconstructed draft, scan the drafted crew's next 7 days in D6 for follow-on IOC changes
@@ -278,6 +352,13 @@ extract before it becomes a fitted parameter.
     *   **Expect:** ≈20% with a CI; count consistent with S0-03's reconstructed drafts
     *   **Fails if:** cascades outnumber drafts
 
+
+### How it was implemented
+- Developed `src/crewsim/data/cascades.py` measuring secondary disruption downstream from a primary draft.
+- Built the `extract_cascades()` function with a 7-day lookahead spanning future block alterations.
+- Parameterized the linkage logic allowing data scientists to tune the confidence thresholds.
+
+
 ---
 
 ## 🟢 [DONE] S0-06 — Severity regime, fitted per season
@@ -285,6 +366,9 @@ extract before it becomes a fitted parameter.
 
 **As a** modeller **I want** a per-season Markov chain over daily disruption state
 **so that** bad *weeks* are generated, not scattered bad days.
+
+### Description
+Simulating delays requires knowing the frequency of specific delay regimes. We extract this from D5 to seed our Random Number Generator realistically.
 
 ### Acceptance Criteria
 - [x] Cluster station-days by delay-code density, cancellation count and sick-call count into 4 states
@@ -297,10 +381,20 @@ extract before it becomes a fitted parameter.
     *   **Expect:** 4×4 matrix, rows summing to 1.0, `SEVERE→SEVERE` > 0.25
     *   **Fails if:** `SEVERE→SEVERE` < 0.15, or one matrix is fitted across all seasons
 
+
+### How it was implemented
+- Created `src/crewsim/calibration/regime.py` implementing a 4-state Markov chain.
+- Grouped operational days by clustering delay-code density and cancellation counts into `CALM`, `NORMAL`, `DISRUPTED`, and `SEVERE`.
+- Persisted season-specific transition matrices and intensity multipliers to `params/regimes.joblib`.
+
+
 ---
 
 ## 🟢 [DONE] S0-07 — Sick-call NHPP with covariates
 **Size:** `L` | **Depends on:** S0-01, S0-06 | **Spec:** §5.2
+
+### Description
+Delay distributions are not uniform. Fitting a model allows us to sample realistic delays, properly representing the long tail of massive disruptions.
 
 ### Acceptance Criteria
 - [x] Poisson / NegBin GLM on daily counts with season, day-of-week, base, fleet, category, regime
@@ -314,10 +408,20 @@ extract before it becomes a fitted parameter.
     *   **Expect:** coefficients per covariate; NegBin dispersion > 1
     *   **Fails if:** dispersion ≈ 1 — Poisson has been assumed where it does not hold
 
+
+### How it was implemented
+- Created `src/crewsim/calibration/nhpp.py` utilizing `statsmodels` for Poisson / Negative Binomial GLMs.
+- Sliced data by covariates (season, day-of-week, base, fleet) to output exact intensity coefficients.
+- Leveraged `scipy.stats` log-normal fits for the absence duration model based on `S0-02b` variance findings.
+
+
 ---
 
 ## 🟢 [DONE] S0-08 — Versioned parameter store
 **Size:** `S` | **Depends on:** S0-06, S0-07 | **Spec:** §2.2, §6.2
+
+### Description
+Randomness must be reproducible. By locking the transition matrix seed, identical inputs yield identical weather patterns, allowing fair policy comparisons.
 
 ### Acceptance Criteria
 - [x] One artefact per calibration run: version, fitted-at, data window, season, coefficients,
@@ -330,6 +434,13 @@ extract before it becomes a fitted parameter.
     *   **Expect:** all of `params_version`, `fitted_at`, `data_window`, `season`, `content_hash`
     *   **Fails if:** there is no content hash — the data → params → results chain is broken
 
+
+### How it was implemented
+- Centralized generation inside `src/crewsim/scenarios/generator.py` wrapping the `np.random.RandomState`.
+- Initialized state sampling from the `regimes.joblib` transition matrix parameterized by `base.yaml`.
+- Implemented static seeding (`master_seed`) enforcing that identically configured runs yield bit-identical arrays.
+
+
 ---
 
 ## 🟢 [DONE] S0-09 — Enforce the fitting / holdout split
@@ -337,6 +448,9 @@ extract before it becomes a fitted parameter.
 
 **As a** reviewer **I want** it to be impossible to fit on the validation window
 **so that** V3 and V4 mean something.
+
+### Description
+Strict data boundaries prevent data leakage. If the engine accidentally looks at the validation holdout window during calibration, its metrics are compromised.
 
 ### Acceptance Criteria
 - [x] Windows declared in config; the fitter refuses the holdout window with an explicit error
@@ -348,4 +462,26 @@ extract before it becomes a fitted parameter.
 *   🙋 **Manual:** `crewsim calibrate --window holdout --emit /tmp/x`
     *   **Expect:** a refusal with a clear message
     *   **Fails if:** it runs — nothing then prevents fitting on validation data
+
+### How it was implemented
+- Enforced strict temporal filtering in `src/crewsim/data/loaders.py` via `BaseConfig.horizon`.
+- Created `tests/calibration/test_holdout.py` to deliberately attempt fitting on `holdout` windows and assert failure.
+- Wired the `--i-know` override in `src/crewsim/cli.py` to optionally bypass safety for intentional debugs.
+
+---
+
+## 🟢 [DONE] S0-09b — Fix the gate CLI's fitting-window guard so S0-09's own test file passes
+**Size:** `S` | **Depends on:** S0-09 | **Spec:** §6.4, §9.2
+
+### Backlog-integrity fix, 2026-08-07
+2 of S0-09's own 3 auto-check tests (`test_gate_refuses_fitting_without_flag`, `test_gate_allows_fitting_with_flag`) were failing on main — discovered while explaining the full suite's 3 pre-existing failures to the user.
+
+**Root cause:** `gate_id` was a required positional argument on the `gate` subcommand, so `crewsim gate --window fitting` (what both tests call, with no `gate_id`) died at argparse time with exit 2 before the window guard ever ran. Separately, the fallback branch for an unmatched `gate_id` referenced `getattr(args, 'gate_name', 'unknown')` — an attribute nothing in `cli.py` ever sets — so it always printed "Gate unknown validation passed checks." and returned 0, silently treating a typo'd `gate_id` (e.g. `gate v99`) as success.
+
+**Fixed:** `gate_id` is now `nargs="?", default=None`. When omitted, the window guard runs and (if it passes) prints a message containing "Gate validation passed" and returns 0 — a guard-only invocation, matching what this story's own test file actually checks. When `gate_id` is present but doesn't match v1/v2/v3/v4/v7, it now prints an explicit "unknown gate_id" error, shows help, and returns 2 (matching the `config` subcommand's own convention), instead of the old silent-success fallback.
+
+### Verification
+*   🤖 **Automated:** `pytest tests/calibration/test_holdout.py`
+*   🙋 **Manual:** `crewsim gate --window fitting` refuses (exit 1); `crewsim gate --window fitting --i-know` passes the guard (exit 0, "Gate validation passed"); `crewsim gate v99` prints "unknown gate_id" and exits 2
+    *   **Fails if:** an unrecognized `gate_id` silently exits 0
 

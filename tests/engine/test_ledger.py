@@ -1,5 +1,6 @@
 from crewsim.engine.ledger import CostLedger
 
+
 def test_ledger_booking():
     ledger = CostLedger()
     

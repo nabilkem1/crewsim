@@ -295,7 +295,7 @@ def load_dataset(cfg: config.BaseConfig, name: str) -> pl.DataFrame:
     source = _read_source(path)
     raw = pl.read_csv(
         io.BytesIO(source) if isinstance(source, bytes) else source,
-        schema_overrides={c: pl.Utf8 for c in columns},
+        schema_overrides=dict.fromkeys(columns, pl.Utf8),
         null_values=[""],
     )
     return _cast(name, raw, schema)

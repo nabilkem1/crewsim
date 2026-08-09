@@ -217,30 +217,32 @@ for fp in files:
     
     for sid, data in enrichments.items():
         if sid in content:
-            # Inject description
-            # We look for "**so that** .*\n"
-            desc_str = f"### Description\n{data['desc']}\n"
+            # Inject description right before ### Acceptance Criteria
+            desc_str = f"### Description\n{data['desc']}\n\n"
             
-            # Find the match for "**so that**..."
-            pattern_so_that = r"(\*\*so that\*\* [^\n]+\n)"
-            match_so_that = re.search(f"(## [^\n]+{sid}.*?){pattern_so_that}", content, flags=re.DOTALL)
-            if match_so_that:
-                # check if it already has "### Description"
-                if "### Description" not in match_so_that.group(0):
-                    content = content.replace(match_so_that.group(1), match_so_that.group(1) + "\n" + desc_str)
+            # Find the story block
+            pattern_story = re.compile(rf"(## [^\n]+{sid}.*?)(### Acceptance Criteria|\*\*Acceptance)", flags=re.DOTALL)
+            match_story = pattern_story.search(content)
+            
+            if match_story and "### Description" not in match_story.group(1):
+                new_block = match_story.group(1) + desc_str + match_story.group(2)
+                content = content.replace(match_story.group(0), new_block)
 
             # Inject Implementation if it exists
-            impl_str = f"\n### How it was implemented\n{data['impl']}\n"
+            impl_str = f"### How it was implemented\n{data['impl']}\n\n"
             if data["impl"]:
-                # We need to insert it after the Verification section for this story
-                # Find the verification section for this specific story
-                pattern_verif = r"(## [^\n]+{sid}.*?### Verification\n.*?)(?=\n## |\Z)"
-                match_verif = re.search(pattern_verif, content, flags=re.DOTALL)
-                if match_verif:
-                    block = match_verif.group(1)
+                # We need to insert it at the end of the story.
+                # Let's find the whole story block from this title to the next ## or EOF, or ---.
+                # Actually, appending it right before the next `---` or `## ` is safe.
+                pattern_end = re.compile(rf"(## [^\n]+{sid}.*?)(?=\n---|\n## |\Z)", flags=re.DOTALL)
+                match_end = pattern_end.search(content)
+                if match_end:
+                    block = match_end.group(1)
                     if "### How it was implemented" not in block:
+                        if not block.endswith("\n\n"):
+                            block += "\n\n" if block.endswith("\n") else "\n\n\n"
                         new_block = block + impl_str
-                        content = content.replace(block, new_block)
+                        content = content.replace(match_end.group(1), new_block)
             
     with open(fp, "w") as f:
         f.write(content)

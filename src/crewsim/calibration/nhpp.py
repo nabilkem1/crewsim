@@ -1,14 +1,16 @@
 """Sick-call NHPP calibration (S0-07)."""
 
-from typing import Any
-import json
 import hashlib
+import json
+from typing import Any
+
 import polars as pl
-import scipy.stats as stats
 import statsmodels.formula.api as smf
+from scipy import stats
 
 from .. import config
 from ..data import loaders
+
 
 def fit_sick_calls(cfg: config.BaseConfig) -> dict[str, Any]:
     """Fits the sick-call intensity GLM and absence duration distribution."""
@@ -75,7 +77,7 @@ def fit_sick_calls(cfg: config.BaseConfig) -> dict[str, Any]:
     )
     durations = d4_dur["duration_days"].to_numpy()
     
-    shape, loc, scale = stats.lognorm.fit(durations, floc=0)
+    shape, _loc, scale = stats.lognorm.fit(durations, floc=0)
     
     out_dict = {
         "coefficients": coefs,

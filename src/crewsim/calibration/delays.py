@@ -1,12 +1,14 @@
-import json
 import hashlib
-import polars as pl
-import numpy as np
+import json
 from typing import Any
+
+import numpy as np
+import polars as pl
 from sklearn.mixture import GaussianMixture
 
 from .. import config
 from ..data import loaders
+
 
 def fit_delays(cfg: config.BaseConfig, season: str) -> dict[str, Any]:
     """Fits the base delay probability and duration mixture normal distribution."""

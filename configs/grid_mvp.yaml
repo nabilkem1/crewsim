@@ -1,0 +1,22 @@
+# S1e-04: grid over the R axis only.
+#
+# reserve_selection and cross-base are NOT swept here. Confirmed inert at
+# MVP scope, not merely unwired:
+#   - reserve_selection: des.py's Simulation._attempt_resolution hardcodes
+#     one dispatch strategy (shortest remaining window, seniority tiebreak)
+#     regardless of a policy's reserve_selection value. The spec names 4
+#     more strategies, each needing a real domain decision before it can be
+#     coded (e.g. which rolling window "lowest hours flown" reads, what
+#     distance metric "best fit" uses) -- tracked as a follow-up, S1e-04b.
+#   - allow_cross_base_reserve: the loaded roster is single-base (YUL only,
+#     confirmed via roster_loader.load_rosters), so there is nothing for a
+#     cross-base filter to restrict regardless of engine wiring.
+# Sweeping either axis today would silently multiply the grid by dimensions
+# that always collapse onto the same real result -- same disposition as
+# roster_size in S1d-05.
+policies:
+  - R4
+  - R6
+  - R8
+  - R10
+  - R14

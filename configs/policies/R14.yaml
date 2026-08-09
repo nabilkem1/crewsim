@@ -1,6 +1,6 @@
 # Candidate policy — spec §5.9.
 policy_id: YUL-A321neoLR-FO-R14
-costs_file: costs_pilots.yaml
+costs_file: costs_pilots.yaml@v0.1.0-placeholder
 
 stage1:                                   # committed weeks ahead, irreversible
   reserves:

@@ -1,5 +1,5 @@
-from typing import List, Optional
-from .state import CrewMember, Block, BlockType
+from .state import Block, BlockType, CrewMember
+
 
 def assign_reserve(crew: CrewMember, duty_start: float, duty_end: float, min_rest: float, pairing_id: str) -> None:
     """
@@ -44,7 +44,6 @@ def end_duty(crew: CrewMember, duty_block: Block) -> None:
     In a full DES, this would fire at duty_block.end.
     For calendar state, it might just update accumulators.
     """
-    pass
 
 def end_rest(crew: CrewMember, rest_block: Block) -> None:
     """
@@ -52,4 +51,3 @@ def end_rest(crew: CrewMember, rest_block: Block) -> None:
     Fires at rest_block.end. Crew becomes assignable again.
     (Since we pre-inserted the restored RESERVE block in assign_reserve, the calendar is already correct).
     """
-    pass

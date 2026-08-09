@@ -1,9 +1,10 @@
 """Severity-regime labelling and Markov fit (S0-06)."""
 
-from typing import Any
-import yaml
-import polars as pl
 from datetime import datetime
+from typing import Any
+
+import polars as pl
+import yaml
 
 from .. import config
 from ..data import loaders
@@ -29,14 +30,12 @@ def fit_regime(cfg: config.BaseConfig, season: str) -> dict[str, Any]:
     max_date = d8.select(pl.col("date").max()).item()
     
     if isinstance(min_date, str):
-        start = datetime.strptime(min_date, "%Y-%m-%d").date()
+        start = datetime.strptime(min_date, "%Y-%m-%d").date()  # noqa: DTZ007 - D-series dates are naive by design; see roster_loader
     else:
         start = min_date
         
-    if isinstance(max_date, str):
-        end = datetime.strptime(max_date, "%Y-%m-%d").date()
-    else:
-        end = max_date
+
+    end = datetime.strptime(max_date, "%Y-%m-%d").date() if isinstance(max_date, str) else max_date  # noqa: DTZ007
         
     all_dates = pl.DataFrame({
         "date_obj": pl.date_range(
@@ -97,8 +96,8 @@ def fit_regime(cfg: config.BaseConfig, season: str) -> dict[str, Any]:
         ((pl.col("next_date_obj") - pl.col("date_obj")).dt.total_days() == 1)
     )
     
-    counts = {s: {s2: 0 for s2 in STATES} for s in STATES}
-    totals = {s: 0 for s in STATES}
+    counts = {s: dict.fromkeys(STATES, 0) for s in STATES}
+    totals = dict.fromkeys(STATES, 0)
     
     for row in df.iter_rows(named=True):
         i = row["state"]
@@ -120,7 +119,8 @@ def fit_regime(cfg: config.BaseConfig, season: str) -> dict[str, Any]:
     for s in STATES:
         pi0[s] = df.filter(pl.col("state") == s).height / total_days if total_days > 0 else 0.0
             
-    import hashlib, json
+    import hashlib
+    import json
     
     out_dict = {
         "season": season,

@@ -155,16 +155,58 @@ stories:
   title: Eligibility-rate table from history
   size: M
   status: done
+  completed: 2026-08-07
   depends_on:
   - S0-01
   spec:
   - 6.3-2
   check:
     auto: pytest tests/data/test_eligibility_table.py
-    manual: crewsim data eligibility-target --season winter_sun
-    expect: 'a DISTRIBUTION, not a point: mean ~30%, with a confidence interval printed'
+    manual: crewsim data eligibility-target --window holdout
+    expect: "a DISTRIBUTION, not a point: real mean and CI computed from real D4/D2\
+      \ history (not ~30% -- that figure was a mock artifact, see note)"
     fails_if: "only a single number is printed \u2014 V3 compares distributions, not\
       \ means"
+  note: "Found while implementing S1c-05 (its V3 gate depends on this):\
+    \ despite being marked done, `reconstruct_eligibility` was a complete\
+    \ fake -- `np.random.binomial(pool_size, 0.30)` with a fixed seed, no\
+    \ D1/D2/D3/D4 data touched at all. Its own docstring admitted \"we mock\
+    \ a statistically valid simulation of this historical scan\"; its test\
+    \ only checked the mock's own hardcoded output (mean near the 0.30 it\
+    \ was built to produce); the CLI's `--season winter_sun` flag was\
+    \ itself wrong (reconstruct_eligibility's second argument is a WINDOW\
+    \ -- fitting/holdout, per S0-09 -- not a season, so the documented\
+    \ manual check could never have actually run).\n\n\
+    Implemented for real: iterate every real D4 absence in cfg.scope\
+    \ (base/fleet/position) and cfg.scope.season, whose crew's real D2\
+    \ calendar has a matching PAIRING block; apply the exact same pool +\
+    \ legality definition EligibilityEngine.eligible_reserves already uses\
+    \ live (pool = other crew whose real RESERVE block covers the whole\
+    \ duty window, eligible = pool members passing real\
+    \ is_legal_assignment L0-L8) with `now` = the absence's real\
+    \ notification_ts. One fraction per historical duty period a real\
+    \ absence created open time for -- a real distribution, not a\
+    \ synthetic draw. Required widening `load_rosters` (roster_loader.py)\
+    \ to accept an explicit `window` parameter (default: the existing\
+    \ S1d-04b template window, unchanged for every other caller), since\
+    \ this needs real D2 calendars across the WHOLE fitting/holdout span\
+    \ (months), not one ~6-week simulation-horizon slice.\n\n\
+    Real result: holdout mean \u22480.9% [0.7%, 1.2%] CI from 941 real\
+    \ events, fitting mean \u22480.2% from 1682 real events -- both\
+    \ dramatically lower than the mock's ~30%, and genuinely DIFFERENT\
+    \ from each other (the old mock produced statistically identical\
+    \ output for any window, itself a sign it was never touching real\
+    \ data). This is the real root of the 'unexplained' eligibility gap\
+    \ chased across S1c-01/02/04 all session -- the target itself was\
+    \ never real. Per the user (2026-08-07): since the corpus is still\
+    \ mock/synthetic data throughout (not real Air Transat records), the\
+    \ specific ~30x gap between this real reconstruction and the live\
+    \ simulation's ~3-4% isn't worth a deep mechanism investigation right\
+    \ now -- real numbers will emerge once real Air Transat data replaces\
+    \ the mock corpus. Not tracked as a separate story; see S1c-05's own\
+    \ note for the two candidate mechanisms found (L3 counting RESERVE\
+    \ on-call time as duty, and R10's staffing level vs. real historical\
+    \ staffing) in case they're useful context later."
 - id: S0-05
   epic: E0 Data foundation
   phase: '0'
@@ -252,12 +294,54 @@ stories:
       for fitting'
     fails_if: "it runs \u2014 nothing then stops someone fitting on the validation\
       \ data"
+- id: S0-09b
+  epic: E0 Data foundation
+  phase: '0'
+  title: "Fix the gate CLI's fitting-window guard so S0-09's own test file passes"
+  size: S
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S0-09
+  spec:
+  - '6.4'
+  - '9.2'
+  note: "Backlog-integrity fix, 2026-08-07: 2 of S0-09's own 3 auto-check tests\
+    \ (test_gate_refuses_fitting_without_flag, test_gate_allows_fitting_with_flag)\
+    \ were failing on main -- discovered while explaining the full suite's 3\
+    \ pre-existing failures to the user. Root cause: `gate_id` was a required\
+    \ positional argument on the `gate` subcommand, so `crewsim gate --window\
+    \ fitting` (what both tests call, with no gate_id) died at argparse time\
+    \ with exit 2 before the window guard at line 711 ever ran. Separately,\
+    \ the fallback branch for an unmatched gate_id referenced `getattr(args,\
+    \ 'gate_name', 'unknown')` -- an attribute nothing in cli.py ever sets --\
+    \ so it always printed \"Gate unknown validation passed checks.\" and\
+    \ returned 0, silently treating a typo'd gate_id (e.g. `gate v99`) as\
+    \ success. Fixed: `gate_id` is now `nargs=\"?\", default=None`. When\
+    \ omitted, the window guard runs and (if it passes) prints a message\
+    \ containing \"Gate validation passed\" and returns 0 -- a guard-only\
+    \ invocation, matching what this story's own test file actually checks.\
+    \ When gate_id is present but doesn't match v1/v2/v3/v4/v7, it now prints\
+    \ an explicit \"unknown gate_id\" error, shows help, and returns 2\
+    \ (matching the `config` subcommand's own convention two blocks above),\
+    \ instead of the old silent-success fallback. Verified: both target tests\
+    \ pass, `gate v1` and `gate v4` (a real matched id) still dispatch\
+    \ correctly, `gate v99` now correctly exits 2, full suite green (220\
+    \ passed, up from 217)."
+  check:
+    auto: pytest tests/calibration/test_holdout.py
+    manual: crewsim gate --window fitting; crewsim gate --window fitting --i-know;
+      crewsim gate v99
+    expect: 'first refuses (exit 1, "Use --i-know"); second passes the guard and
+      prints "Gate validation passed" (exit 0); third prints "unknown gate_id" and
+      exits 2'
+    fails_if: an unrecognized gate_id silently exits 0
 - id: S1a-02
   epic: E1a Foundation
   phase: 1a
   title: Pydantic config loader for base.yaml and costs
   size: M
-  status: todo
+  status: done
   depends_on:
   - S0-00
   spec:
@@ -275,7 +359,7 @@ stories:
   phase: 1a
   title: Event-level cost ledger with root_event_uid
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -292,7 +376,7 @@ stories:
   phase: 1a
   title: Accrue reserve staffing cost per reserve-day
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-03
   spec:
@@ -310,7 +394,7 @@ stories:
   phase: 1a
   title: CRN streams with process-stable seeding
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -329,7 +413,7 @@ stories:
   phase: 1a
   title: "Legality rule L0 \u2014 single assignment"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -346,7 +430,7 @@ stories:
   phase: 1a
   title: Legality rules L1, L2, L6, L7
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-06
   spec:
@@ -357,12 +441,13 @@ stories:
     expect: 'ILLEGAL_L6 with a human-readable reason: A330 rating cannot fly A321neoLR'
     fails_if: "a boolean is returned with no failing rule id \u2014 explainability\
       \ is a requirement"
+  note: "A third instance of this session's backlog-integrity gap (S1d-01..04, S1c-01), this time in phase 1a: the manual check\n    `crewsim explain-legality --crew C0203 --pairing TS156` crashed with\n    `ValueError: L3 check requires legality configuration in cfg` --\n    `is_legal_assignment()` was called with no `cfg`, so L3/L4 (which\n    started requiring one after this story was marked done) raised before\n    ever reaching L6, the rule this story's own check is meant to\n    demonstrate. Found and fixed while implementing S1c-02, which shares\n    the same `explain-legality` dispatch code. Fixed by passing a real\n    `config.load()` cfg through; C0203 -> TS156 now correctly prints\n    `ILLEGAL_L6: Wrong type rating (needs A321neoLR)` as originally\n    specified. No change to L1/L2/L6/L7 themselves or their tests."
 - id: S1a-08
   epic: E1a Foundation
   phase: 1a
   title: "Draft selector \u2014 impact tier, then SENIOR first"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-07
   spec:
@@ -379,7 +464,7 @@ stories:
   phase: 1a
   title: Serialisable policy object, hash-pinned to a cost file
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-02
   spec:
@@ -396,7 +481,7 @@ stories:
   phase: 1a
   title: V1 degeneracy tests
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-04
   - S1a-08
@@ -415,7 +500,7 @@ stories:
   phase: 1a
   title: V7 reproducibility under joblib, in CI
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1a-05
   spec:
@@ -427,12 +512,27 @@ stories:
     expect: bit-identical ledgers across 4 worker processes
     fails_if: "identical single-process but different multi-process \u2014 the v2\
       \ failure exactly"
+  note: "Backlog-integrity fix, 2026-08-07 (found while implementing S1e-02,\
+    \ which needed a real V7 status for its gate-status table): the manual\
+    \ check `crewsim gate v7 --jobs 4` crashed immediately with\
+    \ `NameError: name 'streams_seq' is not defined` on every invocation --\
+    \ the CLI's inline copy of this logic referenced `streams_seq`,\
+    \ `master_key`, and `n_scen`, none of which were ever defined anywhere\
+    \ in cli.py. The automated check (tests/gates/test_v7_crn.py) never\
+    \ caught this because it kept its OWN separate copy of the same logic\
+    \ with its own correctly-defined locals -- exactly the\
+    \ test-validates-a-copy-not-the-real-thing pattern found repeatedly\
+    \ elsewhere this session. Fixed by extracting one real, shared\
+    \ implementation (`gates/v7_reproducibility.py::run_v7_gate`), used by\
+    \ both the CLI's `gate v7` dispatch and the test (which now imports it\
+    \ instead of keeping a parallel copy). Verified: `crewsim gate v7\
+    \ --jobs 2` now runs and prints `[PASS]` for real."
 - id: S1a-12
   epic: E1a Foundation
   phase: 1a
   title: "CLI \u2014 run, compare, explain"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1a-09
   spec:
@@ -447,7 +547,7 @@ stories:
   phase: 1b
   title: Load D1/D2 into the Crew State Engine
   size: L
-  status: todo
+  status: done
   depends_on:
   - S1a-12
   - S0-01
@@ -465,7 +565,7 @@ stories:
   phase: 1b
   title: "Headcount conservation \u2014 carve reserves out of the roster"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-01
   spec:
@@ -482,7 +582,7 @@ stories:
   phase: 1b
   title: Reserve lines with rotation and SC/LC split
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-02
   spec:
@@ -501,7 +601,7 @@ stories:
   phase: 1b
   title: Bind sick calls to roster crew, and remove them
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-01
   spec:
@@ -520,7 +620,7 @@ stories:
   phase: 1b
   title: Events E6 DUTY_END and E7 REST_END
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-03
   spec:
@@ -533,12 +633,87 @@ stories:
     expect: RESERVE -> duty -> REST -> RESERVE again; the reserve block is split,
       not deleted
     fails_if: the reserve disappears after one use, or is reusable during rest
+  note: "Found while implementing S1c-03 (both stories share explain-crew's\
+    \ dispatch code): this story's automated check\
+    \ (test_duty_end_and_rest_end_splits_reserve) is genuinely real and\
+    \ passes -- the E6/E7 event logic itself was never in question. But its\
+    \ manual check was never real: `explain-crew` was a hardcoded stub\
+    \ printing fixed RESERVE/DRAFTED_DUTY/REST/RESERVE text regardless of\
+    \ --crew or --scenario. S1c-03 rewired `explain-crew` to real corpus\
+    \ data (load_rosters), which fixes --timeline's use of real calendar\
+    \ data -- but only the STATIC D2/D3 roster, not a specific scenario's\
+    \ post-simulation state. This story's own claim (a RESERVE block split\
+    \ by a drafted duty) needs a crew's calendar AFTER a scenario's\
+    \ DES/drafting events have actually run, which explain-crew still\
+    \ cannot show -- --scenario is accepted but prints a notice that it\
+    \ isn't wired to simulated state. Left open: this story's manual check\
+    \ still cannot be run as specified. Not fixed here -- doing so needs\
+    \ exposing a specific scenario's post-event crew state from des.py,\
+    \ which is a bigger undertaking than S1c-03's own scope (rolling\
+    \ counters only need the static calendar). Tracked as a new follow-up\
+    \ story, S1b-05b, rather than left as a buried note or silently\
+    \ flipping this story's status -- discussed with the user 2026-08-07,\
+    \ who chose to keep this story done (its automated check is real and\
+    \ the E6/E7 logic isn't in question) and track the missing manual-check\
+    \ capability separately."
+- id: S1b-05b
+  epic: E1b Real rosters
+  phase: 1b
+  title: "explain-crew --scenario: expose a crew's post-simulation calendar\
+    \ for a specific scenario"
+  size: M
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1b-05
+  - S1c-03
+  spec:
+  - '5.0.3'
+  - '5.0.4'
+  check:
+    auto: pytest tests/test_cli.py -k explain_crew_scenario
+    manual: crewsim explain-crew --crew P00448 --scenario 0 --policy R10 --timeline
+    expect: "RESERVE → DRAFTED_DUTY → REST → RESERVE, with real split\
+      \ reserve blocks produced by actually running scenario 0's DES/drafting\
+      \ events -- not the static D2/D3 roster"
+    fails_if: "--scenario still only shows the pre-simulation roster, or prints\
+      \ the \"not yet wired to simulated state\" notice S1c-03 added"
+  note: "Split out of S1b-05 2026-08-07: S1b-05's own manual check\
+    \ (`explain-crew --crew R001 --scenario 0 --timeline`, expecting a\
+    \ RESERVE block split by a drafted duty) needs a crew's calendar AFTER\
+    \ a specific scenario's DES/drafting events have run, which requires\
+    \ running (or replaying) that scenario's simulation and extracting one\
+    \ crew's resulting calendar -- des.py does not currently expose this\
+    \ per-crew, per-scenario. S1b-05's own E6/E7 event logic is not in\
+    \ question (test_duty_end_and_rest_end_splits_reserve already covers\
+    \ it for real); this story is purely about giving explain-crew a way\
+    \ to show that logic's effect for a specific scenario, completing the\
+    \ manual check S1b-05 was always meant to have.\n\n\
+    Implemented 2026-08-07: `explain-crew` gained `--policy` (default R10)\
+    \ and `--master-seed` (default master); when `--scenario` is given it\
+    \ now calls the real `des.run_scenario` (same function\
+    \ `explain-recovery` already uses) and reads the crew's calendar from\
+    \ the returned `Simulation.roster + Simulation.reserves`, instead of\
+    \ the static `load_rosters()` view. The S1c-03-added \"not yet wired to\
+    \ simulated state\" notice is gone -- replaced by a `source_desc` label\
+    \ (\"scenario N, policy P\" vs \"static template-window roster\") printed\
+    \ in the timeline header so it's always clear which state is shown.\
+    \ Verified against a real corpus crew, not a synthetic fixture: P00448\
+    \ is a real reserve whose static D2 calendar has one unbroken RESERVE\
+    \ (SC) block [t=1680->10320]; found via `explain-recovery --scenario 0\
+    \ --policy R10 --trace` that it's drafted at t=2484 in that scenario --\
+    \ `explain-crew --crew P00448 --scenario 0 --policy R10 --timeline` now\
+    \ shows that same block genuinely split into RESERVE(SC) ->\
+    \ DRAFTED_DUTY -> REST -> RESERVE(SC), matching S1b-05's own\
+    \ acceptance criterion exactly, while the static (no --scenario) view\
+    \ of the same crew is unchanged. An unknown crew id under --scenario\
+    \ correctly errors (exit 1), same as the static path."
 - id: S1b-06
   epic: E1b Real rosters
   phase: 1b
   title: "Event E8 UNCOVERED_DEADLINE \u2014 hold before cancelling"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-05
   spec:
@@ -556,7 +731,7 @@ stories:
   phase: 1b
   title: V2 Erlang-B sanity bound
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1b-06
   spec:
@@ -574,11 +749,60 @@ stories:
   phase: 1c
   title: Eligibility engine in FULL mode with distribution logging
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1b-07
   spec:
   - '5.5'
+  note: "Markdown mirror already claimed done, but stories.yaml (correctly)\
+    \ had this at todo -- this time the OTHER direction of S1d-01..04's\
+    \ backlog-integrity gap: the markdown was premature, not stale. Verified\
+    \ both checks before touching anything, per that same practice.\n\n\
+    Automated check was genuinely broken: `pytest\
+    \ tests/engine/test_eligibility.py::test_full_mode_eligibility` failed\
+    \ with `ValueError: L3 check requires legality configuration in cfg` --\
+    \ the test built `EligibilityEngine(mode=\"FULL\")` with no cfg, which\
+    \ used to be fine before L3/L4/L8 started requiring one (des.py's own\
+    \ production code already passes cfg correctly: `EligibilityEngine(mode=\
+    \ \"FULL\", cfg=cfg)`). This was the session's `test_full_mode_eligibility`\
+    \ failure carried as \"pre-existing, unrelated\" since the very start --\
+    \ turned out to be this story's own broken check the whole time. Fixed\
+    \ by adding a local `_test_cfg()` fixture (same shape and values as\
+    \ test_legality.py's own, which already exists for exactly this reason)\
+    \ and passing it to the constructor -- no production-code change needed\
+    \ for this part; the original test's own assertions (elig=[R001],\
+    \ fraction=0.5) held once cfg was supplied, confirming they were correct\
+    \ all along.\n\n\
+    Manual check (`--report-eligibility`) didn't exist as a CLI flag at all.\
+    \ Wired it into `run`: prints a real 10-bucket histogram (not a mean) of\
+    \ `sim.elig.get_distribution()` flattened across the CRN loop's scenarios\
+    \ -- ran the story's own 200-scenario bar for real (109,449 events,\
+    \ mean=0.038, clearly non-degenerate shape). Also fixed `run --policy` to\
+    \ accept a bare policy name (`R10`), matching `compare`/`gate v3`/`gate\
+    \ v4`'s existing convention -- the story's own manual check\
+    \ (`--policy R10`) had never actually worked, since `run` only ever\
+    \ accepted a full path.\n\n\
+    While verifying the acceptance criteria word-for-word (not just running\
+    \ the checks), found the FIRST criterion wasn't actually met: \"Pool =\
+    \ reserves whose RESERVE block covers the duty window\" -- but\
+    \ eligibility.py's own comment said \"at the moment of the report time\
+    \ (item.start)\", and the code only checked `blocks_in(item.start,\
+    \ item.start)`, a single point, not the interval [item.start, item.end].\
+    \ A reserve whose on-call window ended a minute after report time would\
+    \ have been incorrectly counted as pool-eligible. Fixed: pool membership\
+    \ now requires the RESERVE block's [start, end] to fully contain\
+    \ [item.start, item.end]. Added\
+    \ test_pool_requires_coverage_of_whole_duty_window pinning this exactly\
+    \ (a reserve covering only item.start is excluded; one covering the whole\
+    \ window is included) -- the existing test's assertions were unaffected\
+    \ (both its reserves already covered the full window). This is a real\
+    \ behavior change to des.py's reserve-resolution path, not a test-only\
+    \ fix; full suite re-run confirmed no regressions.\n\n\
+    Brought eligibility.py to mypy --strict + ruff clean while in the file\
+    \ (missing __init__ return type, implicit-Optional rng default,\
+    \ deprecated typing.List) -- it's the module this story owns, and none of\
+    \ those were touched by anyone else this session."
   check:
     auto: pytest tests/engine/test_eligibility.py
     manual: crewsim run --policy R10 --scenarios 200 --report-eligibility
@@ -591,7 +815,7 @@ stories:
   phase: 1c
   title: "Rule L8 \u2014 reserve notification time (SC 2h / LC 12h)"
   size: S
-  status: todo
+  status: done
   depends_on:
   - S1c-01
   - S1b-03
@@ -602,27 +826,112 @@ stories:
     manual: crewsim explain-legality --crew R002 --pairing TS156 --call-at "15:00"
     expect: ILLEGAL_L8 for a long-call reserve given 1 hour of notice
     fails_if: "long-call and short-call behave identically \u2014 L8 is not binding"
+  completed: 2026-08-07
+  note: "check_l8_notice_time() itself was already implemented and its unit\
+    \ test (test_l8_notice_time) already passed -- the gap was entirely in\
+    \ the manual-check CLI path, same fake-stub pattern as S1d-01/02:\n\n\
+    1) `explain-legality` only recognised one hardcoded crew/pairing pair\
+    \ (C0203/TS156, S1a-07's fixture) and crashed on anything else with\
+    \ argparse's own 'unrecognized arguments' for --call-at (the flag\
+    \ didn't exist at all). 2) Even the recognised pair crashed with\
+    \ `ValueError: L3 check requires legality configuration in cfg` --\
+    \ `is_legal_assignment()` was called with no cfg (see S1a-07's own\
+    \ note, fixed alongside this since both share the dispatch code).\n\n\
+    Fixed by: adding --call-at HH:MM (validated, 24h), loading a real\
+    \ config.load() cfg, and adding an R002 fixture (a long-call reserve\
+    \ on-call through the whole TS156 duty window, so every rule but L8 is\
+    \ satisfied -- L0/L2/L3/L4/L5/L6/L7 were hand-verified to pass before\
+    \ writing the fixture, not just observed to pass after the fact).\n\n\
+    --call-at is interpreted as the same calendar day as the duty's report\
+    \ time (not 'N hours before') -- this matches the story's own worked\
+    \ example ('--call-at 15:00' against a 16:00 report = 1h notice) and\
+    \ isn't a new domain/business parameter, so wasn't asked about; the CLI\
+    \ now prints the resolved call/report times and notice duration\
+    \ alongside the verdict so this convention is visible in the output,\
+    \ not just a comment.\n\n\
+    A second, real production bug found while building the R002 fixture:\
+    \ `check_l8_notice_time` determined SC-vs-LC classification by looking\
+    \ up the reserve block covering `item.start` (report time), not `now`\
+    \ (call time) -- contradicting its own docstring ('applied against the\
+    \ call time, not the report time'). Proved with a synthetic two-block\
+    \ calendar (SC block covering the call, LC block covering the report):\
+    \ the old code wrongly required 12h notice (LC) instead of 2h (SC) and\
+    \ returned ILLEGAL_L8 for a reserve that was actually legal. Fixed to\
+    \ look up the block at `now`; added\
+    \ test_l8_classification_uses_call_time_not_report_time as a regression\
+    \ test (existing test_l8_notice_time couldn't distinguish the two\
+    \ behaviours -- both its cases keep now and item.start in the same\
+    \ block, the same vacuous-test shape flagged repeatedly this session).\n\n\
+    Checked this bug's real-world impact before calling it done: grepped\
+    \ D2 for crew with two RESERVE blocks of differing reserve_call_type\
+    \ immediately adjacent (no gap) -- zero such pairs exist in the current\
+    \ corpus (2,644 SC<->LC transitions exist, but every one has a\
+    \ multi-day gap between stints). So the fix is a genuine correctness\
+    \ fix but is provably inert on the current corpus; `explain-recovery\
+    \ --scenario 0 --policy R10 --trace`'s RESERVE_UTILIZATION count was\
+    \ 53 both before and after this change, confirming no behavioural\
+    \ shift on real data.\n\n\
+    mypy --strict: check_l8_notice_time itself only has pre-existing gaps\
+    \ shared by four other functions in legality.py (untyped `cfg=None`\
+    \ parameters, predating this story) -- left as-is, out of scope for a\
+    \ size-S story; not touched or newly introduced by this change."
 - id: S1c-03
   epic: E1c Eligibility
   phase: 1c
   title: "Rules L3/L4 \u2014 rolling 7-day and 28-day limits"
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1c-01
   spec:
   - '5.4'
   check:
     auto: pytest tests/engine/test_legality.py -k "L3 or L4"
-    manual: crewsim explain-crew --crew C0041 --show-counters
+    manual: crewsim explain-crew --crew P00002 --show-counters
     expect: rolling duty and flight hours accumulate and decay over the window
     fails_if: "counters only ever increase \u2014 the rolling window is not rolling"
+  note: "check_l3_rolling_7d, check_l4_rolling_28d, and get_rolling_counters\
+    \ were already correctly implemented, and their unit tests already\
+    \ passed -- same shape as S1c-02: the gap was entirely in the manual-check\
+    \ CLI path. `explain-crew` was a total fake stub (`# The true engine\
+    \ isn't there, so we'll just demonstrate the timeline format`) printing\
+    \ fixed text and fabricated counter numbers (a scripted\
+    \ accumulate-then-decay narrative) regardless of --crew or --scenario --\
+    \ same pattern as S1d-01/02 and S1c-02's explain-legality.\n\n\
+    Fixed by wiring explain-crew to load_rosters() and printing a real\
+    \ crew's real calendar and real get_rolling_counters() output, sampled\
+    \ at the end of every duty block (PAIRING/RESERVE/DRAFTED_DUTY/\
+    \ DEADHEAD/SIMULATOR/TRAINING) so both accumulation and decay come\
+    \ from actual calendar data, not a scripted narrative. The story's\
+    \ own placeholder crew id (C0041) predates the real corpus and doesn't\
+    \ match its P##### scheme (same issue as S1c-02's TS156/C0203/R002) --\
+    \ picked P00002, a real active crew with a >7-day gap between duty\
+    \ blocks, guaranteeing a real, sharp rolling-7d decay rather than a\
+    \ marginal one. Verified: P00002's rolling 7d duty ranges from 7.2h\
+    \ (right after the gap) to 70.4h across its real calendar -- genuine\
+    \ accumulate-and-decay, not just monotonic growth.\n\n\
+    A real gap found and left open, not silently fixed: this same CLI\
+    \ dispatch is also S1b-05's manual check, which needs a crew's\
+    \ calendar AFTER a specific scenario's DES/drafting events (a RESERVE\
+    \ block split by a drafted duty) -- explain-crew only has the static\
+    \ D2/D3 roster (real data, but pre-simulation), so --scenario is now\
+    \ accepted and prints an explicit notice rather than being silently\
+    \ ignored, but S1b-05's manual check still cannot be run as specified.\
+    \ Tracked as a new story, S1b-05b, rather than fixed here or silently\
+    \ noted away -- exposing per-scenario post-event crew state is\
+    \ materially bigger than this story's own scope (L3/L4 only ever\
+    \ needed the static calendar).\n\n\
+    mypy --strict: load_rosters() (roster_loader.py) has pre-existing gaps\
+    \ (implicit-Optional defaults, one untyped dict, one attribute\
+    \ reference) unrelated to this change -- not touched, out of scope."
 - id: S1c-04
   epic: E1c Eligibility
   phase: 1c
   title: "Rule L5 \u2014 one duty-free day per rolling 7"
   size: S
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1c-03
   spec:
@@ -630,14 +939,159 @@ stories:
   check:
     auto: pytest tests/engine/test_legality.py -k L5
     manual: crewsim run --policy R6 --scenarios 100 --assert-invariants
-    expect: no crew member ever works 7 consecutive days
-    fails_if: "any violation \u2014 L5 is not enforced on the drafting path"
+    expect: "no scenario introduces or worsens an L5 violation relative to\
+      \ the pre-simulation baseline (delta, not raw count -- see note)"
+    fails_if: "the drafting/reserve-assignment path introduces or worsens\
+      \ any L5 violation vs. that baseline"
+  note: "check_l5_duty_free_day and its unit tests were already correct in\
+    \ isolation -- the gap was, again, the manual-check CLI path:\
+    \ `run --assert-invariants` only ever checked the V3 eligibility gate,\
+    \ never L5 at all, despite the story's own manual check naming it\
+    \ explicitly.\n\n\
+    Added `find_l5_streak_spans(crew)` (legality.py, plus a\
+    \ LegalityResult-wrapped `find_l5_calendar_violations` for reporting):\
+    \ scans a crew's ENTIRE realized calendar (not one candidate\
+    \ assignment against a sliding window, as check_l5_duty_free_day does\
+    \ per-assignment) for every >144h work streak without a 24h break --\
+    \ this is what `--assert-invariants` now runs, over every crew\
+    \ (roster + reserves) in every scenario.\n\n\
+    First attempt (raw post-sim count) surfaced something bigger: the real\
+    \ STATIC roster (before any simulation) has L5 \"violations\" across\
+    \ 465/1975 active crew (23.5%) -- real multi-day trips whose duty\
+    \ periods are separated by under 24h, so no rolling 7-day window ever\
+    \ contains one full clear day. Verified via spec \u00a75.4 this is NOT a\
+    \ corpus bug: L5 is explicitly a deliberately conservative surrogate\
+    \ (\"surrogate-legal \u21d2 almost always truly legal\", allowed to\
+    \ over-reject vs. the real agreement). Discussed with the user, who\
+    \ chose: (1) a DELTA-based invariant -- compare each scenario's\
+    \ post-sim crew calendars against the pre-simulation baseline, fail\
+    \ only on NEW or WORSENED violations -- over a raw count (which would\
+    \ always fail regardless of engine behavior, permanently unable to\
+    \ distinguish a real regression from baseline noise); (2) track the\
+    \ corpus/rule finding as its own story, S1c-04b, rather than leave it\
+    \ as a buried note.\n\n\
+    Two more real bugs found and fixed while building the delta check,\
+    \ both against real corpus data, not just theoretical:\n\
+    1. `find_l5_streak_spans`'s own first draft appended a span on EVERY\
+    \ merged block still inside an already-over-144h streak, not once per\
+    \ streak -- a single 9-block continuous streak for one real crew\
+    \ (P00360) produced 9 near-duplicate spans (same start, progressively\
+    \ larger end), inflating the corrected corpus-wide baseline count from\
+    \ an initially-reported 2,716 down to the real 713 once fixed (the\
+    \ 465-crew / 23.5% figure was unaffected -- that counted crew, not\
+    \ instances). Fixed to emit exactly one span per maximal streak, only\
+    \ when it actually ends. Regression test:\
+    \ test_find_l5_streak_spans_one_entry_per_streak.\n\
+    2. The delta comparison itself, once span-based, still used exact\
+    \ tuple equality -- and a sick call removing a block from the middle\
+    \ of a baseline-violating streak shrinks its span (an improvement),\
+    \ producing a different tuple that exact matching wrongly flagged as\
+    \ \"new\" (found against real data: crew P00381's baseline span\
+    \ (-254, 11877) became (-254, 10001) post-sim after a sick call\
+    \ removed one block -- a real improvement, wrongly flagged). Fixed\
+    \ with `find_l5_regressions(baseline_spans, post_spans)`: a post-sim\
+    \ streak is only a regression if it is NOT contained within (starts no\
+    \ earlier, ends no later than) some baseline streak for that crew.\
+    \ Extracted as its own testable function (not an inline CLI closure)\
+    \ specifically so the delta logic has unit coverage independent of\
+    \ real corpus data, including a case proving it CAN fail\
+    \ (test_find_l5_regressions).\n\n\
+    A third, real bug found and fixed in check_l5_duty_free_day itself\
+    \ (the per-assignment check, used on the live reserve/draft path via\
+    \ is_legal_assignment): it scanned its full +/-7d padding window for\
+    \ ANY over-length streak and rejected the candidate duty if one\
+    \ existed anywhere in that window -- even a streak the candidate duty\
+    \ was completely unrelated to and well-separated from (>24h gap).\
+    \ Proved with a synthetic case: a candidate duty 4+ days from an old\
+    \ unrelated 150h streak was wrongly rejected, blamed on that streak.\
+    \ Fixed to only reject when the candidate duty actually overlaps the\
+    \ offending streak. Measured impact directly, not assumed: bypassing\
+    \ L5 entirely (diagnostic monkeypatch) made ZERO measurable difference\
+    \ to eligibility (0.0317 with and without), ruling this out as a\
+    \ contributor to the unrelated, already-documented 0.03-vs-0.30 V3 gate\
+    \ gap; and `explain-recovery --scenario 0 --policy R10` before/after\
+    \ this fix produced IDENTICAL output (191 drafts, $5,162,800 total,\
+    \ same category breakdown) -- zero measurable draft-path impact on\
+    \ this reference scenario either. Fixed anyway since it's a real\
+    \ correctness bug on the draft path, in scope for a story literally\
+    \ about L5. Regression test:\
+    \ test_l5_ignores_unrelated_preexisting_streak.\n\n\
+    Final verified state (post all three fixes): drafting/reserve-\
+    \ assignment introduces zero new L5 violations and worsens none.\
+    \ `--assert-invariants` reports PASS on its L5 section for real; its\
+    \ baseline is scoped to the run's own policy/base/fleet/position\
+    \ (R6 in the story's own manual check: 126 streaks across 80 crew --\
+    \ a SUBSET of the 713-streak/465-crew whole-corpus figure discussed\
+    \ above and on S1c-04b's card, not a contradiction of it).\n\n\
+    mypy --strict: find_l5_streak_spans, find_l5_calendar_violations, and\
+    \ find_l5_regressions are all clean; the other 5 pre-existing gaps in\
+    \ legality.py (untyped cfg=None parameters, predating this story) are\
+    \ unchanged, out of scope."
+- id: S1c-04b
+  epic: E1c Eligibility
+  phase: 1c
+  title: "L5 conservative-bias finding: 23.5% of active crew fail the rolling-7d\
+    \ rule in their real static roster"
+  size: S
+  status: blocked
+  blocked_by: "Parked 2026-08-07 at the user's direction: the corpus this\
+    \ finding is measured against is still mock/synthetic (per\
+    \ configs/base.yaml's own generator, not real Air Transat rosters).\
+    \ Investigating whether 23.5% reflects a real day-off-rule mismatch or\
+    \ just this mock generator's own duty-spacing pattern is not answerable\
+    \ until real Air Transat data replaces it -- same reasoning the user\
+    \ gave for not chasing S1c-05's V3 mechanism gap further. Revisit once\
+    \ real D1-D4 data lands; S1c-04 itself is unaffected either way (see\
+    \ note)."
+  depends_on:
+  - S1c-04
+  spec:
+  - '5.4'
+  check:
+    auto: none yet — investigation story
+    manual: "compare the number of L5 \"violating\" crew against real\
+      \ Air Transat crew-rest policy language (a calendar-day day-off\
+      \ definition vs. a strict rolling-24h-window one) to decide whether\
+      \ the 144h/6-day surrogate threshold should be loosened, or whether\
+      \ this rate is simply what a deliberately conservative surrogate is\
+      \ expected to produce"
+    expect: "a documented decision: either the surrogate stays as-is (and\
+      \ this rate is accepted as intentional over-restriction per §5.4's\
+      \ conservative-bias design), or the threshold/definition is revised\
+      \ against real agreement language"
+    fails_if: this remains undecided indefinitely and silently shapes downstream
+      numbers (e.g. reserve/draft eligibility) without anyone having chosen it
+      on purpose
+  note: "Found 2026-08-07 while implementing S1c-04: the real static\
+    \ roster (D2, before any simulation) has 713 L5 \"violations\" (i.e.\
+    \ distinct >144h streaks) across 465/1975 active crew (23.5%) -- real\
+    \ multi-day trips where consecutive duty periods are separated by\
+    \ under 24h, so no rolling 7-day window ever contains one full 24h\
+    \ clear block. (First reported as 2,716 -- that count was inflated by\
+    \ a since-fixed bug in the whole-calendar scanner that emitted one\
+    \ span per merged block still inside an already-detected streak\
+    \ instead of once per streak; the corrected figure is 713. The\
+    \ 465-crew / 23.5% figure was unaffected by that bug, since it counts\
+    \ affected crew, not instances -- see S1c-04's own note for detail.)\
+    \ Confirmed via §5.4 this is not a corpus-generation bug (unlike\
+    \ S1d-04b2's D2/D3 boundary issue) -- L5 is explicitly spec'd with a\
+    \ conservative bias (\"surrogate-legal ⇒ almost always truly legal\"),\
+    \ so some over-rejection relative to the real agreement is expected.\
+    \ What's NOT yet established is whether 23.5% is within the range\
+    \ that design intent anticipated, or is large enough to suggest the\
+    \ 144h/6-day threshold (or the choice to count RESERVE on-call blocks\
+    \ toward the streak, same as PAIRING) doesn't match how Air Transat's\
+    \ actual day-off rule is defined. S1c-04 itself is unaffected --\
+    \ measured directly that drafting/reserve-assignment introduces zero\
+    \ new violations and worsens none, so the engine respects whatever\
+    \ threshold is ultimately decided here."
 - id: S1c-05
   epic: E1c Eligibility
   phase: 1c
   title: "V3 gate \u2014 eligibility rate on the HOLDOUT window"
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1c-04
   - S0-04
@@ -653,17 +1107,96 @@ stories:
       or FAIL stated
     fails_if: it passes only on the fitting window, or inputs were tuned until it
       passed
+  note: "run_v3_gate/print_v3_report and the CLI wiring were already\
+    \ genuinely correct (real simulated distribution, real comparison,\
+    \ real verdict, refuses to reach a planner silently) -- the gap was\
+    \ entirely upstream, in S0-04's reconstruct_eligibility, which this\
+    \ gate depends on entirely for its \"historical band\". See S0-04's\
+    \ own note for the full finding: it was a complete fake\
+    \ (np.random.binomial(pool_size, 0.30), no real data), now replaced\
+    \ with a real historical reconstruction. That fake target is the real\
+    \ root of the \"unexplained\" 0.03-vs-0.30 eligibility gap chased\
+    \ across S1c-01/02/04 all session.\n\n\
+    With the real target in place, V3 genuinely fails, but in the OPPOSITE\
+    \ direction from what the fake target implied: simulated (R10 policy,\
+    \ holdout) is \u22483.9%, real historical is \u22480.9% -- simulated is too HIGH\
+    \ now, not too low. Traced two distinct, real candidate mechanisms\
+    \ while investigating (neither pursued further per the user -- see\
+    \ below): (1) L3 (rolling 7-day duty/flight limit) is the dominant\
+    \ rejection reason in the real historical reconstruction (80% of all\
+    \ legality checks), because RESERVE on-call time counts toward the\
+    \ 60h/7-day duty cap, so real historical reserves' own on-call\
+    \ stretches often already consumed much of their rolling budget; (2)\
+    \ R10 (the specific policy this gate's manual check simulates) stages\
+    \ 10-12 reserve slots/day, while real D2 history shows only 18 unique\
+    \ crew EVER served as reserve across the whole 12-month holdout window\
+    \ -- R10 may simply staff more reserves per day than history did,\
+    \ independent of any legality question.\n\n\
+    Per the user (2026-08-07): ship this as done, don't open a new\
+    \ mechanism-investigation story -- the corpus itself is still mock/\
+    \ synthetic data (not real Air Transat records), so chasing the exact\
+    \ cause of a gap inside mock data isn't worth it now; real numbers\
+    \ (and a real answer to which mechanism drives the gap, if any) will\
+    \ emerge once real Air Transat data replaces the mock corpus. V3\
+    \ correctly reporting FAIL against a now-real historical target is the\
+    \ gate doing its job, per this story's own acceptance criteria\
+    \ (\"if it fails, the report names the mechanism suspected\") -- not a\
+    \ defect in the gate.\n\n\
+    Also implemented, since the story's own manual check explicitly says\
+    \ 'both distributions plotted' (not just numbers): `write_v3_report`\
+    \ renders a self-contained Plotly HTML page (same convention as\
+    \ data/profile_html.py) overlaying the simulated and historical\
+    \ histograms with the CI band and verdict annotated, written to\
+    \ reports_dir and printed by `gate v3`.\n\n\
+    Also fixed along the way: `crewsim data eligibility-target --season\
+    \ winter_sun` (S0-04's own documented manual check) could never have\
+    \ run -- reconstruct_eligibility's second argument is a WINDOW\
+    \ (fitting/holdout), not a season; the CLI flag was renamed to\
+    \ --window to match what the function actually needs (season is\
+    \ already fixed by cfg.scope.season, not a per-call choice).\n\n\
+    mypy --strict: eligibility_target.py and gates/v3_eligibility.py are\
+    \ outside the enforced crewsim.engine.* scope (pyproject.toml), so not\
+    \ policed; roster_loader.py's new `window` parameter is itself clean,\
+    \ the file's other pre-existing gaps (predating this story) are\
+    \ unchanged, out of scope."
 - id: S1d-01
   epic: E1d Cascades
   phase: 1d
   title: Future-pairing cascade from the StateDelta
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1c-05
   spec:
   - '5.7'
   - 5.0.4
+  note: "Backlog-integrity fix, 2026-08-07: stories.yaml had this at status:\
+    \ todo while the markdown mirror claimed done, and the depends_on\
+    \ (S1c-05) is itself still todo -- a real inconsistency (found while\
+    \ auditing the backlog after S1d-04d). Investigated rather than just\
+    \ flipping the flag: the automated check (test_cascade.py -k pairing)\
+    \ is genuinely real -- it exercises compute_draft_delta directly, the\
+    \ same function proven correct across this session's own work (S1d-04c's\
+    \ forced end-to-end cascade test, this session's cascade fixes). But the\
+    \ MANUAL check (`crewsim explain-cascade --first`) was a hardcoded\
+    \ print() block with fake crew ids and fake times -- zero engine state,\
+    \ same pattern as S1a-12's fabricated `compare` output that started the\
+    \ whole S1d-04b..04d investigation chain. Confirmed with the user: wire\
+    \ it to real state now rather than defer. Fixed: explain-cascade --first\
+    \ now builds a small deterministic scenario (same numbers as\
+    \ test_cascade.py's own trusted fixture) and calls the REAL\
+    \ compute_draft_delta/apply_delta, printing what actually happened --\
+    \ verified it moves when cascade.visibility_lag_hours changes (24h -> 2h\
+    \ in configs/base.yaml, output changed accordingly, reverted after).\
+    \ A live corpus scenario was deliberately not used: S1d-04c/S1d-04d\
+    \ found n_cascading_drafts == 0 across 20 seeds at the R10 policy's\
+    \ 148-crew scale, so --scenario N against a real run would make this\
+    \ check flaky-to-vacuous, not more real -- same reasoning explain-draft's\
+    \ existing S1a-08 fixture already uses (a fixed, deterministic case, not\
+    \ a live draw). Whether S1c-05's own todo status is itself accurate is a\
+    \ separate question this fix does not resolve -- flagged, not silently\
+    \ assumed away."
   check:
     auto: pytest tests/engine/test_cascade.py -k pairing
     manual: crewsim explain-cascade --scenario 0 --first
@@ -671,16 +1204,56 @@ stories:
       at the right time
     fails_if: the cascade fires immediately rather than at the future time it belongs
       to
+- id: S1d-01b
+  epic: E1d Cascades
+  phase: 1d
+  title: "Allowlist compute_draft_delta's duplicated L2 rest-hour constants"
+  size: S
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1d-01
+  spec:
+  - '5.7'
+  note: "Backlog-integrity fix, 2026-08-07: test_no_numeric_constant_outside_configs\
+    \ (§4.4) was failing on `src/crewsim/engine/cascade.py` -- `compute_draft_delta`'s\
+    \ mandatory-rest calculation (`rest_hours = 11.0 if crew.base == item.base\
+    \ else 10.0`, plus a `* 60.0` minutes conversion) was never added to\
+    \ ALLOWLIST. Not a new business input: this duplicates legality.py's L2\
+    \ min-rest rule (11h at home base / 10h away), already allowlisted there\
+    \ and, per S1d-04c's own note, deliberately re-derived (not imported) in\
+    \ des.py too, since events.py::assign_reserve takes min_rest as a\
+    \ caller-supplied value. cascade.py needing the same figure independently\
+    \ is the identical, already-accepted pattern -- not reopened here.\
+    \ Allowlisted with a comment pointing at the precedent."
+  check:
+    auto: pytest tests/test_config.py -k allowlist
+    manual: none — allowlist entry only, no behavior change
+    expect: test_no_numeric_constant_outside_configs passes with cascade.py's
+      11.0/10.0/60.0 accounted for
+    fails_if: cascade.py's rest-hour value silently diverges from legality.py's
+      L2 rule without either allowlist comment being updated
 - id: S1d-02
   epic: E1d Cascades
   phase: 1d
   title: Future-reserve cascade (structural pool loss)
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1d-01
   spec:
   - '5.7'
+  note: "Same backlog-integrity fix and same finding as S1d-01 (see its note):\
+    \ automated check real (test_cascade.py -k reserve, exercises\
+    \ compute_draft_delta's RESERVE branch directly), manual check\
+    \ (`crewsim explain-cascade --type reserve_loss`) was a hardcoded stub.\
+    \ Fixed the same way: a deterministic fixture (matching\
+    \ test_cascade.py::test_future_reserve_cascade's own numbers) through the\
+    \ real compute_draft_delta/apply_delta, printing the real removed RESERVE\
+    \ block and confirming zero OpenTimeItems are generated (a reserve loss is\
+    \ a capacity loss, not an uncovered flight -- the real code returns an\
+    \ empty cascades list here, not a print statement asserting it)."
   check:
     auto: pytest tests/engine/test_cascade.py -k reserve
     manual: crewsim explain-cascade --scenario 0 --type reserve_loss
@@ -692,12 +1265,21 @@ stories:
   phase: 1d
   title: "Event E9 \u2014 terminal penalty on residual open items"
   size: S
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1d-01
   spec:
   - 5.0.5
   - '7.3'
+  note: "Backlog-integrity fix, 2026-08-07: stories.yaml had this at status:\
+    \ todo while the markdown mirror claimed done. Unlike S1d-01/S1d-02,\
+    \ verification found both checks already genuinely real -- no code change\
+    \ needed. `crewsim explain-cost --category TERMINAL_PENALTY --summary`\
+    \ calls the real evaluate_terminal_penalties(cfg, costs) with a real\
+    \ OpenTimeItem and prints the computed $37,500 (= cancel_cost 25,000 x\
+    \ terminal_penalty_multiple 1.5 from configs/costs_pilots.yaml), matching\
+    \ the story's own expect exactly. Status flipped to match reality."
   check:
     auto: pytest tests/engine/test_terminal.py
     manual: crewsim explain-cost --category TERMINAL_PENALTY --summary
@@ -709,7 +1291,8 @@ stories:
   phase: 1d
   title: "V4 gate \u2014 cascade rate on the HOLDOUT window"
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1d-02
   - S0-05
@@ -718,34 +1301,495 @@ stories:
   - '9.2'
   - '6.4'
   gate: V4
+  note: "Backlog-integrity fix, 2026-08-07: stories.yaml had this at status:\
+    \ todo while the markdown mirror claimed done. `crewsim gate v4 --window\
+    \ holdout`'s manual check WAS fabricated (hardcoded sim_cascade_rates)\
+    \ until last turn's S1d-04d wired it to a real CRN loop -- as of that\
+    \ fix it now genuinely runs 20 real scenarios and prints a real verdict,\
+    \ so this check now holds. (S1d-04d's own notes already document that\
+    \ the verdict itself is not currently trustworthy -- both gate v4's\
+    \ historical AND simulated sides degenerate to a rate of 0.0, for\
+    \ different, separately-diagnosed reasons -- but the STORY's bar, \"a\
+    \ real simulated cascade rate vs the historical band, verdict stated,\"\
+    \ is met. Data-quality trustworthiness is S0-03/S1d-04d's territory, not\
+    \ re-litigated here.) Status flipped to match reality."
   check:
     auto: pytest tests/gates/test_v4_cascade.py
     manual: crewsim gate v4 --window holdout
     expect: simulated cascade rate vs the historical band, verdict stated
     fails_if: "roster composition was adjusted to make it pass \u2014 that is calibration,\
       \ not validation"
+- id: S1d-04b
+  epic: E1d Cascades
+  phase: 1d
+  title: "Reconcile engine time units and legality call signatures"
+  size: S
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1d-03
+  spec:
+  - '5.3'
+  - '4.3'
+  note: "Discovered 2026-08-07 auditing S1d, then narrowed 2026-08-07 on advisor\
+    \ review: the original S1d-04b bundled bug-fixing with new orchestration\
+    \ (the DES loop), which makes failures unbisectable \u2014 split into this\
+    \ story (make the pieces composable) and S1d-04c (build the loop on top).\
+    \ Three concrete defects found by reading the engine end-to-end, none yet\
+    \ caught by any test because nothing has run these modules together:\
+    \ (1) `roster_loader.py`'s `to_ts()` converts D2 timestamps via `.timestamp()`\
+    \ \u2014 Unix epoch seconds \u2014 but `legality.py`/`cascade.py`/`costs.py` all\
+    \ work in minutes since horizon start (costs.py's own comment: \"Sim time in\
+    \ minutes: day * 24 * 60\"; confirmed against tests/engine/test_cascade.py and\
+    \ test_eligibility.py, whose fixtures use small minutes-scale values, not\
+    \ Unix-epoch-scale ones). (2) `sick_calls.py` mixes in seconds-based constants\
+    \ (86400, 3600) against that same minutes convention. (3)\
+    \ `drafting.py::select_draft_candidate` calls `is_legal_assignment(c, item)`\
+    \ without `cfg`/`now`, but L3/L4/L8 in legality.py now raise ValueError when\
+    \ cfg is None \u2014 eligibility.py was updated to pass cfg/now through,\
+    \ drafting.py never was.\n\n\
+    Unblocked 2026-08-07. The obvious anchor \u2014 scope.bid_period (2027-01) \u2014\
+    \ doesn't work: D2 only covers 2023-08-01 to 2026-07-31, a future bid period\
+    \ by definition isn't in the historical corpus. Confirmed with the user:\
+    \ the anchor is a historical WINDOW, not a literal date. Resolution \u2014\
+    \ (a) select the most recent complete horizon_days-length (42-day) span\
+    \ inside windows.holdout whose calendar months are all within\
+    \ configs/seasons.yaml[scope.season].months (scope.season=winter_sun \u2192\
+    \ [12,1,2,3,4] today); (b) that window IS the full\
+    \ warmup+measurement+cooldown horizon \u2014 no separate real lead-in period;\
+    \ (c) the window's own start becomes sim minute 0. Using holdout data\
+    \ here does not reopen S0-09's fitting/holdout split \u2014 that rule guards\
+    \ statistical calibration (fitting sick-call/delay/regime models) against\
+    \ seeing validation data; this is structural roster input to a production\
+    \ run, not model fitting."
+  check:
+    auto: pytest tests/engine/test_roster_loader.py tests/engine/test_drafting.py
+    manual: crewsim roster summary --base YUL --fleet A321neoLR --position FO
+    expect: "block start/end times are on the same minutes-since-horizon-start\
+      \ scale as every other engine module \u2014 small numbers, not Unix-epoch-scale;\
+      \ the CLI reports which historical window (dates) was selected as the\
+      \ template and why (season match)"
+    fails_if: "a loaded crew member's block times are ~10 orders of magnitude\
+      \ larger than a hand-built test fixture's (Unix seconds vs. minutes), or\
+      \ the selected window's months fall outside scope.season's month list"
+- id: S1d-04b2
+  epic: E1d Cascades
+  phase: 1d
+  title: "Fix mock-corpus generator: D2 PAIRING blocks vs D3 duty-period timing"
+  size: S
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1d-04b
+  spec:
+  - '5.3'
+  - '4.3'
+  note: "Discovered 2026-08-07 implementing S1d-04c: legality.py's L1 (13h max\
+    \ duty) fails for every D2 PAIRING block by construction, because D2 rolls\
+    \ up a whole multi-day trip (48-120h) into one block. Fix: decompose PAIRING\
+    \ into D3's real per-duty-period spans (report_local..release_local, ~4-9h)\
+    \ via a new roster_loader.py::_load_pairing_duty_periods. That surfaced a\
+    \ second, larger problem: replacing D2's block with D3's real timing made\
+    \ 62.4% of crew (368/590) fail L0 (calendar overlap) \u2014 87% of conflicts\
+    \ were the PAIRING's real last release spilling past D2's own end boundary\
+    \ into whatever D2 scheduled next (DAY_OFF/VACATION/TRAINING/RESERVE/\
+    \ SIMULATOR); the rest were consecutive same-pairing duty periods overlapping\
+    \ (an overnight duty's real release landing after the next day's independently-\
+    \ sampled report time). First diagnosed this as rare cross-pairing noise\
+    \ (0.16% of transitions) and shipped a CALENDAR_CONFLICT exclusion bucket to\
+    \ paper over it \u2014 wrong: re-measured directly against the real load_rosters\
+    \ logic and found the true rate was 62.4%, not 0.16%. Reverted that exclusion\
+    \ (L0 raises again) before doing anything else, per standing practice of not\
+    \ letting a wrong diagnosis's fix mask a systemic problem as \"excluded crew\".\
+    \ Presented the corrected finding to the user with three options (D3\
+    \ authoritative / D2 authoritative / regenerate the corpus); user chose to\
+    \ fix the root cause at generation time (tools/generate_mock_corpus.py).\
+    \ Fix: (1) _make_pairing now returns the true last-release datetime, and the\
+    \ D2 PAIRING block's day-span is padded (via math.ceil) so D2 always fully\
+    \ contains D3's real timing, with the roster-generation walk cursor advanced\
+    \ past that padded end rather than the naive day count \u2014 eliminates the\
+    \ 62.4% case entirely, verified (0 conflicts, was 62.4%). (2) each day's\
+    \ report time is floored to (previous overnight duty's real release + the\
+    \ same 0.5h buffer already used elsewhere in this function for release\
+    \ padding, not a new invented constant) when that duty spilled into the\
+    \ current day \u2014 eliminates the residual same-pairing overlap case\
+    \ (was 802/399913 duty-period pairs, 6.95% of crew; now 0). Corpus regenerated\
+    \ with unchanged seed/months (configs/base.yaml defaults); _ground_truth.json\
+    \ updated accordingly since pairing/duty counts shift slightly."
+  check:
+    auto: pytest tests/engine/test_roster_loader.py
+    manual: crewsim roster summary --base YUL --fleet A321 --position FO
+    expect: load_rosters() runs to completion with zero L0 (calendar overlap)
+      violations across the full corpus, no CALENDAR_CONFLICT exclusion needed
+    fails_if: any crew member's calendar has two blocks where the later one
+      starts before the earlier one ends
+- id: S1d-04c
+  epic: E1d Cascades
+  phase: 1d
+  title: "des.py: single-scenario recovery pipeline (reserve \u2192 draft \u2192 cascade \u2192 E8 \u2192 cancel)"
+  size: M
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1d-04b
+  - S1d-04b2
+  spec:
+  - '5.3'
+  - '4.3'
+  note: "Narrowed 2026-08-07 on advisor review from the original 'wire the whole\
+    \ DES loop' story: bundling the recovery pipeline with the CRN multi-scenario\
+    \ loop and the CLI rewiring meant a wrong aggregate number could come from\
+    \ either. Split into this story (one scenario, one policy, a printable\
+    \ ledger) and S1d-04d (the CRN loop + crewsim run/compare/gate v3/v4).\
+    \ crewsim_skeleton.py's IOCSimulation class is the control-flow reference\
+    \ (reserve-first -> draft -> cascade re-enqueue -> cancel) \u2014 real engine/*\
+    \ modules replace its simplified inline legality/cascade/draft-selector/\
+    \ eligibility logic. Confirmed before starting: copy.deepcopy is required\
+    \ per scenario (dataclasses.replace silently drops roster_loader's dynamic\
+    \ _is_reserve attribute); 8/12 reserves in the current window carry both SC\
+    \ and LC blocks so RESERVE_STAFFING must be booked per reserve PER DAY off\
+    \ that day's actual block type, not a per-crew SC/LC classification (which\
+    \ isn't well-defined); the sick-call duration needed by sick_calls.py's\
+    \ duration_days is real calibrated data (output/params/params_v*_winter_sun.json\
+    \ -> sick_call_nhpp.duration_lognorm_shape/scale from S0-07), not invented.\
+    \ E8 (hold-until-deadline, re-attempt as state changes) is IN SCOPE per the\
+    \ user: re-check times are the reserve pool's own future RESERVE-block start\
+    \ times up to the item's deadline \u2014 non-arbitrary, derived from already-loaded\
+    \ calendar data, not a polling interval invented for convenience. Known,\
+    \ deliberately out-of-scope defect surfaced while doing this: sick_calls.py\
+    \ (S1b-04, marked done) breaks a sick crew member's pairings but never marks\
+    \ them unavailable, so they remain fully draftable during their own sick\
+    \ leave -- called as-is, not patched here.\n\n\
+    Closed out 2026-08-07 after S1d-04b2 unblocked it. `des.py`'s `Simulation`\
+    \ class and `run_scenario()` were already fully written; finishing the\
+    \ story meant: (1) `tests/engine/test_des.py` (6 tests -- every item\
+    \ resolves, mixed reserve/draft/cancel outcomes not a degenerate all-cancel\
+    \ pipeline, CRN reproducibility under a fixed master_seed, a different\
+    \ master_seed changes the outcome, cascade items get distinct nonzero uids,\
+    \ trace only populates when trace=True); (2) `crewsim explain-recovery\
+    \ --scenario --policy --master-seed --trace` wired into cli.py, printing\
+    \ the step-by-step trace and ledger totals from a real `run_scenario()`\
+    \ call; (3) mypy --strict clean on des.py -- added scipy-stubs (matching\
+    \ the existing types-PyYAML precedent) since des.py is the first\
+    \ crewsim.engine.* module to import scipy under the strict override,\
+    \ annotated the 3 SimPy generator methods, and narrowed `cfg.cascade`\
+    \ from `CascadeConfig | None` once in __init__ instead of re-asserting it\
+    \ per method; (4) closed the ALLOWLIST/magic-number gap in\
+    \ tests/test_config.py for des.py's genuinely structural constants\
+    \ (1440.0/60.0 time conversions, 16 blake2b digest_size, the 11/10 hour\
+    \ (x60) min-rest figures duplicating legality.py's already-allowlisted L2\
+    \ constants because events.py::assign_reserve takes min_rest as a\
+    \ caller-supplied value, 3/5 draft tiers matching drafting.py's own\
+    \ entries). One constant was NOT allowlisted: the 0.5-day sick-call\
+    \ duration floor was a genuine unasked business parameter (the S0-07\
+    \ lognormal fit's support runs down near 0) -- confirmed with the user,\
+    \ moved to `calibration.sick_call_min_duration_days` in configs/base.yaml\
+    \ rather than hidden in code.\n\n\
+    Advisor caught a vacuous test: the corpus-driven tests never produced\
+    \ n_cascading_drafts > 0 across 20 master_seeds under the real corpus +\
+    \ R10 policy (148-crew roster) -- select_draft_candidate always finds a\
+    \ tier-1 (day-off) candidate before tier-2 (conflicting future pairing) is\
+    \ ever needed, so the cascade branch in _attempt_resolution/_delayed_pipeline\
+    \ was never exercised by those tests, even though\
+    \ test_cascade_items_get_distinct_nonzero_uids's assertion looked\
+    \ meaningful. Not a code defect (compute_draft_delta's cascade logic is\
+    \ independently verified by tests/engine/test_cascade.py) -- a genuine\
+    \ emergent property of this roster size/demand ratio, worth knowing for\
+    \ S1d-04 (V4 cascade gate) too, since it implies cascades may be similarly\
+    \ rare at this scale in that gate's own numbers. Closed the test gap\
+    \ directly: added test_cascade_path_fires_end_to_end, a single-candidate\
+    \ synthetic roster whose only legal draft choice also holds a future\
+    \ pairing inside the drafted duty's mandatory-rest window, forcing the\
+    \ cascade branch through the real Simulation object (not compute_draft_delta\
+    \ in isolation). It caught a real bug in its own first draft (a manually\
+    \ assigned item.uid=1 collided with next_uid()'s first cascade uid because\
+    \ the test hadn't advanced sim._uid the way sick_call_source does) --\
+    \ fixed before landing, which is itself evidence the assertion is not\
+    \ vacuous.\n\n\
+    Known, NOT fixed here: Simulation.sick_call_source generates arrivals\
+    \ across the entire horizon (warmup+measurement+cooldown), not just\
+    \ warmup+measurement -- configs/base.yaml's own cooldown_days comment\
+    \ (\"lets late cascades realise their cost\") reads as cooldown being a\
+    \ drain period for events already in flight, not a window with its own\
+    \ fresh arrivals. Found during S1d-04d while reasoning about\
+    \ measured_window_costs; left as a documented limitation since it changes\
+    \ already-done S1d-04c behavior, not S1d-04d's own scope."
+  check:
+    auto: pytest tests/engine/test_des.py
+    manual: crewsim explain-recovery --scenario 0 --trace
+    expect: "one legible trace: an OpenTimeItem enters, reserve/draft/cascade/\
+      \ hold/cancel resolution is shown step by step with real crew ids and real\
+      \ costs from configs/costs_pilots.yaml, not placeholder numbers"
+    fails_if: "the same OpenTimeItem's outcome is unchanged when configs/costs_pilots.yaml\
+      \ or configs/base.yaml legality limits are edited"
+- id: S1d-04d
+  epic: E1d Cascades
+  phase: 1d
+  title: "CRN scenario loop + crewsim run/compare/gate v3/v4 off their mocks"
+  size: M
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1d-04c
+  spec:
+  - '5.3'
+  - '4.3'
+  note: "The other half of the original S1d-04c: run the S1d-04c pipeline across\
+    \ N CRN-paired scenarios per policy (crn.generate_streams, deep-copying the\
+    \ roster per scenario), aggregate E[cost]/CVaR95, and replace cli.py's\
+    \ mocked `compare` (np.random Gaussians) and gate v3/v4's hardcoded\
+    \ sim_fractions/sim_cascade_rates with real output from this loop. This is\
+    \ what actually makes S1a-12's and S1d-04's manual checks (both marked done)\
+    \ mean something, and is what S1d-05 (V9) needs a real E[C] from.\n\n\
+    Implemented 2026-08-07: des.py gained run_policy_crn (N calls to\
+    \ run_scenario across scenario_id 0..N-1, same master_seed -> paired),\
+    \ measured_window_costs (per-scenario CostLedger.total_cost(min_time=\
+    \ warmup_end), no max_time -- S1a-04's own established convention, cited\
+    \ in tests/engine/test_costs.py, not invented here), and cvar95 (closed-\
+    \ form: mean of the worst 5% of scenario costs). cli.py's `run` (bare\
+    \ path, previously `_todo`), `compare`, `gate v3`, and `gate v4` now call\
+    \ these instead of np.random/hardcoded arrays; gate v3/v4 gained\
+    \ --policy/--scenarios/--master-seed.\n\n\
+    Found and fixed a real bug this story's own testing exposed:\
+    \ scenarios/generator.py's cache key (master_seed + params content_hash)\
+    \ omitted n_scenarios. A cache written for a small n_scenarios request was\
+    \ silently reused by a later, larger request under the same master_seed --\
+    \ the extra scenario_ids then had no rows in the cached parquet, and\
+    \ des.py's _load_daily_sick_calls read that as all-zero sick-call counts\
+    \ with no error (confirmed: 17/20 scenarios silently produced zero drafts).\
+    \ Nothing before this story ever called generate_scenarios with varying\
+    \ n_scenarios under one master_seed, so it never surfaced. Fixed by adding\
+    \ n_scenarios to the cache key in both scenarios/generator.py and its\
+    \ duplicate in des.py::_scenario_cache_path; confirmed crn.generate_streams'\
+    \ own per-scenario streams stay prefix-stable across different n_scenarios\
+    \ (numpy SeedSequence.spawn semantics), so the fix doesn't lose that\
+    \ property -- covered by two regression tests in test_des_crn.py.\
+    \ Also fixed gates/v3_eligibility.py's run_v3_gate returning a bare\
+    \ numpy bool for `pass` (np.True_ is True fails identity comparison) --\
+    \ same one-line bool() wrap run_v4_gate already had; closed 2 of the 7\
+    \ pre-existing test failures. And found tests/test_cli.py::test_cli_compare\
+    \ already called the real CLI with --scenarios 100 (unaware it would\
+    \ become a real ~4-minute simulation once compare was wired) -- reduced to\
+    \ 3 scenarios, keeping the suite fast; the story's own 100-scenario bar is\
+    \ the manual check, not an automated one.\n\n\
+    Advisor caught a second vacuous mock, inside `run --assert-invariants`:\
+    \ sim_fractions there was `np.random.normal(hist[\"mean\"], 0.01, 100)` --\
+    \ a Gaussian centred ON the historical mean by construction, so the\
+    \ pre-flight V3 check it fed could structurally never fail, same shape as\
+    \ S1d-04c's uid-collision-test finding. Fixed: restructured `run` so the\
+    \ CRN loop runs once (`sims`) and both --assert-invariants (real\
+    \ sim_fractions from sims, same construction as gate v3) and the cost\
+    \ aggregation reuse it. Consequence, confirmed by running it: `run\
+    \ --assert-invariants` now correctly returns 1 on every real invocation,\
+    \ since real simulated eligibility (~0.04) never matches the fabricated\
+    \ historical band -- an honest, correct result of wiring real data in,\
+    \ not a new bug, and it will stay this way until slice 1c's real\
+    \ eligibility reconstruction exists.\n\n\
+    Known limitation, not fixed here: BOTH gates' historical sides are\
+    \ unreliable, so neither gate v3 nor gate v4 can currently produce a\
+    \ trustworthy pass/fail verdict even with real simulated numbers.\
+    \ reconstruct_eligibility (V3's historical side,\
+    \ data/eligibility_target.py) is entirely fabricated -- np.random.seed(42)\
+    \ binomial draws, not a real D1/D2/D3/D4 reconstruction; slice 1c\
+    \ (\"Eligibility engine FULL\") is 0/5 done, so this was never built.\
+    \ cascade_target (V4's historical side) IS a real D6xD7 reconstruction,\
+    \ but returns n_drafts=0 for the holdout window (confirmed directly:\
+    \ cascade_target(cfg, 'holdout') -> {'rate': 0.0, 'n_drafts': 0,\
+    \ draft_recall.recall: 0.0}) -- a real, pre-existing S0-03 reconstruction\
+    \ defect, not something this story's scope covers. Running `gate v3`\
+    \ against real simulated data now correctly FAILS (sim ~0.04 vs fake\
+    \ historical band [0.29, 0.31]); `gate v4` trivially \"passes\" only\
+    \ because both sides degenerate to 0.0 -- not because anything was\
+    \ validated. This is the intended outcome of this story (feed the gates\
+    \ real data and let a real mismatch surface), not a regression -- S1d-04\
+    \ and S1a-12 were marked `done` on the strength of the mocks these gates\
+    \ used to read; that basis no longer holds and should be revisited.\n\n\
+    Also confirmed (S1d-04c's own finding, restated here since it directly\
+    \ explains gate v4's number): n_cascading_drafts is 0 across every scenario\
+    \ tried at the R10 policy's 148-crew roster size -- tier-1 (day-off)\
+    \ candidates are never exhausted at this scale, so the draft-cascade path\
+    \ never fires in practice, even though it is proven correct in isolation."
+  check:
+    auto: pytest tests/engine/test_des_crn.py
+    manual: crewsim compare --policies R6 R10 --scenarios 100
+    expect: "paired CRN diff computed from real ledger totals \u2014 the number moves\
+      \ when a cost or legality parameter in configs/base.yaml changes"
+    fails_if: "the output is unchanged when configs/base.yaml costs are edited \u2014\
+      \ that means it is still reading mocked data, not the engine"
+- id: S1d-04e
+  epic: E1d Cascades
+  phase: 1d
+  title: "Remove v4_cascade.py's redundant hardcoded d4_link_marginal fallback"
+  size: S
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1d-04
+  spec:
+  - '6.2'
+  - '9.2'
+  note: "Backlog-integrity fix, 2026-08-07: test_no_numeric_constant_outside_configs\
+    \ (\u00a74.4) was failing on `src/crewsim/gates/v4_cascade.py` --\
+    \ `getattr(cfg.quality_gates, \"d4_link_marginal\", 0.90)` hardcoded a\
+    \ fallback default that shadows a value ALREADY defined in\
+    \ configs/base.yaml:93 (`d4_link_marginal: 0.90`). This wasn't a missing\
+    \ config value needing a fallback -- QualityGateThresholds (config.py)\
+    \ already requires the field, so the getattr's default branch was dead\
+    \ code that also happened to duplicate a magic number. Fixed by reading\
+    \ `cfg.quality_gates.d4_link_marginal` directly, matching the line\
+    \ immediately above it (`d6_d7_join_pass`), which never had this pattern."
+  check:
+    auto: pytest tests/gates/test_v4_cascade.py && pytest tests/test_config.py -k
+      allowlist
+    manual: 'python -c "from crewsim import config; cfg = config.load(); print(cfg.quality_gates.d4_link_marginal)"'
+    expect: "0.9, read from configs/base.yaml, not a hardcoded getattr default"
+    fails_if: v4_cascade.py's marginal threshold silently diverges from
+      configs/base.yaml when the config value is edited
 - id: S1d-05
   epic: E1d Cascades
   phase: 1d
   title: "V9 sensitivity sweep \u2014 terminal penalty, roster_size, lambda"
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
-  - S1d-03
+  - S1d-04d
   spec:
   - '9.2'
+  - '7.4'
   gate: V9
   check:
     auto: pytest tests/gates/test_v9_sensitivity.py
-    manual: crewsim gate v9 --surface
+    manual: crewsim gate v9 --scenarios 20 --surface
     expect: recommended R as a surface over the swept parameters, not a point
     fails_if: R* moves a lot and the report does not say so prominently
+  note: "Unblocked and implemented 2026-08-07. The stated blocker\
+    \ (\"no code defines how lambda_risk_dial blends E[cost] and CVaR95\")\
+    \ turned out to be answered by the spec itself, not something to invent:\
+    \ \u00a77.4 gives the objective verbatim --\
+    \ `stage1_cost(R) + Q.mean() + lam * cvar95` -- and\
+    \ `des.run_policy_crn`/`measured_window_costs`/`cvar95` (S1d-04d) are\
+    \ exactly the real inputs it needs. Confirmed directly (not assumed)\
+    \ that `measured_window_costs` already includes stage-1 reserve\
+    \ staffing cost (RESERVE_STAFFING is booked inside the simulation,\
+    \ des.py:180, and scales with R: $21.7K/scenario at R4 vs $59.4K at\
+    \ R10) -- so the real objective in this codebase is simply\
+    \ `mean_cost + lam * cvar95`, no separate C1(R) term, and adding one\
+    \ would have double-counted.\n\n\
+    Implemented `build_r_star_lookup(cfg, costs, n_scenarios, master_seed,\
+    \ policies, terminal_penalties)` (gates/v9_sensitivity.py): runs the\
+    \ REAL CRN pipeline for each of 5 real candidate reserve policies\
+    \ (R4/R6/R8/R10/R14 -- these already existed as real policy files and\
+    \ match spec \u00a77.4's own worked-example table exactly) x each\
+    \ terminal_penalty value, producing real (mean, CVaR95) pairs. Varying\
+    \ terminal_penalty for real required overriding a frozen pydantic\
+    \ model (`costs.disruption.model_copy(update=...)`, since\
+    \ `DisruptionCosts` is `frozen=True`) -- verified the override actually\
+    \ takes effect, not a silent no-op. `_real_r_recommender(r_lookup)`\
+    \ returns a `mock_r_function`-shaped closure that argmins the real\
+    \ objective over the real simulated candidates for a given\
+    \ (terminal_penalty, lambda) -- `run_v9_gate` keeps its existing\
+    \ `mock_r_function` injection seam unchanged (both pre-existing tests\
+    \ still pass verbatim), and now also accepts `r_lookup` for the real\
+    \ path; calling with neither raises instead of silently falling back to\
+    \ the old `default_mock_r` \"completely hypothetical relationship for\
+    \ demonstration\" formula, which has been deleted.\n\n\
+    Two real findings from actually running this, not assumed: (1)\
+    \ `TERMINAL_PENALTY` never fires across 50 real simulation runs (5\
+    \ policies x 10 scenarios) at this corpus/roster scale -- every open\
+    \ item resolves before the horizon ends, so the terminal_penalty axis\
+    \ is real and correctly wired but currently empirically inert, the\
+    \ same character as the pre-existing roster_size finding below.\n\n\
+    CORRECTED 2026-08-07 (S1e-01): finding (2) above, as originally\
+    \ written, said R* was flat at 4 across every lambda, unlike spec\
+    \ \u00a77.4's own illustrative worked example (which flips 6->10 as lambda\
+    \ goes 0->1). That flatness turned out to be an ARTIFACT of a real bug\
+    \ in `des.measured_window_costs` found and fixed while implementing\
+    \ S1e-01 (its own note has the full detail): the old cost-attribution\
+    \ rule wrongly counted 15-33% of every scenario's cost as cool-down\
+    \ activity that never should have been in-window. Re-ran the identical\
+    \ real 5-R x 20-scenario sweep (`build_r_star_lookup`,\
+    \ `terminal_penalties=[1.5]`) after the fix: R* now genuinely FLIPS from\
+    \ 4 (lambda=0.0) to 10 (lambda>=0.25) -- qualitatively matching spec\
+    \ \u00a77.4's own worked-example pattern (risk-neutral picks low R,\
+    \ risk-averse picks higher R), which the pre-fix numbers did not. The\
+    \ V9 mechanism itself (real R sweep, real terminal_penalty override,\
+    \ real lambda blend) was correct all along; only the upstream cost\
+    \ figure it consumed was wrong. Re-verified, not assumed -- same\
+    \ discipline as S1c-04's 2,716->713 correction.\n\n\
+    roster_size scope, discussed with the user 2026-08-07: this story's own\
+    \ acceptance criterion names three sweep axes (roster_size,\
+    \ terminal_penalty, lambda); only two are real. `cfg.population.roster_size`\
+    \ has exactly one consumer in the entire codebase -- a print statement\
+    \ in `config show` -- confirmed by grep, not inferred. The real roster\
+    \ is always the fixed 112-crew mock corpus regardless of this value, so\
+    \ sweeping it would change nothing (matching this card's own\
+    \ pre-existing \"Known baseline\" finding below, from before headcount\
+    \ conservation). Making it real needs the mock corpus generator to\
+    \ emit multiple population sizes -- materially bigger, out of this\
+    \ story's scope, and not invented here. The CLI now prints an explicit\
+    \ NOTICE saying so on every real `gate v9` run rather than silently\
+    \ reporting a flat, meaningless roster_size axis.\n\n\
+    `gate v9` (CLI) was previously entirely unwired -- `args.gate_id ==\
+    \ \"v9\"` had no dispatch branch at all, so it fell through to the\
+    \ unknown-gate_id error. Added it: builds the real r_lookup via\
+    \ `build_r_star_lookup`, prints the real simulation-count/roster_size\
+    \ notices, then `run_v9_gate`/`print_v9_report`. At the default\
+    \ `--scenarios 20`, `gate v9` runs 5 policies x 4 valid terminal_penalty\
+    \ values x 20 scenarios = 400 real simulations (~7 minutes) -- far past\
+    \ other gates' <=60s manual-check convention, an inherent cost of a\
+    \ real 2-axis sweep, not something to fake down. `--scenarios 3` (used\
+    \ for this story's own local verification) still ran end-to-end and\
+    \ correctly reported [STABLE], R*=4."
+- id: S1d-05b
+  epic: E1d Cascades
+  phase: 1d
+  title: "Fix v9_sensitivity.py's ALLOWLIST gap without touching S1d-05's blocked scope"
+  size: S
+  status: done
+  completed: 2026-08-07
+  depends_on:
+  - S1d-05
+  spec:
+  - '9.2'
+  note: "Backlog-integrity fix, 2026-08-07: test_no_numeric_constant_outside_configs\
+    \ (§4.4) was failing on `src/crewsim/gates/v9_sensitivity.py` (8 offenders).\
+    \ S1d-05 itself is correctly `status: blocked` -- lambda_risk_dial has no\
+    \ real objective-blend consumer, and that is NOT invented here. Split the\
+    \ 8 offenders by what they actually are: (1) `default_mock_r`'s 0.1/1.5/4.0\
+    \ -- its own comment already says \"a completely hypothetical relationship\
+    \ for demonstration,\" only reached when no real mock_r_function is\
+    \ injected (both existing tests inject their own) -- allowlisted, pointing\
+    \ at S1d-05's blocked status. (2) the findings-list truncation (3) and\
+    \ report separator width (55) and middle-sample-row index (2 in\
+    \ `surface[len(surface)//2]`) -- presentation, same category as\
+    \ profile_html.py's styling entries -- allowlisted. (3) The instability\
+    \ threshold (`max(rs) - min(rs) > 2`, appearing twice) is NOT presentation\
+    \ and NOT part of the mock -- it is the gate's actual PASS/FAIL decision\
+    \ boundary (matches this story's own fails_if: \"R* moves a lot\"), live in\
+    \ both currently-passing tests regardless of which R-function is used.\
+    \ That one does not belong on the allowlist: added\
+    \ `sensitivity.instability_threshold: 2` to configs/base.yaml and\
+    \ SensitivityConfig (config.py), read via `cfg.sensitivity.\
+    \ instability_threshold` in both call sites instead of a literal 2."
+  check:
+    auto: pytest tests/gates/test_v9_sensitivity.py && pytest tests/test_config.py
+      -k allowlist
+    manual: none — allowlist entries plus one config migration, no behavior change
+      (both existing tests still pass unmodified in intent, only gained an
+      explicit instability_threshold=2 fixture value matching the prior hardcoded
+      default)
+    expect: test_no_numeric_constant_outside_configs passes; instability threshold
+      is a configs/base.yaml value, not a literal in gates/v9_sensitivity.py
+    fails_if: default_mock_r is implemented for real here — that is S1d-05's own
+      blocked deliverable, not this story's
 - id: S1e-01
   epic: E1e Reporting
   phase: 1e
   title: KPI aggregation over the measurement window
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1d-05
   spec:
@@ -758,12 +1802,57 @@ stories:
       \ \u2014 warm-up excluded"
     fails_if: warm-up rows are included, or cool-down costs are not attributed back
       to the window
+  note: "Implemented 2026-08-07. Found and fixed a significant pre-existing\
+    \ bug in `des.measured_window_costs` (S1d-04d) while building this --\
+    \ squarely in scope, since this story's own acceptance criterion IS the\
+    \ attribution rule ('cool-down costs attributed back when their cause\
+    \ is in-window'). The old implementation (`min_time=warmup_end, no\
+    \ max_time`) treated EVERY cool-down-booked ledger row as in-window,\
+    \ including ones whose root event is a brand-new sick call that itself\
+    \ arrived during cool-down (`_load_daily_sick_calls` generates arrivals\
+    \ across the FULL `horizon_days`, cool-down included -- a known,\
+    \ separate S1d-04c limitation, not fixed here). Measured directly\
+    \ before fixing: 15-33% of the old per-scenario cost figure, across 5\
+    \ real R6 scenarios, was cool-down-originated cost that should never\
+    \ have counted.\n\n\
+    Fixed with a real root_event_uid-based attribution rule\
+    \ (`des.rows_in_measurement_window`, refactored out of\
+    \ `measured_window_costs` so both cost totals and the new KPI counts\
+    \ share one definition of \"in the measurement window\"): a row counts\
+    \ if booked inside the window, OR booked in cool-down with its causal\
+    \ chain's origin (earliest sim_time among all rows sharing its\
+    \ root_event_uid) inside the window. Verified the root_event_uid==0\
+    \ sentinel (background costs with no causal chain at all, e.g.\
+    \ RESERVE_STAFFING) is NOT treated as one shared chain across unrelated\
+    \ rows -- each uses its own booking time. Verified against real data\
+    \ (not assumed) that no chain currently straddles window-origin ->\
+    \ cool-down-booking in this corpus (the \"pull back in\" branch is real\
+    \ per spec but currently empirically unexercised by real data --\
+    \ covered instead by a synthetic regression test,\
+    \ test_measured_window_costs_cooldown_attribution).\n\n\
+    Downstream impact, re-verified directly (S1d-05 is the only consumer of\
+    \ `measured_window_costs` besides `run`/`compare`): the V9 sweep's own\
+    \ finding CHANGED after this fix, and S1d-05's card has been corrected\
+    \ -- see its own note. `explain-eligibility`'s window filtering also\
+    \ needed the same treatment: `EligibilityEngine.get_distribution()`\
+    \ gained optional `min_time`/`max_time` params (backward compatible --\
+    \ no-args call, which V3's gate already depends on, is unchanged).\
+    \ Cascade rate is NOT window-filtered (`sim.n_cascading_drafts`/\
+    \ `n_drafts` are whole-simulation counters with no root_event_uid to\
+    \ attribute back with), matching gate V4's own existing convention.\n\n\
+    Gini's \"arithmetic, not insight\" caveat (spec's glossary and Sec9\
+    \ language) is printed unconditionally alongside every Gini value, not\
+    \ gated behind an invented numeric rarity threshold -- the spec gives\
+    \ no such threshold, and its own language (\"a concentration measure...\
+    \ here it describes premium earnings\") reads as a standing caveat, not\
+    \ a conditional warning."
 - id: S1e-02
   epic: E1e Reporting
   phase: 1e
   title: Self-contained HTML report
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1e-01
   spec:
@@ -776,12 +1865,54 @@ stories:
       the optimum marked
     fails_if: "external assets are needed \u2014 it must be emailable to Crew Planning\
       \ as one file"
+  note: "Implemented 2026-08-07. Scoped to this story's own 3 acceptance\
+    \ criteria, not spec \u00a79.3's full 5-item epic-level obligation (item\
+    \ 1, drill-down links, is explicitly S1e-03's own card, which depends on\
+    \ this one).\n\n\
+    `crewsim report --policies <names> [--scenarios N] [--open]` writes one\
+    \ self-contained HTML file (`output/reports/policy_report.html`,\
+    \ plotly embedded inline once, same convention as\
+    \ gates/v3_eligibility.py::write_v3_report) with: cost distributions per\
+    \ policy, a reserve-level trade-off curve (E[C] and CVaR95 vs R, real\
+    \ argmin marked), a lambda curve (the real objective from spec \u00a77.4,\
+    \ per R, plus the resulting R* -- reusing S1d-05's\
+    \ `_real_r_recommender` on data already simulated for the trade-off\
+    \ curve rather than re-simulating via `build_r_star_lookup`), the\
+    \ reproducibility chain, a gate-status table, and every outstanding\
+    \ `[CONFIRM: owner]` marker found by scanning the RAW text of\
+    \ configs/base.yaml and costs_pilots.yaml (these are YAML comments,\
+    \ invisible to the parsed config object). Verified self-contained by\
+    \ grepping the output for actual `<script src=` / `<link href=` tags\
+    \ (zero) -- not a naive substring search for \"http\", which also\
+    \ matches literal attribution-link strings baked into the bundled\
+    \ plotly.js library itself (unused map-tile copyright text), a false\
+    \ positive gate_v3_holdout.html already has too.\n\n\
+    Real, measured findings surfaced by actually building this: E[cost] is\
+    \ close to flat across R4..R14 (~1-2% spread) at this corpus/policy\
+    \ scale -- CVaR95 is where the real U-shape lives (matches S1d-05's own\
+    \ corrected finding). The report says this explicitly on the page\
+    \ (captioned, not silently marking a meaningless E[cost] optimum) rather\
+    \ than forcing the \"U-shaped curve\" language from the story's own\
+    \ `expect` onto data that doesn't show it for E[cost].\n\n\
+    Gate status is honest, not uniformly green: V1/V2 are rendered as\
+    \ `STUB` (their pre-existing cli.py implementations are hardcoded PASS\
+    \ text / a stubbed mock value, not derived from any real run) --\
+    \ printing them as PASS in a report whose entire premise is spec\
+    \ \u00a79.3's \"no black box\" rule would itself be a black box. V3/V4/V9\
+    \ report real verdicts against a stated representative policy (first\
+    \ of --policies, named explicitly on the page). Found and fixed a real,\
+    \ separate bug while wiring V7 into this table: `gate v7`'s CLI\
+    \ dispatch crashed with `NameError` on every invocation (see S1a-11's\
+    \ own corrected note) -- fixed by extracting a real, shared\
+    \ `gates/v7_reproducibility.py::run_v7_gate`, now used by both the CLI\
+    \ and its own test."
 - id: S1e-03
   epic: E1e Reporting
   phase: 1e
   title: Exemplar-scenario drill-down
   size: M
-  status: todo
+  status: done
+  completed: 2026-08-07
   depends_on:
   - S1e-02
   spec:
@@ -793,12 +1924,59 @@ stories:
     expect: the 5 costliest and 5 most typical scenarios, each an auditable event
       timeline
     fails_if: '''why 6 reserves?'' cannot be answered with a specific simulated Tuesday'
+  note: "Implemented 2026-08-07. `crewsim report` gained `--policy` (single\
+    \ policy, shorthand for `--policies <one>`) and `--drilldown\
+    \ {costliest,typical,both}`, embedding the drill-down section directly\
+    \ into the SAME self-contained HTML file `report` already produces\
+    \ (S1e-02) -- reachable via an in-page anchor link near the top of the\
+    \ page, not a separate file or a buried appendix. `--drilldown`'s value\
+    \ is display-only (which group lists first): both the 5 costliest and\
+    \ 5 most-typical scenarios are always shown, since that's this story's\
+    \ own acceptance bar regardless of which single mode word is passed.\
+    \ \"Typical\" = closest to the MEDIAN cost, not the mean -- cost\
+    \ distributions here are right-skewed (a few very bad months dominate\
+    \ CVaR), so the mean would be pulled toward the tail this drill-down's\
+    \ own \"costliest\" half already covers separately.\n\n\
+    `gates/drilldown.py` (`select_exemplar_scenarios`, `root_chain`,\
+    \ `build_scenario_drilldown`) reuses two REAL, already-existing\
+    \ mechanisms rather than inventing new event-timeline logic:\
+    \ `Simulation.trace` (S1d-04c's own readable per-scenario event log --\
+    \ SICK_CALL -> RESERVE/DRAFT/CANCELLED -> cascade-visible, already\
+    \ chronological) for the full auditable timeline, and\
+    \ `CostLedger.filter_by_root` (already existed, unused until now) for\
+    \ the causal-chain requirement (spec §2.3/C2: \"root_event_uid is\
+    \ what lets you attribute a Thursday cancellation back to the Tuesday\
+    \ sick call that caused it\"). Each uncovered leg's\
+    \ (CANCELLATION/TERMINAL_PENALTY) full chain of ledger rows is matched\
+    \ against `sim.trace` by `item {uid}` text so the SAME real narrative\
+    \ the engine already produced is shown, not a second, independently-\
+    \ reconstructed story that could silently diverge from what actually\
+    \ happened. `des.run_policy_crn` gained a `trace: bool = False`\
+    \ passthrough (off by default -- real memory cost, wasted for e.g.\
+    \ S1e-01's own 500-scenario KPI run which never reads it); when\
+    \ `--drilldown`'s policy is also one of `--policies`, the report reuses\
+    \ that already-simulated (now traced) batch instead of re-simulating\
+    \ it a second time -- measured directly: the naive approach took 13.1s\
+    \ for `--policy R6 --drilldown costliest --scenarios 5`, the reused-sims\
+    \ version took 7.6s, roughly half, for the common case where the\
+    \ drill-down policy is also under comparison.\n\n\
+    Real, measured finding: at this corpus/policy scale, every\
+    \ uncovered-leg chain found in real 3-10 scenario test runs was a\
+    \ single-row chain (SICK_CALL -> CANCELLED directly, no intervening\
+    \ RESERVE/DRAFT/cascade step) -- consistent with the already-documented\
+    \ near-zero cascade rate (S1d-04e, S1e-01/02's own KPI/report output).\
+    \ Multi-step \"sick call -> reserve exhausted -> draft -> cascade ->\
+    \ cancellation\" chains are real and supported by the code (verified via\
+    \ a synthetic fixture, test_root_chain_matches_ledger_rows_and_trace_lines,\
+    \ since real data at this scale doesn't currently exercise the longer\
+    \ path) but not what real data currently produces; not forced to look\
+    \ richer than it is."
 - id: S1e-04
   epic: E1e Reporting
   phase: 1e
   title: Policy grid runner
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1e-01
   spec:
@@ -806,15 +1984,99 @@ stories:
   check:
     auto: pytest tests/test_grid.py
     manual: crewsim grid --config configs/grid_mvp.yaml --scenarios 1000
-    expect: 24 combinations, all CRN-paired against the same scenario set
+    expect: 5 combinations (R axis only), all CRN-paired against the same scenario
+      set
     fails_if: "each combination regenerates its own scenarios \u2014 the comparison\
       \ is unpaired"
+  note: "Scoped to the R axis only (5 combinations: R4/R6/R8/R10/R14), not the story's\
+    \ original '24 combinations' text \u2014 found and resolved via an explicit\
+    \ AskUserQuestion before writing any code. Investigation found two of the\
+    \ grid's three named axes are NOT real in the engine: reserve_selection is a\
+    \ declared Stage2Config field that Simulation._attempt_resolution never reads\
+    \ \u2014 dispatch is hardcoded to exactly one strategy (shortest remaining\
+    \ window, seniority tiebreak) regardless of a policy file's value \u2014 and\
+    \ allow_cross_base_reserve has nothing to filter against, since the loaded\
+    \ roster is confirmed single-base (roster_loader.load_rosters returns only\
+    \ {'YUL'} crew.base values at current MVP scope). Also found the story text\
+    \ itself conflicts with spec \xA73's own grid (6 R-levels \xD7 5 callout rules\
+    \ \xD7 2 cross-base rules = 60), and no R12 policy file exists to match the\
+    \ spec's 4/6/8/10/12/14 R-level list \u2014 only R4/R6/R8/R10/R14 (5 files).\
+    \ User chose to ship the real R axis now (same disposition as roster_size in\
+    \ S1d-05) and park the other two axes as a follow-up story, S1e-04b, rather\
+    \ than inventing 4 undefined reserve-selection algorithms or silently\
+    \ shrinking the grid without saying so.\n\nImplemented: configs/grid_mvp.yaml\
+    \ (the policies: list, with a header comment recording the inert-axis finding\
+    \ above so the scope decision doesn't silently rot); src/crewsim/reporting/grid.py\
+    \ (load_grid_config, run_grid \u2014 CRN-paired by construction since every\
+    \ combination gets the same master_seed and run_policy_crn's arrival draws\
+    \ never take policy as an input, joblib-parallel across policies via jobs=N,\
+    \ each worker returns only a picklable KPI dict so no simpy state crosses the\
+    \ process boundary \u2014 reuses reporting.kpis.compute_kpis rather than a\
+    \ second cost-aggregation implementation, print_grid_report, write_grid_csv);\
+    \ crewsim grid --config --scenarios --master-seed --jobs CLI subcommand\
+    \ (writes output/reports/grid_results.csv, stderr progress via the existing\
+    \ _stderr_progress helper).\n\nPairing proof (tests/test_grid.py): spied on\
+    \ des._load_daily_sick_calls \u2014 the one call site in run_scenario that\
+    \ pulls a scenario's arrival counts from the cached scenario set \u2014\
+    \ across two different real policies (R4, R14) and confirmed identical\
+    \ (season, master_seed, n_scenarios, scenario_id) call args for every\
+    \ scenario. Deliberately does NOT assert identical sick-call trace lines\
+    \ across policies \u2014 an earlier draft of this test did and failed for a\
+    \ real, non-bug reason: roster composition differs by R (different\
+    \ line-holder/reserve split), so the same arrival draw can land on a\
+    \ different crew member, or nobody currently on a pairing, under a\
+    \ different policy \u2014 that's downstream of the shared scenario set, not\
+    \ evidence against pairing. Also verified V7 (reproducibility) still passes\
+    \ while a grid run is running concurrently, per the story's own AC, and that\
+    \ jobs>1 output matches jobs=1 exactly (same policy order, same KPI values).\
+    \ Full suite 246\u2192252 (6 new tests), 0 regressions."
+- id: S1e-04b
+  epic: E1e Reporting
+  phase: 1e
+  title: "Real reserve-selection strategies and cross-base reserve filter"
+  size: L
+  status: todo
+  depends_on:
+  - S1e-04
+  spec:
+  - '3'
+  check:
+    auto: TBD once scope is confirmed
+    manual: TBD once scope is confirmed
+    expect: "the grid's reserve_selection and cross-base axes stop being confirmed-inert\
+      \ and actually change simulated outcomes"
+    fails_if: "a strategy is implemented from a guessed interpretation of its name\
+      \ instead of a confirmed domain definition \u2014 e.g. 'lowest hours flown'\
+      \ coded against an arbitrarily chosen rolling window, or 'best fit' against\
+      \ an invented distance metric, with no [CONFIRM: owner] marker on the choice"
+  note: "Parked out of S1e-04's scope by explicit user choice (see S1e-04's own\
+    \ note). Before this can be implemented for real, several domain questions\
+    \ need answers, not guesses (per this project's standing 'ask before changing\
+    \ design' rule):\n  - reserve_selection has 5 named strategies in the spec,\
+    \ only 1 (shortest_remaining_window) is coded today. The other 4 each need a\
+    \ precise definition: 'lowest hours flown' \u2014 which rolling window\
+    \ (get_rolling_counters exposes both 7d and 28d) and duty vs flight hours?;\
+    \ 'FIFO' \u2014 standby-since when (block start? last assignment?)?;\
+    \ 'best fit / least buffer waste' \u2014 what distance metric between\
+    \ remaining legal hours and duty length?; 'seniority' \u2014 spec says 'most\
+    \ junior (or senior)', itself undecided.\n  - allow_cross_base_reserve is\
+    \ cheap to make real (filter eligible_reserves to r.base == item.base) with\
+    \ no domain ambiguity, BUT is structurally untestable at current MVP scope:\
+    \ the loaded roster is single-base (YUL only), so there's no second base for\
+    \ the filter to ever restrict against. Also note the interaction already\
+    \ found in _attempt_resolution: min_rest is 11h if chosen.base == item.base\
+    \ else 10h \u2014 the away-base branch is reachable today even though nothing\
+    \ currently produces an away-base reserve, so restricting the pool would\
+    \ change real rest-hour calculations, not just eligibility counts.\n  - the\
+    \ backlog-vs-spec grid-shape conflict (24 vs 60 combinations, and the missing\
+    \ R12 policy file) needs resolving once the other two axes are real, not\
+    \ before."
 - id: S1e-05
   epic: E1e Reporting
   phase: 1e
   title: "Counterfactual runs \u2014 junior-first and cost-ranked selection"
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1e-04
   spec:
@@ -825,12 +2087,70 @@ stories:
     manual: crewsim counterfactual --vs-mandated
     expect: the price of the mandated rules, clearly labelled NOT A RECOMMENDATION
     fails_if: a counterfactual can be selected as a candidate policy
+  note: "Implemented 2026-08-08. junior_first already existed as an unused parameter\
+    \ on drafting.py::select_draft_candidate (found, not written this story) \u2014\
+    \ des.py's call site never passed it through. Wired a new draft_mode: str =\
+    \ \"mandated\" parameter through Simulation/run_scenario/run_policy_crn\
+    \ (\"mandated\" | \"junior_first\" | \"myopic_total_cost\", default \"mandated\"\
+    \ so every existing caller is unaffected) and dispatched it in\
+    \ _attempt_resolution.\n\nFound a real gap while verifying the AC's own\
+    \ \"structurally impossible to select as a candidate policy\" language: Policy/\
+    \ Stage2Config were plain pydantic BaseModels with no extra=\"forbid\", so a\
+    \ policy YAML carrying e.g. junior_first: true would validate successfully and\
+    \ be silently ignored \u2014 safe (never read), but not the loud rejection the\
+    \ AC implies. Fixed by adding extra=\"forbid\" to every model in policy.py\
+    \ (matching config.py's own _Model convention), verified all 5 real policy\
+    \ files still load and that an extra key now raises ValidationError.\n\n`myopic_total_cost`\
+    \ (\"Pure Cost-Ranked\", spec \u00a73) needed a \"predicted cascade cost\" per\
+    \ candidate with no existing dollar figure to source it from \u2014 presented via\
+    \ AskUserQuestion (count x base_premium vs. real one-step lookahead vs. park it).\
+    \ User chose count x base_premium: predicted_cascade_cost = len(cascaded_items)\
+    \ * costs.draft.base_premium, where cascaded_items comes from cascade.py's\
+    \ already-existing compute_draft_delta (pure, no mutation \u2014 safe to call once\
+    \ per legal candidate purely to rank them). Implemented in new\
+    \ src/crewsim/engine/counterfactuals.py::select_myopic_total_cost, kept OUT of\
+    \ drafting.py deliberately (drafting.py stays about the one real mandated\
+    \ algorithm plus the junior_first flag; counterfactuals.py owns every\
+    \ NOT-A-RECOMMENDATION strategy).\n\nnew src/crewsim/reporting/counterfactual.py\
+    \ (run_counterfactual_comparison \u2014 same policy's stage1 reserves, same CRN\
+    \ scenario set, all 3 draft_modes; print_counterfactual_report) and\
+    \ `crewsim counterfactual --vs-mandated --policy --scenarios --master-seed` CLI\
+    \ subcommand, NOT_A_RECOMMENDATION label printed at both the top and bottom of\
+    \ the report (spec's own \"NOT A RECOMMENDATION\" requirement, not easy to miss\
+    \ by scrolling past one printed line).\n\n**Real, measured finding:** at this\
+    \ corpus/policy scale (R6, real scenarios), E[cost] came out IDENTICAL to the\
+    \ cent across all 3 draft_modes despite genuinely different crew being drafted\
+    \ (verified directly \u2014 senior-first and junior-first drafted different real\
+    \ crew_id sequences). Root cause, not a bug: every draft observed (196/196 in\
+    \ one real scenario) was satisfied from tier 1 (day-off candidates, tier_cost=0),\
+    \ so reordering WHO is picked within a non-empty tier never changes the tier\
+    \ used, hence never changes total dollar cost \u2014 only WHO earns the premium\
+    \ (matches spec \u00a75.6's own framing: \"read as the distribution of premium\
+    \ earnings, not an imposed burden\"). The rule has a real, nonzero price only in\
+    \ scenarios where tier 1 is exhausted. print_counterfactual_report shows the\
+    \ per-tier draft breakdown alongside the cost table and states this explicitly\
+    \ rather than presenting an unexplained $0.00 delta \u2014 same discipline as the\
+    \ flat E[cost]-across-R finding in S1e-02/03.\n\nStructural-impossibility test\
+    \ (tests/test_counterfactuals.py::test_draft_mode_rejected_by_policy_schema):\
+    \ injects junior_first/myopic_total_cost/draft_mode into a real loaded policy's\
+    \ stage2 dict and asserts Policy(**data) raises ValidationError for each. Also\
+    \ tests: junior_first genuinely selects a different real crew sequence (not a\
+    \ no-op), myopic_total_cost prefers a real tier-1 candidate over a real,\
+    \ equally-legal tier-2 candidate (both verified individually legal via\
+    \ is_legal_assignment, so the test exercises tier comparison, not an accidental\
+    \ legality filter), and CRN pairing across draft_modes. Full suite 253\u2192259+\
+    \ (6 new tests here + the extra=\"forbid\" hardening), 0 regressions.\n\nAlso\
+    \ resolved this session's parallelism question for S1e-05/06/07 via\
+    \ AskUserQuestion: sequential, not parallel agents \u2014 S1e-07 hard-depends on\
+    \ S1e-06's replay infrastructure, and S1e-05/S1e-06 both edit des.py/cli.py, so\
+    \ concurrent agents risked a conflicting merge costing more than the wall-clock\
+    \ saved."
 - id: S1e-06
   epic: E1e Reporting
   phase: 1e
   title: V5 trace export for the SME walkthrough
   size: M
-  status: todo
+  status: done
   depends_on:
   - S1e-03
   spec:
@@ -843,12 +2163,106 @@ stories:
       \ not a log dump"
     fails_if: it reads as debug output; you get one hour of an SME's attention, spend
       it well
+  note: "Implemented 2026-08-08. Genuinely un-passable as a real V5 gate in the\
+    \ spec's own sense: PASS requires a human IOC duty manager saying \"yes, I would\
+    \ have done this\" in a real walkthrough \u2014 no code in this repo can self-certify\
+    \ that. This story builds the ARTIFACT that walkthrough needs (a real replay +\
+    \ a readable timeline), and says so explicitly in the module docstring and every\
+    \ CLI invocation; it never claims a PASS it can't back.\n\nUser-confirmed disposition\
+    \ (this session's AskUserQuestion round, alongside S1e-05/07's scoping): the\
+    \ corpus is entirely mock (tools/generate_mock_corpus.py generates D1-D12), so\
+    \ there is no real \"memorable January ice storm\" to replay \u2014 use the mock\
+    \ corpus's own highest-disruption week instead, labelled as such everywhere it\
+    \ appears (never presented as real history).\n\nNew src/crewsim/engine/replay.py,\
+    \ deliberately separate from des.py's run_scenario/run_policy_crn \u2014 those draw\
+    \ sick-call arrivals from the NHPP scenario cache keyed by (master_seed,\
+    \ scenario_id), never by a real calendar date; V5 needs the opposite. Reused\
+    \ roster_loader.load_rosters's existing window param (already built for S0-04's\
+    \ historical eligibility reconstruction) to load a real, calendar-anchored 7-day\
+    \ roster slice. find_peak_disruption_week groups real D4 absences (scope-filtered\
+    \ to cfg.scope first \u2014 confirmed base/fleet/position=YUL/A321neoLR/FO is D4's\
+    \ single LARGEST group, 1443 rows, before writing this) by ISO Monday-week and\
+    \ returns the max. Simulation.real_absence_source (des.py) replaces the random\
+    \ sick_call_source entirely with a new deterministic generator reading real D4\
+    \ rows \u2014 notification_ts (real report time) drives when each OpenTimeItem\
+    \ surfaces, [absence_start, absence_end) (also real) is the window searched for\
+    \ broken pairings \u2014 two distinct real timestamps D4 already carries, which\
+    \ the synthetic generator conflates into one draw but real data doesn't have to.\
+    \ Found mid-implementation that this generator (and the env/Simulation\
+    \ construction around it) MUST live in des.py, not replay.py \u2014 S0-00b's\
+    \ dependency rule (\"only des.py may import simpy\", enforced by\
+    \ tests/test_dependency_rule.py) caught it immediately. Restructured: replay.py\
+    \ now only prepares data (which week, which real D4 rows, the calendar-anchored\
+    \ roster) and calls a new des.run_historical_week; apply_named_absence lives in\
+    \ sick_calls.py as apply_sick_call's sibling (shares a new _break_pairings\
+    \ helper for the deadline-calc/OpenTimeItem-construction logic both need).\
+    \ Extracting that helper surfaced a separate real, pre-existing gap: apply_sick_call\
+    \ never set OpenTimeItem.flight_mins (always the dataclass default 0.0), unlike\
+    \ cascade.py's own item construction \u2014 legality.py's rolling-flight-hour\
+    \ check has been undercounting sick-call-origin items' added flight time since\
+    \ S1b-04. Deliberately NOT fixed here (documented instead, in _break_pairings'\
+    \ own docstring): changing it would alter every existing CRN scenario's legality\
+    \ outcomes, well outside this story's scope \u2014 flagged as a future story\
+    \ candidate, not silently patched. apply_named_absence duplicates\
+    \ apply_sick_call's selection logic deliberately rather than unifying it further\
+    \ \u2014 the semantics genuinely differ (named crew + real window vs. random crew\
+    \ + duration-based search) and
+    \ the well-tested random path must not risk any behavioural change.\n\nAdded\
+    \ Simulation.verbose_trace (new, separate from the existing `trace` flag) so\
+    \ S1e-06's heavier per-decision logging never affects S1e-02/03's existing\
+    \ trace=True callers (report/drilldown) \u2014 only replay.py's direct Simulation\
+    \ construction sets it. When True, _attempt_resolution logs the FULL alternative\
+    \ set for every decision, not just the outcome (this story's own AC):\
+    \ RESERVE decisions show every on-call reserve's real legality verdict\
+    \ (fail_rule/reason verbatim from legality.py, not paraphrased) for whoever was\
+    \ on-call but rejected; DRAFT decisions show real tier sizes and the chosen\
+    \ candidate's real seniority rank within their tier (not every candidate's name\
+    \ \u2014 a tier can hold dozens of real day-off crew, and an SME's hour is better\
+    \ spent on which tier was reached than a name dump).\n\nnew src/crewsim/gates/v5_trace.py\
+    \ (format_timeline \u2014 groups sim.trace into hour-by-hour buckets anchored to\
+    \ the real week's Monday 00:00, MOCK_DATA_CAVEAT printed at the top of every\
+    \ export; run_v5_gate) and `crewsim gate v5 --week --format timeline --policy`\
+    \ CLI dispatch \u2014 --week accepts an explicit ISO date (the story's own literal\
+    \ syntax still works) or, if omitted, defaults to find_peak_disruption_week.\n\n\
+    tests/gates/test_v5_trace.py: cross-checks the peak-week finder against an\
+    \ independent manual aggregation; proves NO synthetic arrivals leak into the\
+    \ replay by verifying every 'REAL ABSENCE' trace line's absence_id is a real\
+    \ D4 row for that exact week/scope (the blocking risk identified before writing\
+    \ any replay code \u2014 sick_call_source must never also run alongside the\
+    \ deterministic source); verifies hour-grouping and the mock-data caveat; verifies\
+    \ real rejection reasons (ILLEGAL_L3 etc., verbatim from a real legality check,\
+    \ not a fixture) appear when a real on-call reserve was actually rejected.\n\n\
+    Two real bugs found reviewing the shipped output against this story's own AC\
+    \ (\"each decision shows the alternatives considered and why they were\
+    \ rejected\") before calling it done:\n  1. A pairing that started BEFORE the\
+    \ replay window (a duty already mid-flight when the week begins \u2014 the loaded\
+    \ calendar still includes it, since roster_loader.load_rosters's window param\
+    \ returns any block OVERLAPPING the window, not just ones starting inside it)\
+    \ produced an item whose deadline was already in the past at sim time 0 \u2014\
+    \ instant cancellation, zero recovery attempt, nothing for the timeline to\
+    \ show. Fixed: apply_named_absence now excludes any block with b.start < 0.\
+    \ The normal CRN engine (apply_sick_call) never hits this case \u2014 every item it\
+    \ creates already has item.start within the same horizon its \"now\" is\
+    \ measured against.\n  2. Separately, an item that legitimately finds ZERO\
+    \ eligible reserves AND zero legal draft candidates at a real retry checkpoint\
+    \ produced no trace line at all before its eventual cancellation \u2014 a real,\
+    \ reachable decision (\"we looked, found nobody\") with nothing shown, which\
+    \ is exactly the silent gap this AC exists to prevent. Fixed: _attempt_resolution\
+    \ now logs this case explicitly under verbose_trace.\n\nBoth fixed and covered\
+    \ by new regression tests (tests/engine/test_sick_calls.py, 2 new; a 3rd in\
+    \ test_v5_trace.py scanning every real 'CANCELLED at deadline' line for\
+    \ preceding reasoning). Re-verified both manual-check forms after the fixes:\
+    \ the story's own literal `--week 2026-01-12` and the confirmed default\
+    \ (peak-disruption week, currently 2026-02-23) both produce a clean timeline\
+    \ with no unexplained cancellations. Full suite 259\u2192268 (9 new tests: 5 in\
+    \ test_v5_trace.py + test_cli_gate_v5 + 3 regression tests for the two bugs\
+    \ above), 0 regressions."
 - id: S1e-07
   epic: E1e Reporting
   phase: 1e
   title: V6 cost backtest against actuals
   size: L
-  status: todo
+  status: done
   depends_on:
   - S1e-06
   spec:
@@ -860,6 +2274,70 @@ stories:
     expect: simulated vs actual cost, plus the bias decomposition from 9.2's table
     fails_if: "it lands inside tolerance with no decomposition \u2014 offsetting biases\
       \ prove nothing"
+  note: "Implemented 2026-08-08. Same un-passable-as-a-real-gate disposition as\
+    \ S1e-06: PASS requires comparing against REAL D7 payroll/D10 invoices, which\
+    \ don't exist in this repo \u2014 only tools/generate_mock_corpus.py's generated\
+    \ ones do. User-confirmed disposition (this session's AskUserQuestion round,\
+    \ the non-default choice): build the real backtest MECHANICS now against mock\
+    \ data, always labelled MOCK CORPUS DATA at the top and bottom of every report,\
+    \ rather than parking the story \u2014 so it's ready to run for real the moment\
+    \ real payroll/invoice data exists.\n\nGeneralized S1e-06's replay path from a\
+    \ fixed 7-day week to an arbitrary date range: des.run_historical_week renamed\
+    \ to des.run_historical_replay (period-agnostic, horizon_minutes is whatever\
+    \ span the caller prepared roster/reserves/absences for); replay.py gained\
+    \ run_historical_period(cfg, costs, policy, period_start, period_end, trace,\
+    \ verbose_trace) as the new general entry point, with run_historical_week kept\
+    \ as a thin wrapper (always trace=True/verbose_trace=True, since an SME\
+    \ walkthrough always wants full alternative-set logging) so S1e-06's own\
+    \ tests/CLI path is untouched. V6 calls run_historical_period directly with\
+    \ month_bounds(period) and trace=False/verbose_trace=False \u2014 a full-month\
+    \ backtest has no SME audience and would otherwise log every decision for 31\
+    \ days.\n\nNew src/crewsim/gates/v6_backtest.py: month_bounds (\"YYYY-MM\" ->\
+    \ [first day, first day of next month)); compute_actual_cost sums real D7 rows\
+    \ by pay_code for cfg.scope's crew_ids in that pay_period, plus D10 positioning\
+    \ invoices for the same crew/date range (reported separately, since the engine\
+    \ doesn't model positioning cost at all); compute_simulated_cost sums the\
+    \ replay's own ledger by category; run_v6_gate computes the gap and gap_pct\
+    \ between the two comparable totals; print_v6_report renders both totals, the\
+    \ gap, what's excluded from each side and why, and spec 9.2's own bias-\
+    \ decomposition table verbatim (SPEC_BIAS_DECOMPOSITION \u2014 qualitative\
+    \ OVERSTATES/UNDERSTATES statements, not computed values, matching this story's\
+    \ own fails_if).\n\nReal bug found before calling this done: the first version\
+    \ matched sim ledger categories against a flat dict with exactly two keys\
+    \ (RESERVE_STAFFING, RESERVE_UTILIZATION) mapped to their D7 pay_codes, but\
+    \ des.py books draft costs under a dynamic f\"DRAFT_TIER{tier}\" category name\
+    \ (tier 1-5) that matched no key at all \u2014 every draft cost was silently\
+    \ dropped from BOTH the comparable total and the excluded-costs breakdown, so\
+    \ the printed report simply never accounted for them anywhere. Found by manual\
+    \ smoke-test: the \"Excluded\" section's total didn't visibly include the drafts\
+    \ a disruption month obviously produces. Fixed with _pay_code_for_sim_category(),\
+    \ which special-cases the DRAFT_TIER prefix -> D7's single DRAFT_PREM pay_code\
+    \ (D7 doesn't break draft premium out by impact tier, so neither does this\
+    \ comparison). Covered by a dedicated regression test\
+    \ (test_draft_costs_are_not_silently_dropped_from_the_comparison).\n\nSecond\
+    \ finding, non-blocking: for 2026-01 the printed gap is large (simulated >>\
+    \ actual) because only ~21 of 120 in-scope crew have ANY D7 row that month \u2014\
+    \ verified this is real fixture behaviour, not a scope-filter bug\
+    \ (tools/generate_mock_corpus.py only emits D7 rows for RESERVE_UTIL/DRAFT_PREM/\
+    \ RESERVE_GTE EVENTS, never a full payroll register, and there are zero\
+    \ ALL-fleet crew at the YUL/A321neoLR/FO scope that could be getting dropped).\
+    \ Since a bare gap % next to a sparse actual total invites being misread as a\
+    \ calibration signal, print_v6_report now also states n_crew in scope, how many\
+    \ of them have any comparable D7 row, and the row count backing that \u2014 so\
+    \ the sparsity is visible, not just correct.\n\ntests/gates/test_v6_backtest.py\
+    \ (6 tests): month_bounds; compute_actual_cost cross-checked against an\
+    \ independent manual D7 aggregation; a real disruption month produces a nonzero\
+    \ comparable gap; the DRAFT_TIER regression test above; excluded costs\
+    \ (CANCELLATION/TERMINAL_PENALTY on the sim side, D10 positioning on the actual\
+    \ side) are present in the result, not silently dropped; print_v6_report shows\
+    \ the MOCK_DATA_CAVEAT at both top and bottom plus every SPEC_BIAS_DECOMPOSITION\
+    \ row. Plus test_cli_gate_v6 and test_cli_gate_v6_requires_period (exit code 2\
+    \ with a clear message when --period is omitted) in tests/test_cli.py.\n\n\
+    Re-verified the story's own literal manual check, `crewsim gate v6 --period\
+    \ 2026-01` (default --policy, no other flags), after all fixes \u2014 clean\
+    \ output, correctly labelled. mypy --strict src/crewsim/engine/ unchanged at\
+    \ 17 pre-existing errors. Full suite 268\u2192276 (8 new tests: 6 in\
+    \ test_v6_backtest.py + 2 in test_cli.py), 0 regressions."
 - id: S2-01
   epic: E2.1 Optimisation engine
   phase: '2'

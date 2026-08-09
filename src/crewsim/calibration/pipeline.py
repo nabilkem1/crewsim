@@ -1,11 +1,12 @@
-import json
 import hashlib
-from datetime import datetime, timezone
-from typing import Any
 import importlib.metadata
+import json
+from datetime import UTC, datetime
+from typing import Any
 
 from .. import config
-from . import regime, nhpp, delays
+from . import delays, nhpp, regime
+
 
 def run_pipeline(cfg: config.BaseConfig, season: str, window_name: str = "fitting") -> dict[str, Any]:
     """Runs the full calibration pipeline and emits the parameter store."""
@@ -18,7 +19,7 @@ def run_pipeline(cfg: config.BaseConfig, season: str, window_name: str = "fittin
     # Get project version
     try:
         version = importlib.metadata.version("crewsim")
-    except Exception:
+    except Exception:  # noqa: BLE001 - a version lookup must not abort calibration
         version = "unknown"
         
     # 2. Build the parameter store
@@ -29,7 +30,7 @@ def run_pipeline(cfg: config.BaseConfig, season: str, window_name: str = "fittin
 
     store = {
         "params_version": f"v{version}",
-        "fitted_at": datetime.now(timezone.utc).isoformat(),
+        "fitted_at": datetime.now(UTC).isoformat(),
         "data_window": window,
         "season": season,
         "markov_steady_state_pi0": regime_res["pi0"],
