@@ -301,6 +301,10 @@ ALLOWLIST: dict[str, set[float]] = {
     # v3_eligibility.py's own styling-literal precedent above). 2 is a
     # regex match-group index (_TIME_RE has exactly 2 capture groups), a
     # structural API constant, not a business input.
+    # S1b-07: 1440.0/60.0 are minutes-per-day/-hour, the same time-conversion
+    # category as des.py/sick_calls.py above; 62 is the report separator width
+    # (presentation, same category as v5_trace.py's own 78 below).
+    "src/crewsim/gates/v2_erlang.py": {1440.0, 60.0, 62},
     "src/crewsim/gates/v5_trace.py": {7, 78, 2},
     "src/crewsim/scenarios/generator.py": {4, 5, 10, 16},
     "src/crewsim/engine/policy.py": {12},
@@ -331,10 +335,15 @@ ALLOWLIST: dict[str, set[float]] = {
     # gone -- those commands now read a real des.run_scenario ledger, so the
     # exemptions go with them rather than lingering to mask a future literal at
     # the same value.
+    # S1b-07 (P0): 0.098 (the stubbed DES shortfall), 1.5/5.0 (its invented
+    # service time and arrival rate) and 86400.0 (the seconds-per-day divisor
+    # that made reserve-pattern report 3.7 days where the truth is 223.0) are
+    # all gone -- gate v2 measures a real simulation now and reserve-pattern
+    # divides by 1440. 0.05/40 went with the same block.
     "src/crewsim/cli.py": {
-        2, 10, 240, 100, 5.0, 1.5, 0.098, 20, 50,
-        200.0, 150.0, 0.05, 1000, 0.975, 203,
-        960.0, 1560.0, 60.0, 86400.0, 40, 600.0, 250.0, 28, 7, 24,
+        2, 10, 240, 100, 20, 50,
+        200.0, 150.0, 1000, 0.975, 203,
+        960.0, 1560.0, 60.0, 600.0, 250.0, 28, 7, 24, 5,
         900.0, 1050.0, 1100.0, 800.0, 700.0, 1400.0, 2000.0, 502, 1440,
     },
     # S0-09b: cascade.py's mandatory-rest hours (11h base / 10h away) and the

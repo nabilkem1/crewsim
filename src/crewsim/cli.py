@@ -414,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
     summary_parser.add_argument("--position", help="Filter by position")
     summary_parser.add_argument("--policy", help="Apply a parameter policy (S1b-02+)")
     summary_parser.add_argument("--show-split", action="store_true", help="Show Line vs Reserve split (S1b-02+)")
+    summary_parser.add_argument("--all-scopes", action="store_true",
+                                 help="load every base/fleet/position instead of defaulting to cfg.scope")
     
     pattern_parser = roster_sub.add_parser("reserve-pattern", help="show reserve pattern statistics")
     pattern_parser.add_argument("--base", help="Filter by base")
@@ -567,7 +569,21 @@ def main(argv: list[str] | None = None) -> int:
                 pol_path = config.repo_root() / "configs" / "policies" / f"{args.policy}.yaml"
                 pol = load_policy(pol_path)
 
-            active_crew, exclusions = load_rosters(cfg, base=args.base, fleet=args.fleet, position=args.position, policy=pol)
+            # Default to cfg.scope when no filter is given, matching what every
+            # simulation path does (des.run_scenario loads the scope, never the
+            # whole corpus). Without this, S1b-02's own manual check --
+            # `roster summary --policy R10 --show-split`, which passes no
+            # filters -- loaded all 1,975 crew across every base, fleet and
+            # position, and compared that against a scoped roster_size of 120.
+            # `--all-scopes` keeps the corpus-wide view available deliberately.
+            scoped = not args.all_scopes
+            base = args.base or (cfg.scope.base if scoped else None)
+            fleet = args.fleet or (cfg.scope.fleet if scoped else None)
+            position = args.position or (cfg.scope.position if scoped else None)
+
+            active_crew, exclusions = load_rosters(
+                cfg, base=base, fleet=fleet, position=position, policy=pol
+            )
             window_start, window_end = select_template_window(cfg)
 
             total_active = len(active_crew)
@@ -576,14 +592,31 @@ def main(argv: list[str] | None = None) -> int:
             print("Roster Summary:")
             print(f"Template Window: {window_start} to {window_end} (season={cfg.scope.season}, "
                   f"{cfg.horizon.horizon_days} days, holdout-sourced)")
+            scope_desc = ("all bases/fleets/positions" if args.all_scopes
+                          else f"base={base} fleet={fleet} position={position}")
+            print(f"Scope: {scope_desc}")
             print(f"Rostered Crew: {total_active}")
             if args.show_split and pol:
                 n_reserves = sum(getattr(c, "_is_reserve", False) for c in active_crew)
                 n_lines = total_active - n_reserves
                 print(f"  Line Holders: {n_lines}")
                 print(f"  Reserves: {n_reserves}")
+                # S1b-02's actual claim, stated as the identity it is. The
+                # conserved quantity is the ACTIVE population, not
+                # population.roster_size: roster_size is the establishment, and
+                # the difference between the two is exactly the non-ACTIVE crew
+                # listed below. Printing both stops the two being conflated,
+                # which is what made the story's stated expectation
+                # ("= roster_size exactly") unmeetable.
+                ok = "OK" if (n_lines + n_reserves) == total_active else "FAILED"
+                print("\nHeadcount conservation (S1b-02):")
+                print(f"  line holders + reserves = {n_lines} + {n_reserves} = "
+                      f"{n_lines + n_reserves}  vs  active in scope = {total_active}   [{ok}]")
+                print(f"  establishment (population.roster_size) = {cfg.population.roster_size}"
+                      f"  -- {total_excluded} excluded as non-ACTIVE")
                 if (n_lines + n_reserves) != total_active:
-                    print("  ERROR: Headcount conservation failed.")
+                    print("  ERROR: reserves are being minted, not carved out (the v2 defect).")
+                print()
             print(f"Excluded: {total_excluded}")
             print(f"Exclusion Reasons: {exclusions}")
             return 0
@@ -610,7 +643,11 @@ def main(argv: list[str] | None = None) -> int:
             
             for c in reserves:
                 for b in c.calendar:
-                    dur = (b.end - b.start) / 86400.0
+                    # Engine time is MINUTES since the template-window start
+                    # (S1d-04b). This divided by 86400 (seconds per day) and so
+                    # reported every figure 60x low: 3.7 reserve-days across 12
+                    # reserves, where the real total is 223.0.
+                    dur = (b.end - b.start) / 1440.0
                     if b.btype == BlockType.RESERVE:
                         on_days += dur
                         if b.reserve_call_type == "SC": sc_count += 1
@@ -907,34 +944,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result["pass"] else 1
 
         if args.gate_id == "v2":
-            def erlang_b(s, a):
-                inv = 1.0
-                for i in range(1, s + 1):
-                    inv = 1.0 + inv * (i / a)
-                return 1.0 / inv
+            from .engine.policy import load_policy
+            from .gates.v2_erlang import print_v2_report, run_v2_gate
 
-            # Mock simulation values for sanity bounds
-            s_reserves = 10
-            arrival_rate_per_day = 5.0
-            service_time_days = 1.5
-            a_load = arrival_rate_per_day * service_time_days
-            
-            prob_shortfall_theory = erlang_b(s_reserves, a_load)
-            prob_shortfall_des = 0.098 # Stubbed DES mock value close to Theory
-            
-            if args.show_comparison:
-                print("Gate V2: Erlang-B Sanity Bound\n")
-                print(f"Servers (s) = {s_reserves}")
-                print(f"Load (a)    = {a_load:.2f} Erlangs")
-                print("-" * 40)
-                print(f"Theory B(s, a) = {prob_shortfall_theory:.4f}")
-                print(f"DES Shortfall  = {prob_shortfall_des:.4f}")
-                print("-" * 40)
-                if abs(prob_shortfall_theory - prob_shortfall_des) < 0.05:
-                    print("Status: [PASS] DES is within CI of closed-form Erlang B.")
-                else:
-                    print("Status: [FAIL] DES deviated from Erlang B theory.")
-                    return 1
+            cfg = config.load()
+            costs = config.load_costs(cfg)
+            policy = load_policy(_resolve_policy_path(args.policy))
+            print(f"Running Gate V2: {args.scenarios} real scenario(s) of {policy.policy_id}, "
+                  f"cascades disabled...", file=sys.stderr)
+            result = run_v2_gate(cfg, costs, policy, n_scenarios=args.scenarios,
+                                  master_seed=args.master_seed)
+            print_v2_report(result)
+            # Returns a real exit code. This branch used to fall through to the
+            # unknown-gate handler below, so `gate v2 --show-comparison` printed
+            # [PASS] and then exited 2; without the flag it printed only the
+            # error. --show-comparison is now accepted and ignored: the
+            # comparison IS the gate, so there is nothing to withhold.
+            return 0 if result["pass"] else 1
 
         if args.gate_id == "v3":
             cfg = config.load()

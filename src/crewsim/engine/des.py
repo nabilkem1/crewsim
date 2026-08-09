@@ -122,6 +122,7 @@ class Simulation:
         trace: bool = False,
         draft_mode: str = "mandated",
         verbose_trace: bool = False,
+        cascades_enabled: bool = True,
     ) -> None:
         if cfg.cascade is None:
             raise ValueError("Simulation requires cfg.cascade (visibility_lag_hours) to be configured")
@@ -162,6 +163,18 @@ class Simulation:
         self.open_items: dict[int, OpenTimeItem] = {}
         self.n_drafts = 0
         self.n_cascading_drafts = 0
+        # S1b-07 (gate V2): cascades disabled turns the recovery pipeline into a
+        # pure loss system -- no secondary arrivals feeding back into the queue --
+        # which is the configuration the Erlang-B comparison is defined against.
+        self.cascades_enabled = cascades_enabled
+        # Erlang-B observables, counted at the ARRIVAL instant only. "Blocked"
+        # means an arriving item found no eligible reserve, which is the
+        # loss-system event B(s, a) predicts; what happens next (draft, hold,
+        # cancel) is the recovery pipeline's business, not the queue's.
+        self.n_arrivals = 0
+        self.n_blocked_on_arrival = 0
+        self.n_reserve_assignments = 0
+        self.reserve_service_minutes = 0.0
 
         self._book_reserve_staffing()
 
@@ -255,7 +268,7 @@ class Simulation:
 
     def recovery_pipeline(self, item: OpenTimeItem) -> Generator[simpy.Event, None, None]:
         self.open_items[item.uid] = item
-        if self._attempt_resolution(item):
+        if self._attempt_resolution(item, first_attempt=True):
             return
 
         # E8: hold until the deadline, re-checking as reserves free up.
@@ -289,11 +302,20 @@ class Simulation:
         )
         self.log(f"item {item.uid} ({item.pairing_id}) CANCELLED at deadline, still uncovered")
 
-    def _attempt_resolution(self, item: OpenTimeItem) -> bool:
-        """Reserve-first, then draft. Returns True if the item is resolved."""
+    def _attempt_resolution(self, item: OpenTimeItem, first_attempt: bool = False) -> bool:
+        """Reserve-first, then draft. Returns True if the item is resolved.
+
+        `first_attempt` marks the call made at the item's arrival instant, which
+        is the only one gate V2 counts: Erlang B is about whether an ARRIVING
+        call finds a free server, not whether a held one eventually does.
+        """
         now = self.env.now
 
         elig = self.elig.eligible_reserves(self.reserves, item, now, self.rng)
+        if first_attempt:
+            self.n_arrivals += 1
+            if not elig:
+                self.n_blocked_on_arrival += 1
         if elig:
             def remaining(r: CrewMember) -> float:
                 covering = [b for b in r.blocks_in(item.start, item.end) if b.btype == BlockType.RESERVE]
@@ -305,6 +327,10 @@ class Simulation:
                 self._log_reserve_alternatives(item, now, elig, chosen, remaining)
             min_rest = min_rest_minutes(self.cfg, chosen.base, item.base)
             assign_reserve(chosen, item.start, item.end, min_rest, item.pairing_id)
+            # Occupancy this assignment costs the pool: the duty plus the rest it
+            # obliges. That product with the arrival rate is the offered load `a`.
+            self.n_reserve_assignments += 1
+            self.reserve_service_minutes += (item.end - item.start) + min_rest
             self.ledger.book(
                 scenario_id=self.scenario_id, policy_id=self.policy_id,
                 sim_time=now, event_uid=item.uid, root_event_uid=item.root_event_uid,
@@ -326,6 +352,8 @@ class Simulation:
             if self.verbose_trace and self.trace_enabled:
                 self._log_draft_alternatives(item, now, candidate, tier)
             delta, cascaded = compute_draft_delta(candidate, item, self.cfg, now)
+            if not self.cascades_enabled:
+                cascaded = []
             apply_delta(candidate, delta)
             self.n_drafts += 1
             if cascaded:
@@ -454,6 +482,7 @@ def run_scenario(
     draft_mode: str = "mandated",
     verbose_trace: bool = False,
     daily_sick_calls: list[int] | None = None,
+    cascades_enabled: bool = True,
 ) -> Simulation:
     """Runs one CRN scenario for one policy through the real recovery pipeline.
 
@@ -494,6 +523,7 @@ def run_scenario(
     sim = Simulation(
         env, cfg, costs, policy.policy_id, scenario_id, roster, reserves, rng, horizon_minutes,
         trace=trace, draft_mode=draft_mode, verbose_trace=verbose_trace,
+        cascades_enabled=cascades_enabled,
     )
     env.process(sim.sick_call_source(daily_counts))
     env.run(until=horizon_minutes)

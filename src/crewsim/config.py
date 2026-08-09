@@ -178,6 +178,10 @@ class LegalityConfig(_Model):
     rolling_28d_duty_limit_hours: float
 
 
+class GatesConfig(_Model):
+    v2_confidence_level: float
+
+
 class CascadeConfig(_Model):
     visibility_lag_hours: float
 
@@ -193,6 +197,7 @@ class BaseConfig(_Model):
     cascade_reconstruction: CascadeReconstructionConfig
     legality: LegalityConfig | None = None
     cascade: CascadeConfig | None = None
+    gates: GatesConfig | None = None
     mode: str
     costs_file: str
     windows: WindowsConfig | None = None

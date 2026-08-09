@@ -11,6 +11,7 @@ _CONFIRM_RE = re.compile(r"\[CONFIRM:\s*([^\]]*)\]")
 # How much real simulation the report's V7 gate-status row is worth (S1a-11).
 # V7 stopped being free when it started hashing real ledgers instead of
 # synthetic draws, and this runs on every report build.
+V2_REPORT_SCENARIOS = 2
 V7_REPORT_SCENARIOS = 2
 V7_REPORT_JOBS = 2
 
@@ -19,13 +20,11 @@ V7_REPORT_JOBS = 2
 # The whole point of this report is "no black box" (spec Sec9.3) -- a report
 # that silently prints their fake PASS text would violate that on its own
 # front page, so they're always labelled STUB, never PASS/FAIL.
-# V1 was removed from this list when it became a real gate (S1a-10): it now
-# runs three real degeneracy scenarios through des.run_scenario and reads their
-# ledgers, so labelling it STUB would understate it exactly as badly as the old
-# hardcoded PASS overstated it.
-KNOWN_STUB_GATES = {
-    "V2": "DES shortfall is a hardcoded placeholder (0.098), not from a real simulation",
-}
+# Empty since S1a-10 and S1b-07: V1 and V2 were both hardcoded text and are now
+# real gates reading real ledgers/simulations. Kept as a mechanism, not deleted --
+# the report's whole premise is "no black box" (spec Sec9.3), so if a future gate
+# ships as a stub it must be labelled STUB here rather than printing a fake PASS.
+KNOWN_STUB_GATES: dict[str, str] = {}
 
 
 def extract_confirm_markers(paths: list[pathlib.Path]) -> list[dict[str, Any]]:
@@ -115,6 +114,7 @@ def build_report(
     from ..engine import des
     from ..engine.policy import load_policy
     from ..gates.v1_degeneracy import run_v1_gate
+    from ..gates.v2_erlang import run_v2_gate
     from ..gates.v3_eligibility import run_v3_gate
     from ..gates.v4_cascade import run_v4_gate
     from ..gates.v7_reproducibility import run_v7_gate
@@ -166,6 +166,10 @@ def build_report(
     v1_result = run_v1_gate(cfg, costs, per_policy[representative_policy]["policy"],
                             master_seed=master_seed)
 
+    # V2 (S1b-07): the Erlang-B bound, measured from real cascade-disabled runs.
+    v2_result = run_v2_gate(cfg, costs, per_policy[representative_policy]["policy"],
+                             n_scenarios=V2_REPORT_SCENARIOS, master_seed=master_seed)
+
     v7_result = run_v7_gate(
         cfg, costs, per_policy[representative_policy]["policy"],
         n_scenarios=V7_REPORT_SCENARIOS, jobs=V7_REPORT_JOBS, master_seed=master_seed,
@@ -186,7 +190,11 @@ def build_report(
     gate_rows = [
         ("V1", "PASS" if v1_result["pass"] else "FAIL",
          "; ".join(f"{c['name']}: {c['computed']}" for c in v1_result["configurations"])),
-        ("V2", "STUB", KNOWN_STUB_GATES["V2"]),
+        ("V2", "PASS" if v2_result["pass"] else "FAIL",
+         (f"DES shortfall {v2_result['p_hat']:.3f} "
+          f"[{v2_result['ci_low']:.3f}, {v2_result['ci_high']:.3f}] vs Erlang-B "
+          f"{v2_result['theory']:.3f} at s={v2_result['servers']}, a={v2_result['offered_load']:.2f} "
+          f"(bound p_hat >= B; containment is informational)")),
         ("V3", "PASS" if v3_result["pass"] else "FAIL",
          (f"sim mean {v3_result['sim_mean']:.3f} vs historical band "
          f"[{v3_result['ci_lower']:.3f}, {v3_result['ci_upper']:.3f}] (policy {representative_policy})")),

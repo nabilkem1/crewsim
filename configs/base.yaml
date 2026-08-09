@@ -3,7 +3,7 @@
 #
 # This file is the ONLY place these values are set. Nothing in src/ or in
 # crewsim_skeleton.py may hard-code them (§4.4, parameter registry).
-#
+#CONFIRM: <owner>
 # Marker convention:
 #   [CONFIRM: <owner>]  a placeholder. Plausible in magnitude, NOT an Air
 #                       Transat figure. Must be replaced before any result
@@ -141,6 +141,12 @@ legality:                             # Rules configuration
   rolling_7d_duty_limit_hours: 60.0   # [CONFIRM: Crew Planning] S1c-03 L3 duty limit
   rolling_7d_flight_limit_hours: 35.0 # [CONFIRM: Crew Planning] S1c-03 L3 flight limit
   rolling_28d_duty_limit_hours: 190.0 # [CONFIRM: Crew Planning] S1c-03 L4 duty limit
+
+gates:                                # V&V gate parameters (§9.2)
+  # S1b-07 / V2: the DES shortfall is a binomial proportion, so the comparison
+  # against the closed-form Erlang-B value is a confidence-interval containment
+  # test, not a hand-picked tolerance. This is that interval's level.
+  v2_confidence_level: 0.95           # [CONFIRM: Data Science] S1b-07 Erlang-B CI level
 
 cascade:
   visibility_lag_hours: 24.0        # [CONFIRM: Crew Planning] S1d-01 Cascade visibility lag
