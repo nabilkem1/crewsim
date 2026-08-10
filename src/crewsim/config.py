@@ -194,6 +194,10 @@ class LegalityConfig(_Model):
     rolling_28d_duty_limit_hours: float
 
 
+class ReducedModeConfig(_Model):
+    p_elig: float
+
+
 class GatesConfig(_Model):
     v2_confidence_level: float
 
@@ -214,6 +218,7 @@ class BaseConfig(_Model):
     legality: LegalityConfig | None = None
     cascade: CascadeConfig | None = None
     gates: GatesConfig | None = None
+    reduced_mode: ReducedModeConfig | None = None
     mode: str
     costs_file: str
     windows: WindowsConfig | None = None
@@ -328,6 +333,28 @@ def load_costs(cfg: BaseConfig) -> CostsConfig:
     return CostsConfig.model_validate({**raw, "config_path": path})
 
 
+# Config fields that are deliberately declared ahead of the code that will read
+# them. THE single source of truth: unconsumed_notices() surfaces these at
+# runtime, and tests/test_config.py's consumption guard treats exactly this set
+# as permitted. A field missing from both is a bug -- a documented knob that
+# silently does nothing, which is how `mode` (S1c-01) and `appr_compensation`
+# (S1b-06) each shipped unnoticed.
+DECLARED_NOT_YET_CONSUMED: dict[str, str] = {
+    "demand.pairings_per_bid_period":
+        "flying is exogenous until slice 1b",
+    "demand.credit_hours_per_bid_period":
+        "flying is exogenous until slice 1b",
+    "disruption.delay_per_minute":
+        "the engine does not model delay propagation yet -- no code path books a "
+        "per-minute delay cost (S1d-03 owns this)",
+    "positioning.deadhead":
+        "the engine does not model positioning yet -- D10's real invoices are "
+        "reported by gate v6 but never charged to a scenario",
+    "positioning.hotel":
+        "the engine does not model positioning yet -- see positioning.deadhead",
+}
+
+
 def unconsumed_notices(cfg: BaseConfig) -> list[str]:
     """Keys that are declared in config but not yet read by any code path.
 
@@ -336,7 +363,11 @@ def unconsumed_notices(cfg: BaseConfig) -> list[str]:
     pairings come from dataset D3. Declaring the key now and warning on it
     beats leaving it out (silent) or wiring it to a stub (silently wrong).
     """
-    notices = []
+    notices = [
+        f"{key} is declared but not yet consumed by any code path ({why})"
+        for key, why in sorted(DECLARED_NOT_YET_CONSUMED.items())
+        if not key.startswith("demand.")
+    ]
     if cfg.demand is not None:
         if cfg.demand.pairings_per_bid_period is not None:
             notices.append(

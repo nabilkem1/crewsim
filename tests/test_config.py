@@ -99,10 +99,14 @@ def test_declared_demand_triggers_an_unconsumed_notice() -> None:
     assert any("pairings_per_bid_period" in n for n in notices)
 
 
-def test_absent_demand_triggers_no_notice() -> None:
-    cfg = config.load()
-    cfg = cfg.model_copy(update={"demand": None})
-    assert config.unconsumed_notices(cfg) == []
+def test_absent_demand_triggers_no_demand_notice() -> None:
+    """Scoped to demand: the notice list is no longer demand-only. It now also
+    carries the cost fields nothing books (positioning, delay_per_minute), which
+    are declared regardless of whether `demand` is present."""
+    cfg = config.load().model_copy(update={"demand": None})
+    notices = config.unconsumed_notices(cfg)
+    assert not [n for n in notices if n.startswith("demand.")]
+    assert notices, "the non-demand notices must still be reported"
 
 
 # ============================================================ [CONFIRM]
@@ -344,6 +348,9 @@ ALLOWLIST: dict[str, set[float]] = {
         2, 10, 240, 100, 20, 50,
         200.0, 150.0, 1000, 0.975, 203,
         960.0, 1560.0, 60.0, 600.0, 250.0, 28, 7, 24, 5,
+        # S1c-05: 74 is the V3 warning banner's width in terminal characters --
+        # presentation, same category as v5_trace.py's 78 and v2_erlang.py's 62.
+        74,
         900.0, 1050.0, 1100.0, 800.0, 700.0, 1400.0, 2000.0, 502, 1440,
     },
     # S0-09b: cascade.py's mandatory-rest hours (11h base / 10h away) and the
@@ -492,3 +499,75 @@ def test_allowlist_has_no_stale_entries() -> None:
         }
         stale = values - found
         assert not stale, f"{rel}: ALLOWLIST values no longer present in the file: {stale}"
+
+
+# ================================ every declared config field must be consumed
+# The runtime notice (config.unconsumed_notices) names ONE key by hand:
+# demand.pairings_per_bid_period. Being hand-maintained, it missed two real
+# cases -- `appr_compensation`, defined and costed but booked nowhere (found in
+# slice 1b), and `mode`, which the engine ignored entirely while base.yaml
+# documented a REDUCED mode that did not exist (S1c-01 AC4). This derives the
+# answer from what the code actually reads instead.
+#
+# Method: collect every attribute name accessed anywhere in src/ (excluding
+# config.py, which only DEFINES the fields), then require each config model
+# field name to appear. Known limitation: a field whose name collides with an
+# unrelated attribute elsewhere reads as consumed -- `mode` would now pass on
+# EligibilityEngine.mode alone. So this catches a field nothing anywhere
+# touches, which is the case that actually occurred twice, not every possible
+# mis-wiring.
+# Imported, not restated: config.DECLARED_NOT_YET_CONSUMED is the single source
+# of truth that unconsumed_notices() also reads, so a key cannot be exempted
+# here while staying invisible at runtime.
+DECLARED_NOT_YET_CONSUMED = {k.split(".")[-1] for k in config.DECLARED_NOT_YET_CONSUMED}
+# `positioning` is the section holding two such fields; with both exempt the
+# section object itself is equally unread.
+DECLARED_NOT_YET_CONSUMED.add("positioning")
+
+
+def _attribute_names_used_in_src() -> set[str]:
+    used: set[str] = set()
+    for py, _rel in _guarded_files():
+        # config.py is INCLUDED: field definitions are AnnAssign, not Attribute,
+        # so they do not self-satisfy -- but genuine dynamic reads that live
+        # there do count (e.g. APPRCompensation.on_cancellation resolves a band
+        # via getattr(self, self.cancellation_band)).
+        tree = ast.parse(py.read_text(), filename=str(py))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                used.add(node.attr)
+            # cfg.model_copy(update={"population": ...}) and getattr(x, "name")
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                used.add(node.value)
+    return used
+
+
+def _config_field_names() -> set[str]:
+    names: set[str] = set()
+    for attr in dir(config):
+        obj = getattr(config, attr)
+        if isinstance(obj, type) and issubclass(obj, BaseModel):
+            names |= set(obj.model_fields)
+    return names
+
+
+def test_every_config_field_is_read_by_some_code_path() -> None:
+    """A declared, documented config key that nothing reads is a promise the
+    software does not keep -- worse than an absent one, because it reads as a
+    supported knob."""
+    used = _attribute_names_used_in_src()
+    orphans = sorted(
+        name for name in _config_field_names()
+        if name not in used and name not in DECLARED_NOT_YET_CONSUMED
+    )
+    assert not orphans, (
+        "config field(s) declared but read nowhere in src/: " + ", ".join(orphans)
+        + "\nEither consume them, remove them, or add them to "
+          "DECLARED_NOT_YET_CONSUMED with a reason (and a runtime notice)."
+    )
+
+
+def test_the_consumption_guard_can_actually_fail() -> None:
+    """Negative control: the scan must not report everything as used."""
+    used = _attribute_names_used_in_src()
+    assert "a_field_no_module_will_ever_reference" not in used

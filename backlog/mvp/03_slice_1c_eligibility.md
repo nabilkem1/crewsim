@@ -1,6 +1,6 @@
 # Slice 1c — Eligibility Engine FULL
 
-**Epic E1c** · 5 stories · Gate: **V3 — eligibility rate on the HOLDOUT window**
+**Epic E1c** · 6 stories · Gate: **V3 — eligibility rate on the HOLDOUT window**
 Needs datasets **D2, D4, D5**.
 
 This slice completes the legality surrogate and turns eligibility into a measured, validated output.

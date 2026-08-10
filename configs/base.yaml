@@ -90,7 +90,14 @@ sensitivity:
   lambda_risk_dial: [0.0, 0.25, 0.5, 0.75, 1.0]
   instability_threshold: 2   # R* swing (units) across a swept parameter that counts as "unstable" (S1d-05)
 
-mode: FULL                   # REDUCED is for smoke tests only — never a recommendation
+# FULL computes eligibility from real crew state (S1c-01). REDUCED replaces it
+# with Bernoulli(p_elig) for fast smoke tests, and any command that would
+# produce a RECOMMENDATION refuses to run under it -- a recommendation derived
+# from a coin flip is worse than no recommendation.
+mode: FULL                   # FULL | REDUCED
+reduced_mode:
+  # Only read when mode == REDUCED.
+  p_elig: 0.3                # [CONFIRM: Data Science] Bernoulli eligibility for smoke tests
 costs_file: costs_pilots.yaml
 
 # =============================================================================

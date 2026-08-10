@@ -158,7 +158,11 @@ class Simulation:
         self.draft_mode = draft_mode
 
         self.ledger = CostLedger()
-        self.elig = EligibilityEngine(mode="FULL", cfg=cfg)
+        # S1c-01 AC4: the mode comes from configs/base.yaml, not a literal.
+        # It was hardcoded "FULL", which made REDUCED unreachable from every
+        # real path and left `mode:` in base.yaml documenting a mode that did
+        # not exist. p_elig likewise comes from config, not a default argument.
+        self.elig = EligibilityEngine.from_config(cfg)
         self._uid = 0
         self.open_items: dict[int, OpenTimeItem] = {}
         self.n_drafts = 0

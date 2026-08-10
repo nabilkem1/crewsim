@@ -48,6 +48,84 @@ def _money(amount: float) -> str:
     return f"${amount:,.2f}"
 
 
+def _refuse_if_reduced(cfg, command: str) -> int | None:
+    """S1c-01 AC4: a command that emits a RECOMMENDATION must refuse under
+    REDUCED mode, where eligibility is Bernoulli(p_elig) rather than computed
+    from crew state.
+
+    Called before any simulation runs, so the refusal costs nothing. `run` and
+    `compare` are deliberately NOT guarded -- they report a scenario's cost, not
+    a reserve level to adopt, and REDUCED exists precisely so those can be used
+    as a fast smoke test. They print a REDUCED banner instead.
+
+    Returns an exit code to propagate, or None to continue.
+    """
+    from .engine.eligibility import EligibilityEngine
+
+    try:
+        EligibilityEngine.from_config(cfg).check_recommendation_safe()
+    except RuntimeError as exc:
+        print(f"error: `crewsim {command}` produces a recommendation.\n  {exc}")
+        return 1
+    return None
+
+
+def _print_reduced_banner(cfg) -> None:
+    """Mark smoke-test output as smoke-test output."""
+    if cfg.mode != "REDUCED":
+        return
+    p_elig = cfg.reduced_mode.p_elig if cfg.reduced_mode else "?"
+    print(f"\n  [REDUCED MODE] eligibility is Bernoulli(p_elig={p_elig}), NOT computed from "
+          f"crew state.\n  Figures below are a smoke test and must not be used as a "
+          f"recommendation (S1c-01).")
+
+
+def _print_v3_verdict(cfg, sims, window: str = "holdout") -> bool:
+    """S1c-05 AC3: state the V3 verdict on EVERY run, not only `gate v3`.
+
+    "A number failing V3 must never reach a planner silently" is the AC's own
+    wording, and until this existed a plain `crewsim run` printed an E[cost] of
+    several million with no indication that the model's central eligibility
+    claim was failing its holdout gate by more than 4x.
+
+    Warns rather than refuses. Refusing to print a cost whenever V3 fails would
+    today produce no output at all for any policy -- V3 fails by design against
+    the mock corpus (recorded decision, S1c-05), so a hard refusal here would
+    make the tool unusable rather than safe. `run --assert-invariants` keeps the
+    hard failure: that flag is the explicit "I am about to trust this" mode and
+    already exits non-zero.
+
+    Costs one reconstruct_eligibility (~0.8s) and no extra simulation -- the
+    distribution comes from sims that have already run.
+
+    Returns True if V3 passed, False otherwise (including not-evaluated).
+    """
+    from .gates.v3_eligibility import run_v3_gate
+
+    fractions = [f for sim in sims for f in sim.elig.get_distribution()]
+    if not fractions:
+        print("\n  [GATE V3] not evaluated -- this run produced no eligibility events "
+              "(no reserve pool, or no open time). Cost figures below are unvalidated.")
+        return False
+
+    result = run_v3_gate(cfg, fractions, window=window)
+    if result["pass"]:
+        print(f"\n  [GATE V3 PASS] eligibility {result['sim_mean']:.3f} within historical "
+              f"[{result['ci_lower']:.3f}, {result['ci_upper']:.3f}] ({window}, "
+              f"{len(fractions):,} events)")
+        return True
+
+    bar = "!" * 74
+    print(f"\n{bar}")
+    print(f"!! GATE V3 FAILED -- simulated eligibility {result['sim_mean']:.3f} vs historical "
+          f"[{result['ci_lower']:.3f}, {result['ci_upper']:.3f}] ({window})")
+    print(f"!! Gap {result['gap']:+.3f} over {len(fractions):,} events.")
+    print("!! Suspect mechanism: reserve rotation or L8 notice time (NOT a parameter to nudge).")
+    print("!! The figures below are UNVALIDATED. Run `crewsim gate v3` for the full report.")
+    print(bar)
+    return False
+
+
 def _params_provenance(cfg) -> tuple[str, str]:
     """(params_version, content_hash) of the frozen parameter store this run reads.
 
@@ -1040,6 +1118,9 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             cfg = config.load()
+            refused = _refuse_if_reduced(cfg, "gate v9")
+            if refused is not None:
+                return refused
             costs = config.load_costs(cfg)
             n_valid_tp = len([tp for tp in cfg.sensitivity.terminal_penalty if tp > 1.0])
             print(f"Gate V9: simulating {len(R_CANDIDATE_POLICIES)} reserve policies "
@@ -1291,7 +1372,12 @@ def main(argv: list[str] | None = None) -> int:
         scenario_costs = des.measured_window_costs(cfg, sims)
         mean_cost = sum(scenario_costs) / len(scenario_costs)
 
-        print(f"Policy {policy.policy_id} -- {args.scenarios} CRN scenario(s), master_seed={master_seed!r}")
+        # S1c-05 AC3: the verdict precedes the numbers it qualifies, so the
+        # caveat is read before the figure rather than after it.
+        _print_reduced_banner(cfg)
+        _print_v3_verdict(cfg, sims)
+
+        print(f"\nPolicy {policy.policy_id} -- {args.scenarios} CRN scenario(s), master_seed={master_seed!r}")
         print(f"  E[cost]  (measured window) = ${mean_cost:,.2f}")
         print(f"  CVaR95   (measured window) = ${des.cvar95(scenario_costs):,.2f}")
         print(f"  min/max                    = ${min(scenario_costs):,.2f} / ${max(scenario_costs):,.2f}")
@@ -1349,7 +1435,14 @@ def main(argv: list[str] | None = None) -> int:
             t_stat, p_val = float('nan'), float('nan')
             ci_lower, ci_upper = float('nan'), float('nan')
 
-        print(f"Comparing {args.policies[0]} vs {args.policies[1]} over {n} scenarios (CRN):")
+        # S1c-05 AC3: `compare` prints a paired cost difference a planner may act
+        # on directly, so it carries the same verdict as `run`. Pooled across
+        # both policies -- if either side's eligibility is unvalidated, the
+        # difference between them is too.
+        _print_reduced_banner(cfg)
+        _print_v3_verdict(cfg, sims_a + sims_b)
+
+        print(f"\nComparing {args.policies[0]} vs {args.policies[1]} over {n} scenarios (CRN):")
         print(f"Mean Difference: ${mean_diff:,.2f}")
         if n > 1:
             print(f"95% CI: [${ci_lower:,.2f}, ${ci_upper:,.2f}]")
@@ -1666,6 +1759,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         cfg = config.load()
+        refused = _refuse_if_reduced(cfg, "report")
+        if refused is not None:
+            return refused
         costs = config.load_costs(cfg)
         print(f"Building report: {len(policy_names)} polic(y/ies) x {args.scenarios} scenario(s) each...")
         path = build_report(
@@ -1685,6 +1781,9 @@ def main(argv: list[str] | None = None) -> int:
         grid_path = args.config or str(config.repo_root() / "configs" / "grid_mvp.yaml")
         policy_names = load_grid_config(grid_path)
         cfg = config.load()
+        refused = _refuse_if_reduced(cfg, "grid")
+        if refused is not None:
+            return refused
         costs = config.load_costs(cfg)
         print(f"Running grid: {len(policy_names)} combination(s) x {args.scenarios} scenario(s) "
               f"each (CRN-paired, master_seed={args.master_seed!r})...")

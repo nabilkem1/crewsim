@@ -101,3 +101,85 @@ def test_reduced_mode():
     # Must refuse recommendation in REDUCED mode
     with pytest.raises(RuntimeError, match="REDUCED mode"):
         engine.check_recommendation_safe()
+
+
+# ======================= S1c-01 AC4: REDUCED is real, and refuses ============
+def test_reduced_mode_is_reachable_from_config():
+    """The engine read a hardcoded mode="FULL" and ignored cfg.mode entirely,
+    so base.yaml documented a REDUCED mode that could not be selected."""
+    from crewsim import config
+    from crewsim.engine.eligibility import EligibilityEngine
+
+    cfg = config.load()
+    assert EligibilityEngine.from_config(cfg).mode == "FULL"
+
+    reduced = cfg.model_copy(update={"mode": "REDUCED"})
+    engine = EligibilityEngine.from_config(reduced)
+    assert engine.mode == "REDUCED"
+    assert engine.p_elig == cfg.reduced_mode.p_elig, "p_elig must come from config"
+
+
+def test_reduced_mode_still_respects_pool_membership():
+    """REDUCED replaces the LEGALITY check with a coin flip, not the structural
+    pool. It used to thin `reserves` directly, so it could return a crew member
+    with no covering RESERVE block and des.py's assign_reserve raised
+    'Crew P00453 has no RESERVE block overlapping [...]'. Unreachable at the
+    time, so never observed."""
+    import numpy as np
+
+    from crewsim.engine.eligibility import EligibilityEngine
+
+    covered = CrewMember(
+        crew_id="R_IN", base="YUL", fleet_quals={"A330"}, position="CA", seniority=1,
+        calendar=[Block(start=0.0, end=1000.0, btype=BlockType.RESERVE, reserve_call_type="SC")],
+    )
+    uncovered = CrewMember(
+        crew_id="R_OUT", base="YUL", fleet_quals={"A330"}, position="CA", seniority=2,
+        calendar=[Block(start=0.0, end=100.0, btype=BlockType.RESERVE, reserve_call_type="SC")],
+    )
+    item = OpenTimeItem(
+        uid=1, pairing_id="P1", base="YUL", fleet="A330", position="CA",
+        start=200.0, end=500.0, deadline=200.0, origin="SICK_CALL", root_event_uid=1,
+    )
+    # p_elig=1.0 -- everyone in the pool passes the coin flip, so anything
+    # returned that is NOT pool-eligible is a pool bug, not a sampling artefact.
+    engine = EligibilityEngine(mode="REDUCED", p_elig=1.0)
+    elig = engine.eligible_reserves([covered, uncovered], item, now=100.0,
+                                    rng=np.random.default_rng(0))
+    assert [c.crew_id for c in elig] == ["R_IN"]
+
+
+def test_reduced_mode_records_its_distribution():
+    """V3 and --report-eligibility read get_distribution(); REDUCED returned
+    early and recorded nothing, so both would have seen an empty series."""
+    import numpy as np
+
+    from crewsim.engine.eligibility import EligibilityEngine
+
+    crew = [
+        CrewMember(crew_id=f"R{i}", base="YUL", fleet_quals={"A330"}, position="CA",
+                   seniority=i,
+                   calendar=[Block(start=0.0, end=1000.0, btype=BlockType.RESERVE)])
+        for i in range(10)
+    ]
+    item = OpenTimeItem(uid=1, pairing_id="P1", base="YUL", fleet="A330", position="CA",
+                        start=200.0, end=500.0, deadline=200.0, origin="SICK_CALL",
+                        root_event_uid=1)
+    engine = EligibilityEngine(mode="REDUCED", p_elig=0.5)
+    engine.eligible_reserves(crew, item, now=100.0, rng=np.random.default_rng(0))
+    assert len(engine.get_distribution()) == 1
+
+
+def test_a_reduced_run_completes_end_to_end():
+    """The regression that mattered: a real REDUCED scenario must run at all."""
+    from crewsim import config
+    from crewsim.engine import des
+    from crewsim.engine.policy import load_policy
+
+    cfg = config.load().model_copy(update={"mode": "REDUCED"})
+    costs = config.load_costs(cfg)
+    policy = load_policy(config.repo_root() / "configs" / "policies" / "R6.yaml")
+    sim = des.run_scenario(cfg, costs, policy, scenario_id=0, master_seed="master",
+                           n_scenarios=1)
+    assert sim.elig.mode == "REDUCED"
+    assert sim.elig.get_distribution(), "a REDUCED run must still log eligibility"

@@ -356,3 +356,88 @@ def test_cli_run_kpis():
     assert "Draft distribution" in result.stdout
     assert "Gini" in result.stdout
     assert "premium earnings" in result.stdout
+
+
+# ===================== S1c-05 AC3: V3 must not be silent on any run =========
+def test_plain_run_surfaces_the_v3_verdict():
+    """AC3: "Every run surfaces this ... a number failing V3 must never reach a
+    planner silently."
+
+    Until this was wired, `crewsim run` printed an E[cost] of several million
+    with no mention of V3 at all, while the gate was failing by more than 4x.
+    """
+    result = subprocess.run(
+        ["uv", "run", "crewsim", "run", "--policy", "R6", "--scenarios", "1"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0
+    assert "E[cost]" in result.stdout, "sanity: the run must still report a cost"
+    assert "GATE V3" in result.stdout, (
+        "a cost figure reached the user with no V3 verdict attached"
+    )
+
+
+def test_compare_surfaces_the_v3_verdict():
+    """`compare` prints a paired difference a planner may act on directly, so it
+    carries the same verdict."""
+    result = subprocess.run(
+        ["uv", "run", "crewsim", "compare", "--policies", "R6", "R10", "--scenarios", "1"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0
+    assert "Mean Difference" in result.stdout
+    assert "GATE V3" in result.stdout
+
+
+def test_failing_v3_marks_the_figures_unvalidated():
+    """A verdict the reader can miss is not a verdict. When V3 fails the banner
+    must say so in terms that stop someone quoting the number."""
+    result = subprocess.run(
+        ["uv", "run", "crewsim", "run", "--policy", "R6", "--scenarios", "1"],
+        capture_output=True, text=True, check=False,
+    )
+    if "GATE V3 FAILED" not in result.stdout:
+        import pytest
+        pytest.skip("V3 passes on this corpus -- nothing to assert about the failure banner")
+    assert "UNVALIDATED" in result.stdout
+    assert "gate v3" in result.stdout, "the banner must point at the full report"
+
+
+def test_v3_verdict_reports_pass_when_the_distribution_is_in_band(capsys):
+    """The PASS branch is unreachable against the current corpus (V3 fails by
+    design there), so it is exercised directly with an in-band distribution --
+    otherwise only the failure path would ever be executed."""
+    import types
+
+    from crewsim import config
+    from crewsim.cli import _print_v3_verdict
+    from crewsim.data.eligibility_target import reconstruct_eligibility
+
+    cfg = config.load()
+    hist = reconstruct_eligibility(cfg, "holdout")
+    sims = [types.SimpleNamespace(
+        elig=types.SimpleNamespace(get_distribution=lambda: [hist["mean"]] * 50)
+    )]
+
+    assert _print_v3_verdict(cfg, sims) is True
+    out = capsys.readouterr().out
+    assert "GATE V3 PASS" in out
+    assert "FAILED" not in out
+
+
+def test_v3_verdict_says_not_evaluated_rather_than_failing_on_no_events(capsys):
+    """Zero eligibility events would give a mean of 0.0, which is below the
+    historical band and would read as a FAIL. Absence of evidence is not a
+    failing gate -- it has to say which one it is."""
+    import types
+
+    from crewsim import config
+    from crewsim.cli import _print_v3_verdict
+
+    sims = [types.SimpleNamespace(
+        elig=types.SimpleNamespace(get_distribution=list)
+    )]
+    assert _print_v3_verdict(config.load(), sims) is False
+    out = capsys.readouterr().out
+    assert "not evaluated" in out
+    assert "FAILED" not in out

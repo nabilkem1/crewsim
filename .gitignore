@@ -4,6 +4,10 @@
 # committed under tools/.
 output/
 
+# Runtime job/metadata store created by src/crewsim/api/db.py on first request.
+# A local sqlite file, not an input — never tracked.
+crewsim_metadata.db
+
 __pycache__/
 *.py[cod]
 .venv/
