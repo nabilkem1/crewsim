@@ -182,6 +182,21 @@ class Simulation:
         self.open_items: dict[int, OpenTimeItem] = {}
         self.n_drafts = 0
         self.n_cascading_drafts = 0
+        # S1d-02: the reserve-loss half of the cascade mechanism. Counters, not
+        # ledger rows: losing a future reserve block carries no direct dollar
+        # cost -- its cost is emergent, arriving later as a draft or a
+        # cancellation that a thinner pool could not prevent. Booking a
+        # RESERVE_LOSS amount would mean inventing a coefficient §4.4.2 does not
+        # have, so this stays a count. It is nonetheless recorded, because
+        # "counted separately" was an acceptance criterion and nothing counted
+        # it at all.
+        #
+        # Expect these to read 0 on the current pipeline, and that is a finding
+        # rather than a bug: drafting only ever selects line holders, and
+        # roster_loader strips RESERVE blocks from line holders when it carves
+        # the pool, so a draftee cannot hold one. See S1d-02's card.
+        self.n_reserve_loss_cascades = 0
+        self.n_reserve_blocks_lost = 0
         # S1b-07 (gate V2): cascades disabled turns the recovery pipeline into a
         # pure loss system -- no secondary arrivals feeding back into the queue --
         # which is the configuration the Erlang-B comparison is defined against.
@@ -559,10 +574,26 @@ class Simulation:
             delta, cascaded = compute_draft_delta(candidate, item, self.cfg, now)
             if not self.cascades_enabled:
                 cascaded = []
+            # S1d-02 AC2: a draft can break a future PAIRING (which re-enters as
+            # open time) or a future RESERVE block (a pure loss of capacity, no
+            # new flight). Both are cascades; only the first was ever counted,
+            # so half the mechanism was invisible to every report and to gate V4.
+            # Counted BEFORE apply_delta, while delta.removed_blocks still
+            # describes what is about to be taken away.
+            reserve_losses = sum(
+                1 for b in delta.removed_blocks if b.btype == BlockType.RESERVE
+            )
             apply_delta(candidate, delta)
             self.n_drafts += 1
             if cascaded:
                 self.n_cascading_drafts += 1
+            if reserve_losses:
+                self.n_reserve_loss_cascades += 1
+                self.n_reserve_blocks_lost += reserve_losses
+                self.log(
+                    f"item {item.uid}: draft of {candidate.crew_id} removed "
+                    f"{reserve_losses} future RESERVE block(s) -- capacity lost, no open item"
+                )
             # costs_pilots.yaml has 5 draft tiers (VACATION=4, SIMULATOR=5,
             # priced very differently: 2500 vs 4000); drafting.py's
             # determine_tier only distinguishes 4 (VACATION and SIMULATOR
@@ -590,6 +621,15 @@ class Simulation:
                 # re-assign uid") -- give each a real one before it enters the
                 # pipeline, or every cascade from this draft would collide.
                 cascade_item = dataclasses.replace(casc, uid=self.next_uid())
+                # The enqueue itself was silent, so a trace showed the draft and
+                # then, much later, an unexplained new item. Name the causal step.
+                visible_at = max(now, cascade_item.start - self._cascade_cfg.visibility_lag_hours * 60.0)
+                self.log(
+                    f"  CASCADE: draft of {candidate.crew_id} broke their future pairing "
+                    f"{cascade_item.pairing_id} at [{cascade_item.start:.0f}, "
+                    f"{cascade_item.end:.0f}] -> item {cascade_item.uid}, visible at "
+                    f"t={visible_at:.0f} ({self._cascade_cfg.visibility_lag_hours:.0f}h lead)"
+                )
                 self.env.process(self._delayed_pipeline(cascade_item))
             return True
 

@@ -2,6 +2,32 @@ from dataclasses import dataclass
 
 from . import crn
 
+# Every category the engine is capable of booking, and the condition under
+# which it books it. `LedgerRow.category` stays an open `str` -- DRAFT_TIER{k}
+# is built dynamically -- so this is a vocabulary, not an enum.
+#
+# It exists so a reader can tell "this cost never occurred in this scenario"
+# apart from "you typed the category wrong". Those look identical when the only
+# evidence is absence from the ledger, and S1d-03's documented manual check
+# (`explain-cost --category TERMINAL_PENALTY --summary`) died on exactly that
+# confusion: the category is real and correctly implemented, it simply never
+# fires at this corpus scale, and the CLI reported it as an error.
+BOOKABLE_CATEGORIES: dict[str, str] = {
+    "RESERVE_STAFFING": "per reserve, per covered day (structural, always present when R > 0)",
+    "RESERVE_UTILIZATION": "a reserve is converted to duty",
+    "DRAFT_TIER1": "a line holder is drafted off a day off",
+    "DRAFT_TIER2": "a line holder is drafted off a future pairing",
+    "DRAFT_TIER3": "a line holder is drafted out of ground training",
+    "DRAFT_TIER4": "a line holder is drafted out of vacation",
+    "DRAFT_TIER5": "a line holder is drafted out of a simulator slot",
+    "DEADHEAD": "a reserve is flown in from another base (S1c-07)",
+    "HOTEL": "that positioning trip incurs a hotel night",
+    "TRANSPORT": "that positioning trip incurs ground transport",
+    "CANCELLATION": "an open item reaches its deadline still uncovered",
+    "APPR_COMPENSATION": "statutory passenger compensation on a cancellation",
+    "TERMINAL_PENALTY": "an open item is still unresolved at horizon end",
+}
+
 
 @dataclass(frozen=True)
 class LedgerRow:

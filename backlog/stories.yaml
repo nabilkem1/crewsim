@@ -1303,6 +1303,7 @@ stories:
 - id: S1d-01
   epic: E1d Cascades
   phase: 1d
+  review_2026_08_09: "Epic E1d code review. P0: v4_cascade read draft_recall['rate'] -- score_recall returns 'recall', so the lookup hit its 1.0 default on every run and AC3's marginal-recall warning never fired once, while holdout recall is actually 0.000 (0 of 2584 drafts). It survived because the test hand-built the same wrong key. Fixed; _recall_of now raises on an unrecognised shape, and one test drives the real cascade_target. P0: the verdict was containment in a zero-width [0,0] band -- meaningless either way; V4 now returns INCONCLUSIVE naming the historical-side blocker. P1: S1d-02's reserve-loss cascade was counted by nothing and is unreachable from the draft pool (line holders have RESERVE stripped) -- counters added, unreachability pinned by a test. P1: explain-cost --category TERMINAL_PENALTY exited 1 for a category that simply never fires; ledger.BOOKABLE_CATEGORIES now separates 'did not happen' from 'cannot exist'. P2: explain-cascade ignored --scenario and cited a now-false 'cascades never fire' premise (4.2% do); it traces a real cascade now. P2: config.py misattributed delay_per_minute to S1d-03 (it is E2, S1b-09). P3: epic header said 9 stories, there are 12; S1d-01b's duplication was collapsed by S1a-07; S1d-04c/04d limitation sections were stale."
   title: Future-pairing cascade from the StateDelta
   size: M
   status: done
@@ -1348,6 +1349,7 @@ stories:
 - id: S1d-01b
   epic: E1d Cascades
   phase: 1d
+  review_2026_08_09: "Epic E1d code review. P0: v4_cascade read draft_recall['rate'] -- score_recall returns 'recall', so the lookup hit its 1.0 default on every run and AC3's marginal-recall warning never fired once, while holdout recall is actually 0.000 (0 of 2584 drafts). It survived because the test hand-built the same wrong key. Fixed; _recall_of now raises on an unrecognised shape, and one test drives the real cascade_target. P0: the verdict was containment in a zero-width [0,0] band -- meaningless either way; V4 now returns INCONCLUSIVE naming the historical-side blocker. P1: S1d-02's reserve-loss cascade was counted by nothing and is unreachable from the draft pool (line holders have RESERVE stripped) -- counters added, unreachability pinned by a test. P1: explain-cost --category TERMINAL_PENALTY exited 1 for a category that simply never fires; ledger.BOOKABLE_CATEGORIES now separates 'did not happen' from 'cannot exist'. P2: explain-cascade ignored --scenario and cited a now-false 'cascades never fire' premise (4.2% do); it traces a real cascade now. P2: config.py misattributed delay_per_minute to S1d-03 (it is E2, S1b-09). P3: epic header said 9 stories, there are 12; S1d-01b's duplication was collapsed by S1a-07; S1d-04c/04d limitation sections were stale."
   title: "Allowlist compute_draft_delta's duplicated L2 rest-hour constants"
   size: S
   status: done
@@ -1377,6 +1379,7 @@ stories:
 - id: S1d-02
   epic: E1d Cascades
   phase: 1d
+  review_2026_08_09: "Epic E1d code review. P0: v4_cascade read draft_recall['rate'] -- score_recall returns 'recall', so the lookup hit its 1.0 default on every run and AC3's marginal-recall warning never fired once, while holdout recall is actually 0.000 (0 of 2584 drafts). It survived because the test hand-built the same wrong key. Fixed; _recall_of now raises on an unrecognised shape, and one test drives the real cascade_target. P0: the verdict was containment in a zero-width [0,0] band -- meaningless either way; V4 now returns INCONCLUSIVE naming the historical-side blocker. P1: S1d-02's reserve-loss cascade was counted by nothing and is unreachable from the draft pool (line holders have RESERVE stripped) -- counters added, unreachability pinned by a test. P1: explain-cost --category TERMINAL_PENALTY exited 1 for a category that simply never fires; ledger.BOOKABLE_CATEGORIES now separates 'did not happen' from 'cannot exist'. P2: explain-cascade ignored --scenario and cited a now-false 'cascades never fire' premise (4.2% do); it traces a real cascade now. P2: config.py misattributed delay_per_minute to S1d-03 (it is E2, S1b-09). P3: epic header said 9 stories, there are 12; S1d-01b's duplication was collapsed by S1a-07; S1d-04c/04d limitation sections were stale."
   title: Future-reserve cascade (structural pool loss)
   size: M
   status: done
@@ -1404,6 +1407,7 @@ stories:
 - id: S1d-03
   epic: E1d Cascades
   phase: 1d
+  review_2026_08_09: "Epic E1d code review. P0: v4_cascade read draft_recall['rate'] -- score_recall returns 'recall', so the lookup hit its 1.0 default on every run and AC3's marginal-recall warning never fired once, while holdout recall is actually 0.000 (0 of 2584 drafts). It survived because the test hand-built the same wrong key. Fixed; _recall_of now raises on an unrecognised shape, and one test drives the real cascade_target. P0: the verdict was containment in a zero-width [0,0] band -- meaningless either way; V4 now returns INCONCLUSIVE naming the historical-side blocker. P1: S1d-02's reserve-loss cascade was counted by nothing and is unreachable from the draft pool (line holders have RESERVE stripped) -- counters added, unreachability pinned by a test. P1: explain-cost --category TERMINAL_PENALTY exited 1 for a category that simply never fires; ledger.BOOKABLE_CATEGORIES now separates 'did not happen' from 'cannot exist'. P2: explain-cascade ignored --scenario and cited a now-false 'cascades never fire' premise (4.2% do); it traces a real cascade now. P2: config.py misattributed delay_per_minute to S1d-03 (it is E2, S1b-09). P3: epic header said 9 stories, there are 12; S1d-01b's duplication was collapsed by S1a-07; S1d-04c/04d limitation sections were stale."
   title: "Event E9 \u2014 terminal penalty on residual open items"
   size: S
   status: done
@@ -1430,6 +1434,7 @@ stories:
 - id: S1d-04
   epic: E1d Cascades
   phase: 1d
+  review_2026_08_09: "Epic E1d code review. P0: v4_cascade read draft_recall['rate'] -- score_recall returns 'recall', so the lookup hit its 1.0 default on every run and AC3's marginal-recall warning never fired once, while holdout recall is actually 0.000 (0 of 2584 drafts). It survived because the test hand-built the same wrong key. Fixed; _recall_of now raises on an unrecognised shape, and one test drives the real cascade_target. P0: the verdict was containment in a zero-width [0,0] band -- meaningless either way; V4 now returns INCONCLUSIVE naming the historical-side blocker. P1: S1d-02's reserve-loss cascade was counted by nothing and is unreachable from the draft pool (line holders have RESERVE stripped) -- counters added, unreachability pinned by a test. P1: explain-cost --category TERMINAL_PENALTY exited 1 for a category that simply never fires; ledger.BOOKABLE_CATEGORIES now separates 'did not happen' from 'cannot exist'. P2: explain-cascade ignored --scenario and cited a now-false 'cascades never fire' premise (4.2% do); it traces a real cascade now. P2: config.py misattributed delay_per_minute to S1d-03 (it is E2, S1b-09). P3: epic header said 9 stories, there are 12; S1d-01b's duplication was collapsed by S1a-07; S1d-04c/04d limitation sections were stale."
   title: "V4 gate \u2014 cascade rate on the HOLDOUT window"
   size: M
   status: done
@@ -1567,6 +1572,7 @@ stories:
 - id: S1d-04c
   epic: E1d Cascades
   phase: 1d
+  review_2026_08_09: "Epic E1d code review. P0: v4_cascade read draft_recall['rate'] -- score_recall returns 'recall', so the lookup hit its 1.0 default on every run and AC3's marginal-recall warning never fired once, while holdout recall is actually 0.000 (0 of 2584 drafts). It survived because the test hand-built the same wrong key. Fixed; _recall_of now raises on an unrecognised shape, and one test drives the real cascade_target. P0: the verdict was containment in a zero-width [0,0] band -- meaningless either way; V4 now returns INCONCLUSIVE naming the historical-side blocker. P1: S1d-02's reserve-loss cascade was counted by nothing and is unreachable from the draft pool (line holders have RESERVE stripped) -- counters added, unreachability pinned by a test. P1: explain-cost --category TERMINAL_PENALTY exited 1 for a category that simply never fires; ledger.BOOKABLE_CATEGORIES now separates 'did not happen' from 'cannot exist'. P2: explain-cascade ignored --scenario and cited a now-false 'cascades never fire' premise (4.2% do); it traces a real cascade now. P2: config.py misattributed delay_per_minute to S1d-03 (it is E2, S1b-09). P3: epic header said 9 stories, there are 12; S1d-01b's duplication was collapsed by S1a-07; S1d-04c/04d limitation sections were stale."
   title: "des.py: single-scenario recovery pipeline (reserve \u2192 draft \u2192 cascade \u2192 E8 \u2192 cancel)"
   size: M
   status: done
@@ -1666,6 +1672,7 @@ stories:
 - id: S1d-04d
   epic: E1d Cascades
   phase: 1d
+  review_2026_08_09: "Epic E1d code review. P0: v4_cascade read draft_recall['rate'] -- score_recall returns 'recall', so the lookup hit its 1.0 default on every run and AC3's marginal-recall warning never fired once, while holdout recall is actually 0.000 (0 of 2584 drafts). It survived because the test hand-built the same wrong key. Fixed; _recall_of now raises on an unrecognised shape, and one test drives the real cascade_target. P0: the verdict was containment in a zero-width [0,0] band -- meaningless either way; V4 now returns INCONCLUSIVE naming the historical-side blocker. P1: S1d-02's reserve-loss cascade was counted by nothing and is unreachable from the draft pool (line holders have RESERVE stripped) -- counters added, unreachability pinned by a test. P1: explain-cost --category TERMINAL_PENALTY exited 1 for a category that simply never fires; ledger.BOOKABLE_CATEGORIES now separates 'did not happen' from 'cannot exist'. P2: explain-cascade ignored --scenario and cited a now-false 'cascades never fire' premise (4.2% do); it traces a real cascade now. P2: config.py misattributed delay_per_minute to S1d-03 (it is E2, S1b-09). P3: epic header said 9 stories, there are 12; S1d-01b's duplication was collapsed by S1a-07; S1d-04c/04d limitation sections were stale."
   title: "CRN scenario loop + crewsim run/compare/gate v3/v4 off their mocks"
   size: M
   status: done

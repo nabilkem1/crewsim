@@ -134,3 +134,82 @@ def test_trace_only_recorded_when_enabled():
 
     sim_on = _run(trace=True)
     assert len(sim_on.trace) > 0
+
+
+def test_reserve_loss_cascade_is_counted_separately():
+    """S1d-02 AC2: a draft that breaks a future RESERVE block must be countable
+    apart from one that breaks a future PAIRING.
+
+    Nothing counted it before: `n_cascading_drafts` increments only when
+    `cascaded` (pairing items) is non-empty, and a reserve loss produces none by
+    design -- it is lost capacity, not an uncovered flight. So the whole
+    reserve half of the cascade mechanism was invisible to every report and to
+    gate V4's simulated rate.
+
+    Forced, the same way test_cascade_path_fires_end_to_end forces the pairing
+    half, and for a stronger reason: this branch is currently UNREACHABLE from
+    the production pipeline. Drafting only ever selects line holders, and
+    roster_loader strips RESERVE blocks from line holders when it carves the
+    pool, so a real draftee cannot hold one. Measured across 4 real R10
+    scenarios: 402 drafts, 17 broke a pairing, 0 broke a reserve. This test is
+    what keeps the counter honest if that ever changes.
+    """
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+
+    crew = CrewMember(
+        crew_id="C1", base="YUL", fleet_quals={"A321neoLR"}, position="FO", seniority=1,
+        # A future RESERVE block inside the drafted duty's mandatory-rest window,
+        # and no future pairing -- so the ONLY cascade is the reserve loss.
+        calendar=[Block(start=1050.0, end=1400.0, btype=BlockType.RESERVE)],
+    )
+    item = OpenTimeItem(
+        uid=1, pairing_id="P_DRAFT", base="YUL", fleet="A321neoLR", position="FO",
+        start=800.0, end=900.0, deadline=700.0, origin="SICK_CALL", root_event_uid=1,
+    )
+
+    env = simpy.Environment()
+    sim = des.Simulation(
+        env, cfg, costs, policy_id="TEST", scenario_id=0, roster=[crew], reserves=[],
+        rng=None, horizon_minutes=2000.0, trace=True,
+    )
+    sim._uid = item.uid
+    assert sim._attempt_resolution(item), "the only candidate is legal and must be drafted"
+
+    assert sim.n_drafts == 1
+    assert sim.n_cascading_drafts == 0, "no pairing was broken -- this is purely a capacity loss"
+    assert sim.n_reserve_loss_cascades == 1, (
+        "the draft removed a future RESERVE block and nothing counted it"
+    )
+    assert sim.n_reserve_blocks_lost == 1
+    assert not any(b.btype == BlockType.RESERVE for b in crew.calendar), (
+        "the future reserve block must actually be gone from the calendar"
+    )
+    # No dollar row: a reserve loss has no direct cost in §4.4.2, and inventing
+    # one would be a fabricated coefficient. Its cost is emergent.
+    assert not [r for r in sim.ledger.rows if "RESERVE_LOSS" in r.category]
+
+
+def test_reserve_loss_is_unreachable_from_the_real_draft_pool():
+    """Pins the reason the counter above reads 0 in production, so the fact
+    stays a documented finding rather than quietly becoming false.
+
+    If load_rosters ever stops stripping RESERVE blocks from line holders, this
+    fails and S1d-02's card needs revisiting -- the mechanism would become live.
+    """
+    from crewsim.engine.policy import load_policy
+    from crewsim.engine.roster_loader import load_rosters
+
+    cfg = config.load()
+    policy = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
+    active, _ = load_rosters(
+        cfg, base=cfg.scope.base, fleet=cfg.scope.fleet, position=cfg.scope.position, policy=policy
+    )
+    draftable = [c for c in active if not c._is_reserve]
+    assert draftable, "no line holders loaded -- the premise of this test is gone"
+    with_reserve = [c for c in draftable if any(b.btype == BlockType.RESERVE for b in c.calendar)]
+    assert not with_reserve, (
+        f"{len(with_reserve)} draftable crew hold RESERVE blocks -- the reserve-loss "
+        f"cascade is now reachable in production, so S1d-02's acceptance criteria and "
+        f"gate V4's simulated rate both need revisiting"
+    )

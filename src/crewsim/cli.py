@@ -151,6 +151,39 @@ def _params_provenance(cfg) -> tuple[str, str]:
     return store.get("params_version", "unknown"), store.get("content_hash", "unknown")
 
 
+def _first_real_cascade(cfg, args) -> list[str] | None:
+    """The first genuine pairing cascade in `args.scenario`, as trace lines.
+
+    Returns None when that scenario produced none, so the caller can fall back
+    to its deterministic fixture and say which it showed. Reads the trace the
+    Simulation already emits rather than re-deriving anything -- so if the
+    engine's cascade behaviour regresses, this output changes with it.
+    """
+    from .engine import des
+    from .engine.policy import load_policy
+
+    costs = config.load_costs(cfg)
+    policy_name = getattr(args, "policy", None) or DEFAULT_EXPLAIN_POLICY
+    policy = load_policy(config.repo_root() / "configs" / "policies" / f"{policy_name}.yaml")
+    sim = des.run_scenario(
+        cfg, costs, policy, scenario_id=args.scenario,
+        master_seed=getattr(args, "master_seed", "master"),
+        n_scenarios=args.scenario + 1, trace=True,
+    )
+    if sim.n_cascading_drafts == 0:
+        return None
+    # The draft that caused it, then the cascade line itself -- which already
+    # names the broken pairing, the new item's uid and its visibility time, so
+    # the two lines carry the whole "draft -> pairing removed -> new open item
+    # at that pairing's time" chain this check exists to show. Deliberately not
+    # a fixed window of following lines: that needs an arbitrary line count,
+    # and an arbitrary count is a magic number wearing presentation's clothes.
+    for i, line in enumerate(sim.trace):
+        if "CASCADE" in line:
+            return [sim.trace[i - 1], line] if i else [line]
+    return None
+
+
 def _print_provenance(cfg, policy, master_seed: str, ledger_hash: str | None = None) -> None:
     """The §2.3/C3 provenance chain: data window -> params version -> master
     seed -> costs version -> policy hash -> results.
@@ -1088,6 +1121,11 @@ def main(argv: list[str] | None = None) -> int:
                   f"({len(sim_cascade_rates)} scenarios with drafts)...")
             result = run_v4_gate(cfg, sim_cascade_rates, window=args.window)
             print_v4_report(result, args.window)
+            # INCONCLUSIVE exits non-zero like FAIL -- it is explicitly not a
+            # pass -- but the report distinguishes them, because the two demand
+            # opposite responses: FAIL points at the simulation, INCONCLUSIVE
+            # points at the historical reconstruction. Both share exit 1 rather
+            # than taking a second code, since argparse already owns 2.
             if not result["pass"]:
                 return 1
             return 0
@@ -1543,7 +1581,24 @@ def main(argv: list[str] | None = None) -> int:
                 uid=1, pairing_id="P_DRAFT", base="YUL", fleet="A330", position="CA",
                 start=900.0, end=1050.0, deadline=800.0, origin="SICK_CALL", root_event_uid=1,
             )
-            print(f"Tracing Cascade Generation (Scenario {args.scenario}):")
+            # Prefer a REAL cascade from the requested scenario. The comment
+            # above (and this command's original design) rested on
+            # `n_cascading_drafts == 0 across 20 seeds`, which was true when
+            # written and is not any more -- slice 1b's displaced flying and
+            # slice 1c's cross-base dispatch changed the draft mix, and real
+            # cascades now fire in roughly 4% of drafts. Accepting --scenario
+            # and then ignoring it was the part that had to go: a flag that
+            # looks like it selects real data must select real data.
+            real = _first_real_cascade(cfg, args)
+            if real is not None:
+                print(f"Tracing Cascade Generation (Scenario {args.scenario}, REAL corpus):")
+                for line in real:
+                    print(f"  {line}")
+                print("\nVerification: draft -> later pairing removed -> new open item at "
+                      "that pairing's time.")
+                return 0
+            print(f"Tracing Cascade Generation (Scenario {args.scenario}: no cascade occurred, "
+                  f"showing a deterministic fixture instead):")
             print(f"  [t={item.start:.0f}] {crew.crew_id} drafted for pairing {item.pairing_id} "
                   f"[{item.start:.0f}, {item.end:.0f}]")
             delta, cascades = compute_draft_delta(crew, item, cfg, now=item.start)
@@ -1568,7 +1623,15 @@ def main(argv: list[str] | None = None) -> int:
                 uid=1, pairing_id="P_DRAFT", base="YUL", fleet="A330", position="CA",
                 start=800.0, end=900.0, deadline=700.0, origin="SICK_CALL", root_event_uid=1,
             )
-            print(f"Tracing Reserve Loss Cascade (Scenario {args.scenario}):")
+            # Deliberately a fixture, and --scenario is deliberately NOT used:
+            # this path is unreachable from the production pipeline, not merely
+            # rare. Drafting only ever selects line holders, and roster_loader
+            # strips RESERVE blocks from line holders when it carves the pool
+            # (roster_loader.py:300), so a real draftee cannot hold one.
+            # Measured across 4 real R10 scenarios: 402 drafts, 17 broke a
+            # pairing, 0 broke a reserve. Pinned by
+            # test_reserve_loss_is_unreachable_from_the_real_draft_pool.
+            print("Tracing Reserve Loss Cascade (deterministic fixture -- see note below):")
             print(f"  [t={item.start:.0f}] {crew.crew_id} drafted for pairing {item.pairing_id} "
                   f"[{item.start:.0f}, {item.end:.0f}]")
             delta, cascades = compute_draft_delta(crew, item, cfg, now=item.start)
@@ -1581,6 +1644,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [t={item.start:.0f}] {len(cascades)} open item(s) generated "
                   f"(a reserve loss is a capacity loss, not an uncovered flight)")
             print("\nVerification: reserve pool structurally reduced, no open item generated.")
+            print("\nNOTE: this is a fixture, not a scenario draw, and --scenario is ignored here.")
+            print("  The mechanism is UNREACHABLE from the production pipeline: drafting selects")
+            print("  only line holders, and roster_loader strips RESERVE blocks from line holders")
+            print("  when it carves the pool -- so a real draftee cannot hold one. Measured over 4")
+            print("  real R10 scenarios: 402 drafts, 17 broke a pairing, 0 broke a reserve.")
+            print("  `explain-recovery` reports the live counters (n_reserve_loss_cascades).")
         return 0
 
     if args.cmd == "explain-draft":
@@ -1709,8 +1778,25 @@ def main(argv: list[str] | None = None) -> int:
             wanted = [args.category] if args.category else None
             all_cats = sorted({r.category for r in rows})
             if wanted and wanted[0] not in all_cats:
-                print(f"error: category {wanted[0]!r} not in this scenario's ledger "
-                      f"(present: {all_cats})")
+                # A real category that simply never fired is not a user error.
+                # S1d-03's own documented manual check asks for TERMINAL_PENALTY,
+                # which is correctly implemented but never books at this corpus
+                # scale (every open item resolves before the horizon) -- so the
+                # check exited 1 and read as a broken command rather than as the
+                # finding it actually is.
+                from .engine.ledger import BOOKABLE_CATEGORIES
+
+                if wanted[0] in BOOKABLE_CATEGORIES:
+                    print(f"{wanted[0]}")
+                    print(f"  measured window ({cfg.horizon.measurement_days}d): {_money(0.0)} "
+                          f"over 0 row(s)")
+                    print(f"  full horizon  ({cfg.horizon.horizon_days}d): {_money(0.0)} over 0 row(s)")
+                    print(f"\n  Not booked in this scenario. This category books when "
+                          f"{BOOKABLE_CATEGORIES[wanted[0]]}, which did not happen here.")
+                    print(f"  Present in this scenario: {', '.join(all_cats)}")
+                    return 0
+                print(f"error: unknown cost category {wanted[0]!r} -- the engine cannot book it. "
+                      f"Bookable: {', '.join(sorted(BOOKABLE_CATEGORIES))}")
                 return 1
             for category in (wanted or all_cats):
                 cat_all = [r for r in rows if r.category == category]
@@ -1767,7 +1853,11 @@ def main(argv: list[str] | None = None) -> int:
         for category, amount in sorted(totals.items()):
             print(f"  {category:24s} ${amount:,.2f}")
         print(f"\nTotal cost: ${sim.ledger.total_cost():,.2f}")
-        print(f"Drafts: {sim.n_drafts} ({sim.n_cascading_drafts} cascading)")
+        # S1d-02: both halves of the cascade mechanism, so a reader can tell a
+        # pairing cascade from a reserve loss instead of seeing only the former.
+        print(f"Drafts: {sim.n_drafts} ({sim.n_cascading_drafts} broke a future pairing, "
+              f"{sim.n_reserve_loss_cascades} broke a future reserve block "
+              f"[{sim.n_reserve_blocks_lost} block(s) of capacity lost])")
         return 0
     if args.cmd == "report":
         from .reporting.report import build_report

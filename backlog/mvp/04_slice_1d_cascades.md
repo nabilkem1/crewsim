@@ -1,6 +1,6 @@
 # Slice 1d — Cascade Engine FULL
 
-**Epic E1d** · 9 stories · Gate: **V4 cascade rate on holdout · V9 parameter sensitivity**
+**Epic E1d** · 12 stories · Gate: **V4 cascade rate on holdout · V9 parameter sensitivity**
 Needs datasets **D6, D7** — which depend on the S0-03 reconstruction clearing its recall gate.
 
 Cascades are the mechanism that makes drafting expensive in a way a spreadsheet cannot capture: the
@@ -51,6 +51,23 @@ policy's 148-crew scale, so drawing `--scenario N` from a real run would make th
 flaky-to-vacuous rather than more real (same reasoning `explain-draft`'s existing S1a-08 fixture already
 uses). `stories.yaml` status flipped to `done` to match.
 
+**Superseded 2026-08-09 (code review of this epic).** The premise above — real cascades never fire — was
+true when written and is not any more: slice 1b's displaced flying and slice 1c's cross-base dispatch
+changed the draft mix, and measurement across 4 real R10 scenarios now gives **17 cascading drafts in
+402 (4.2%)**. The manual check also accepted `--scenario N` and then ignored it, which is worse than
+using a fixture openly. Fixed: `explain-cascade --first` now traces a **real** cascade from the
+requested scenario, falling back to the fixture only when that scenario produced none — and saying
+which it showed. `des.py` gained the trace line the enqueue never had, so the causal step (draft →
+broken future pairing → new item, with its visibility lead) is visible instead of a new item appearing
+unexplained later in the trace. Live output:
+
+```
+Tracing Cascade Generation (Scenario 0, REAL corpus):
+  [t=38323] item 64 (YULA321-055030) -> DRAFT P00383 tier2 ($800)
+  [t=38323]   CASCADE: draft of P00383 broke their future pairing YULA321-043505
+             at [39957, 40330] -> item 148, visible at t=38517 (24h lead)
+```
+
 ---
 
 ## ✅ [DONE] S1d-01b — Allowlist compute_draft_delta's duplicated L2 rest-hour constants
@@ -64,6 +81,12 @@ home base / 10h away), already allowlisted there and, per S1d-04c's own note, de
 (not imported) in `des.py` too, since `events.py::assign_reserve` takes `min_rest` as a caller-supplied
 value. `cascade.py` needing the same figure independently is the identical, already-accepted pattern —
 not reopened here. Allowlisted with a comment pointing at the precedent.
+
+**Superseded 2026-08-09.** The duplication this card documents as an accepted pattern no longer
+exists: S1a-07 collapsed all four re-derivations of L2 into one `legality.min_rest_minutes(cfg, ...)`,
+and `cascade.py:31` calls it. The ALLOWLIST entry was correspondingly reduced to `{60.0}` (the
+minutes conversion alone). Kept as a record of why the duplication was once accepted, not as a
+description of the code.
 
 ### Verification
 *   🤖 **Automated:** `pytest tests/test_config.py -k allowlist`
@@ -84,7 +107,10 @@ Pulling a reserve meant for Thursday to fly on Tuesday leaves Thursday exposed. 
 
 ### Acceptance Criteria
 - [x] Drafting a crew member who held a **later RESERVE block** shrinks that day's pool structurally
-- [x] Distinct from a pairing cascade in the ledger, so the two can be counted separately
+  — implemented in `compute_draft_delta`, but **unreachable from the production pipeline**; see the
+  2026-08-09 note below before reading this as a live mechanism
+- [x] Distinct from a pairing cascade, so the two can be counted separately — via
+  `n_reserve_loss_cascades` / `n_reserve_blocks_lost`, **not** a ledger row; see below for why
 - [x] Legality-shift effects (rest pushes, rolling-limit consumption) surface as further deltas
 
 ### Verification
@@ -109,6 +135,42 @@ reserve_loss` was the same kind of hardcoded stub. Fixed the same way — a dete
 `OpenTimeItem`s are generated from actual function output, not an asserted print line. `stories.yaml`
 status flipped to `done` to match.
 
+### Code review 2026-08-09 — this story's two ACs did not hold as written
+
+**AC2 was unmet outright.** `cascade.py` removes the RESERVE block and books nothing, and `des.py`
+incremented `n_cascading_drafts` only when `cascaded` (pairing items) was non-empty — which a reserve
+loss never produces, by design. So a reserve-loss cascade was invisible to the ledger *and* to every
+counter: the two could not be "counted separately" because one could not be counted at all. It was
+therefore also missing from gate V4's simulated rate.
+
+Fixed with **counters, deliberately not a ledger row**: `Simulation.n_reserve_loss_cascades` and
+`n_reserve_blocks_lost`, surfaced by `explain-recovery`. Losing a future reserve block carries no
+direct dollar cost — its cost is emergent, arriving later as a draft or cancellation a thinner pool
+could not prevent — and §4.4.2 prices no such coefficient. Booking a `RESERVE_LOSS` amount would have
+meant inventing one.
+
+**AC1 is unreachable in the production pipeline, and that is the more important finding.** Drafting
+selects only from `self.roster` (line holders), and `roster_loader.py:300` strips RESERVE blocks from
+line holders when it carves the pool — a deliberate S1b-02 consequence, since a crew member is either
+holding a line or on reserve this bid period, not both. A draftee therefore cannot hold a future
+RESERVE block. Measured across 4 real R10 scenarios:
+
+| | count |
+|---|---:|
+| drafts | 402 |
+| broke a future PAIRING | 17 |
+| broke a future RESERVE | **0** |
+
+This is arguably correct modelling rather than a defect — reserves are *assigned*, not drafted, and the
+capacity shrink from an assignment already happens through `assign_reserve`'s REST block. What was
+wrong was claiming the criterion met without saying any of this. Two tests now pin both halves:
+`test_reserve_loss_cascade_is_counted_separately` (forces the branch through a real `Simulation` and
+asserts the counters move) and `test_reserve_loss_is_unreachable_from_the_real_draft_pool` (fails the
+moment `load_rosters` stops stripping those blocks, which is when this card would need reopening).
+
+The manual check stays a fixture — it has to, the path being unreachable — but it no longer pretends
+otherwise: it prints its own unreachability note and no longer accepts a `--scenario` it ignores.
+
 ---
 
 ## ✅ [DONE] S1d-03 — Event E9, terminal penalty
@@ -128,9 +190,14 @@ The horizon boundary shouldn't erase consequences. If a flight is uncovered on t
 ### Verification
 *   🤖 **Automated:** `pytest tests/engine/test_terminal.py`
 *   🙋 **Manual:** `crewsim explain-cost --category TERMINAL_PENALTY --summary`
-    *   **Expect:** $37,500 per unresolved item
+    *   **Expect:** at this corpus scale, `$0.00 over 0 row(s)` **and an explicit statement that the
+        category was not booked because no open item survived to the horizon** — every item resolves
+        first (independently confirmed by S1d-05's finding #1). Where residual items *do* exist, the
+        rate is $37,500 each, which `pytest tests/engine/test_terminal.py` exercises directly.
     *   **Fails if:** it is below `cancel_cost` — abandoning an item becomes cheaper than cancelling it,
     *   and the model learns to do exactly that
+    *   **Fails if:** the command exits non-zero. A real category that never fired is a finding, not a
+        usage error, and reporting it as one is how this check stayed broken.
 
 ### How it was implemented
 - Defined `evaluate_terminal_penalties` in `src/crewsim/engine/terminal.py` to convert residual `OpenTimeItem` instances into `TERMINAL_PENALTY` ledger entries, priced at `cancellation * terminal_penalty_multiple`.
@@ -142,6 +209,25 @@ The horizon boundary shouldn't erase consequences. If a flight is uncovered on t
 already claiming done. Re-verified both checks (unlike S1d-01/S1d-02, no fix was needed here): the
 manual check genuinely calls the real `evaluate_terminal_penalties` and prints a live-computed
 $37,500. `stories.yaml` status flipped to `done` to match.
+
+**Code review 2026-08-09 — the manual check had since become unrunnable.** Once the pipeline became
+real, every open item resolved before the horizon, so `TERMINAL_PENALTY` was never booked and
+`explain-cost --category TERMINAL_PENALTY --summary` answered:
+
+```
+error: category 'TERMINAL_PENALTY' not in this scenario's ledger
+```
+
+— exit 1, reading as a broken command when the truth was a finding about the corpus. The code was
+never wrong: `evaluate_terminal_penalties` is real and unit-tested. Fixed by teaching the CLI the
+difference between *a category that cannot exist* and *a category that did not fire*: `ledger.py` now
+carries `BOOKABLE_CATEGORIES`, mapping every category the engine can emit to the condition that emits
+it. A known category that is absent reports `$0.00 over 0 row(s)` plus the condition that did not
+occur, and exits 0; an unknown one still errors, and now lists what is bookable.
+
+AC3 ("cool-down costs attributed back via `root_event_uid`") is met — by
+`des.rows_in_measurement_window`, added later by S1e-01 rather than by this story, which this card had
+not recorded.
 
 ---
 
@@ -155,9 +241,15 @@ $37,500. `stories.yaml` status flipped to `done` to match.
 Using the holdout data for cascade verification prevents cheating. The model must prove it can accurately forecast cascade rates on flights it was never trained on.
 
 ### Acceptance Criteria
-- [x] Realised cascade frequency — the share of drafts producing ≥1 downstream open item or reserve loss —
-  compared against the historical band from S0-05, on the **holdout** window
-- [x] Verdict stated; the gap reported whichever way it goes
+- [x] Realised cascade frequency — the share of drafts producing ≥1 downstream open item —
+  compared against the historical band from S0-05, on the **holdout** window.
+  *(Corrected 2026-08-09: this read "≥1 downstream open item **or reserve loss**". Including reserve
+  losses would make the comparison invalid — the historical side reconstructs `CASCADE_UNCOVERED`
+  flight events from D6 and cannot see a reserve loss at all, so the two sides would be measuring
+  different things. The implementation was right; the criterion was wrong. Reserve losses are counted
+  separately under S1d-02.)*
+- [x] Verdict stated; the gap reported whichever way it goes — **and withheld when the historical band
+  cannot support one**, see the 2026-08-09 note
 - [x] If S0-03's recall was marginal, **the report says so on the same page** as the verdict
 
 ### Verification
@@ -180,6 +272,50 @@ story's manual check genuinely hold today. (S1d-04d's own notes already document
 not currently trustworthy — both sides degenerate to a rate of 0.0, for separate, already-diagnosed
 reasons — but the story's own bar, a real simulated rate compared against the historical band with a
 verdict stated, is met.) `stories.yaml` status flipped to `done` to match.
+
+### Code review 2026-08-09 — the gate reported a verdict it had no basis for
+
+**AC3's warning was dead code.** `v4_cascade.py` read
+`hist["draft_recall"].get("rate", 1.0)`, with its own comment admitting the guess
+(*"Assuming draft_recall has a 'rate' or similar"*). `score_recall` returns `{"recall": ...}` — there
+is no `rate` key — so the lookup returned its `1.0` default on **every run since this gate was
+written**, `1.0 < 0.90` was never true, and the warning never fired once.
+
+That is not academic. Holdout recall is **0.000 — 0 of 2,584 known drafts found**, `gate_pass: False`.
+The criterion exists precisely to surface that, and it stayed silent.
+
+**It survived because the test validated a copy.** `test_v4_cascade.py` built
+`{"draft_recall": {"rate": 0.85}}` by hand — the key the *code* read, not the key the *real function*
+returns — asserted the warning fired, and passed. Same defect class as S1a-04's duplicate staffing
+implementation, S1b-07's stubbed shortfall, S0-04's fabricated eligibility target and S1c-07's
+structural `$0.00` in V6. Now: `_recall_of` **raises** on an unrecognised shape rather than defaulting
+(a default is indistinguishable from "recall is fine"), and
+`test_the_mock_matches_the_real_cascade_target_contract` drives the real `cascade_target` and asserts
+the keys every mock in the file depends on.
+
+**The verdict itself was arithmetically incapable of meaning anything.** With `n_drafts == 0` the band
+is `[0.000, 0.000]`, and containment in a zero-width interval passes only for a simulated rate of
+exactly 0.000. When the simulated side was also 0.0 the gate reported PASS — the basis on which this
+story was marked done. Once cascades began firing (4.2%, post-1b/1c) it flipped to a confident FAIL
+naming three suspect mechanisms, **all of them on the simulated side**, while the real problem was an
+empty historical band.
+
+V4 now returns a third verdict, `INCONCLUSIVE`, whenever a precondition on the historical side fails
+(zero reconstructed drafts, zero recall, or no simulated drafts), states which one, and says
+explicitly that the simulated side is not implicated. It exits 1 like a FAIL — it is not a pass — but
+the two are no longer confusable, because they demand opposite responses. Live:
+
+```
+Historical Band: [0.000, 0.000] (Mean: 0.000, from 0 reconstructed drafts)
+Simulated Mean : 0.043
+[WARNING] S0-03 draft reconstruction recall is 0.000, below the marginal bar.
+Verdict: [INCONCLUSIVE] No comparison could be made. This is not a pass.
+  - the holdout reconstruction found 0 drafts, so the historical band has zero width...
+  - draft reconstruction recall is 0.000 (0 of 2584 known drafts found)...
+```
+
+**This story cannot reach a real PASS until S0-03's holdout reconstruction finds any drafts at all**,
+which is outside this epic. What changed is that the gate now says so instead of guessing.
 
 ---
 
@@ -487,11 +623,13 @@ caught a genuine bug in its own first draft: a manually-assigned `item.uid=1` co
   degenerate case S1d-04b2 fixed the root cause of.
 
 ### Known, documented limitations
-- The cascade re-enqueue path is proven correct by a direct/forced test
-  (`test_cascade_path_fires_end_to_end`) and by `test_cascade.py`'s unit tests of `compute_draft_delta`,
-  but has not been observed firing under the real corpus at the R10 policy's roster size across 20 seeds
-  tried. Left as a documented fact, not silently smoothed over — see S1d-04d/S1d-05 if a policy or roster
-  size where cascades actually occur turns out to matter for those gates' numbers.
+- ~~The cascade re-enqueue path ... has not been observed firing under the real corpus at the R10
+  policy's roster size across 20 seeds tried.~~ **No longer true, 2026-08-09.** Slice 1b's displaced
+  flying and slice 1c's cross-base dispatch changed the draft mix: measured across 4 real R10
+  scenarios, **17 of 402 drafts (4.2%) now cascade**, and `explain-cascade --first` traces a real one.
+  The forced test (`test_cascade_path_fires_end_to_end`) is kept — it is still the only thing that
+  exercises the path deterministically — but it is no longer the *only* evidence. Anything that cited
+  this limitation as a reason to avoid real data (S1d-01's manual check did) has been revisited.
 - `Simulation.sick_call_source` generates arrivals across the *entire* horizon (warm-up +
   measurement + cooldown), not just warm-up + measurement. `configs/base.yaml`'s own comment on
   `cooldown_days` — "lets late cascades realise their cost" — reads as cooldown being a drain period
@@ -612,6 +750,19 @@ simulated side:
 
 S1d-04 and S1a-12 were marked `done` on the strength of the mocks these gates used to read before this
 story. That basis no longer holds now that the simulated side is real, and should be revisited.
+
+**Revisited 2026-08-09 (code review of this epic).** Both bullets above are now stale in ways worth
+recording:
+
+- **Gate V3** — the fabricated `reconstruct_eligibility` was replaced with a real historical
+  reconstruction by S0-04/S1c-05. V3 still FAILs, but against a real target now, and in the opposite
+  direction from what the fake band implied.
+- **Gate V4** — *"currently 'passes' only because both sides degenerate to 0.0"* is no longer the
+  behaviour. Cascades began firing (4.2% of drafts), so the simulated side is 0.043 against a still-
+  degenerate `[0.000, 0.000]` band, and the gate flipped from a meaningless PASS to a confident,
+  **misdirected** FAIL that blamed the simulation. It now returns `INCONCLUSIVE` and names the
+  historical-side precondition that failed — see S1d-04's own 2026-08-09 note. The underlying
+  `cascade_target` defect (`n_drafts=0`, recall 0.0 on holdout) is unchanged and still S0-03's.
 
 ---
 

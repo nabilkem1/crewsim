@@ -364,7 +364,8 @@ DECLARED_NOT_YET_CONSUMED: dict[str, str] = {
         "flying is exogenous until slice 1b",
     "disruption.delay_per_minute":
         "the engine does not model delay propagation yet -- no code path books a "
-        "per-minute delay cost (S1d-03 owns this)",
+        "per-minute delay cost (event E2 DELAY, owned by S1b-09; this notice "
+        "previously misattributed it to S1d-03, which is E9's terminal penalty)",
 }
 
 
