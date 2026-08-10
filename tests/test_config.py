@@ -520,9 +520,11 @@ def test_allowlist_has_no_stale_entries() -> None:
 # of truth that unconsumed_notices() also reads, so a key cannot be exempted
 # here while staying invisible at runtime.
 DECLARED_NOT_YET_CONSUMED = {k.split(".")[-1] for k in config.DECLARED_NOT_YET_CONSUMED}
-# `positioning` is the section holding two such fields; with both exempt the
-# section object itself is equally unread.
-DECLARED_NOT_YET_CONSUMED.add("positioning")
+# There used to be a hand-added `positioning` exemption here, because both
+# fields in that section were unconsumed and so the section object was too.
+# S1c-07 consumed them, and the exemption went with them -- an exemption that
+# outlives its reason is a permanent hole in the guard, which is the whole
+# failure mode this test exists to prevent.
 
 
 def _attribute_names_used_in_src() -> set[str]:

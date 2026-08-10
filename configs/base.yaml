@@ -163,6 +163,38 @@ legality:                             # Rules configuration
   rolling_7d_flight_limit_hours: 35.0 # [CONFIRM: Crew Planning] S1c-03 L3 flight limit
   rolling_28d_duty_limit_hours: 190.0 # [CONFIRM: Crew Planning] S1c-03 L4 duty limit
 
+positioning:                          # S1c-07 — cross-base reserve dispatch, §5.3's XB -> DH branch
+  # The PRICES are in costs_pilots.yaml (`positioning.deadhead` / `.hotel`,
+  # §4.4.2 q^pos). This section is the BEHAVIOUR that decides when they are
+  # charged and how much duty a positioning trip consumes.
+  #
+  # Deadheading "costs a seat and consumes duty time" (00_Intro glossary), so
+  # this duration is a legality input, not only a cost one: the DEADHEAD block
+  # counts toward L1 max duty and the L3/L4 rolling limits, and L8 notice is
+  # measured to the POSITIONING report time rather than the flight's.
+  #
+  # Not derivable from D1-D12, so stated rather than fitted: D3 carries only
+  # revenue legs out of a base to an outstation, and D10's invoices carry an
+  # outstation, an amount and a date -- no base-to-base positioning leg exists
+  # anywhere in the corpus. Decision recorded with the user 2026-08-09.
+  deadhead_duration_hours: 4.0        # [CONFIRM: Crew Planning]
+  # Whether a deadhead also incurs the hotel night. §7.3's only worked example
+  # charges both together as one q^pos ($400 + $220), and D10 backs that shape:
+  # 247 DEADHEAD rows against 250 HOTEL rows, near 1:1. Set false to price the
+  # seat alone. Decision recorded with the user 2026-08-09.
+  hotel_on_every_deadhead: true       # [CONFIRM: Crew Planning]
+  # Whether a deadhead also incurs the ground transport priced in
+  # costs_pilots.yaml (airport <-> hotel). Unlike the hotel rule, D10 offers NO
+  # evidence on the trigger: all 742 invoice rows sit on unique
+  # (crew, date, pairing) keys and DEADHEAD/HOTEL/TRANSPORT never co-occur, so
+  # the near-equal row counts (247/250/245) are three independent draws from the
+  # mock generator, not a one-ride-per-room relationship. Defaulted true to match
+  # the hotel rule -- a crew member who gets a room needs a ride to it -- and
+  # left as a knob rather than welded to `hotel_on_every_deadhead`, because
+  # whether transport rides with the room or with the trip is precisely what
+  # Finance has to settle alongside the value.
+  transport_on_every_deadhead: true   # [CONFIRM: Finance]
+
 gates:                                # V&V gate parameters (§9.2)
   # S1b-07 / V2: the DES shortfall is a binomial proportion, so the comparison
   # against the closed-form Erlang-B value is a confidence-interval containment

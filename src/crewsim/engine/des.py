@@ -123,9 +123,16 @@ class Simulation:
         draft_mode: str = "mandated",
         verbose_trace: bool = False,
         cascades_enabled: bool = True,
+        cross_base_reserves: list[CrewMember] | None = None,
     ) -> None:
         if cfg.cascade is None:
             raise ValueError("Simulation requires cfg.cascade (visibility_lag_hours) to be configured")
+        if cross_base_reserves and cfg.positioning is None:
+            raise ValueError(
+                "cross-base reserves were supplied but cfg.positioning is not configured -- "
+                "dispatching one costs a deadhead seat and consumes duty time, and neither the "
+                "duration nor the hotel rule may be assumed (configs/base.yaml -> positioning)"
+            )
         self.env = env
         self.cfg = cfg
         # Narrows CascadeConfig | None to CascadeConfig once, here, rather than
@@ -136,6 +143,14 @@ class Simulation:
         self.scenario_id = scenario_id
         self.roster = roster  # draftable line holders (own copies, mutated)
         self.reserves = reserves  # reserve pool (own copies, mutated)
+        # S1c-07: reserves at OTHER bases, reachable only by deadheading them in
+        # (§5.3's XB -> DH). Held separately from self.reserves on purpose --
+        # they are not part of this policy's Stage-1 commitment, so they must not
+        # be paid RESERVE_STAFFING here, must not be drawn for sick calls (the
+        # arrival rate is calibrated for the in-scope population), and must not
+        # count as servers in gate V2's Erlang-B comparison, whose offered load
+        # `a` is measured against the in-scope establishment alone.
+        self.cross_base_reserves = cross_base_reserves or []
         self.rng = rng
         self.horizon_minutes = horizon_minutes
         self.trace_enabled = trace
@@ -179,6 +194,12 @@ class Simulation:
         self.n_blocked_on_arrival = 0
         self.n_reserve_assignments = 0
         self.reserve_service_minutes = 0.0
+        # S1c-07: counted separately from n_reserve_assignments for the same
+        # reason the pool is separate -- gate V2 divides assignments by the
+        # in-scope establishment's on-call time, and folding cross-base rescues
+        # into that numerator would inflate the offered load of a pool that
+        # never served them.
+        self.n_cross_base_assignments = 0
 
         self._book_reserve_staffing()
 
@@ -359,6 +380,124 @@ class Simulation:
         )
         self.log(f"item {item.uid} ({item.pairing_id}) CANCELLED at deadline, still uncovered")
 
+    # -- S1c-07: cross-base dispatch and the positioning cost it incurs -------
+    def _dispatch_cross_base(self, item: OpenTimeItem, now: float) -> bool:
+        """§5.3's `XB` -> `DH`: borrow a reserve from another base, and pay for it.
+
+        Returns True if the item was covered this way.
+
+        The positioning trip is modelled by widening the assignment window
+        rather than by bolting a cost onto an otherwise-unchanged assignment.
+        Every legality question is then asked about the trip the crew member
+        actually makes: L1 max duty counts the deadhead hours, L3/L4's rolling
+        counters accumulate them, the RESERVE block has to cover the positioning
+        as well as the flying, and L8 notice is measured to the POSITIONING
+        report time -- so a call that arrives four hours before departure can no
+        longer be answered from Toronto, which is the operationally right
+        answer and one a cost-only implementation would get wrong.
+
+        `self.cross_base_reserves` is empty unless the policy allows cross-base
+        (run_scenario is the one place that knows the Policy, and it only loads
+        the pool when stage2.allow_cross_base_reserve is set), so the emptiness
+        check below IS the policy gate.
+        """
+        pos = self.cfg.positioning
+        if not self.cross_base_reserves or pos is None:
+            return False
+
+        lead = pos.deadhead_duration_hours * 60.0
+        positioned = dataclasses.replace(item, start=item.start - lead)
+        if positioned.start < now:
+            # No time left to fly them in. Not a legality failure -- the trip
+            # would have to start in the past.
+            return False
+
+        # record=False: this pool's eligibility rate is another base's, and V3
+        # measures cfg.scope's. See EligibilityEngine.eligible_reserves.
+        elig = self.elig.eligible_reserves(
+            self.cross_base_reserves, positioned, now, self.rng,
+            record=False, is_deadhead=True,
+        )
+        if not elig:
+            return False
+
+        def remaining(r: CrewMember) -> float:
+            covering = [
+                b for b in r.blocks_in(positioned.start, positioned.end)
+                if b.btype == BlockType.RESERVE
+            ]
+            return min((b.end for b in covering), default=float("inf"))
+
+        elig.sort(key=lambda r: (remaining(r), r.seniority))
+        chosen = elig[0]
+        # min_rest is the AWAY figure by construction here (chosen.base is not
+        # item.base), which min_rest_minutes already handles -- passing the real
+        # bases rather than hardcoding keeps that one definition authoritative.
+        min_rest = min_rest_minutes(self.cfg, chosen.base, item.base)
+        assign_reserve(
+            chosen, item.start, item.end, min_rest, item.pairing_id,
+            deadhead_start=positioned.start,
+        )
+        self.n_cross_base_assignments += 1
+        self.ledger.book(
+            scenario_id=self.scenario_id, policy_id=self.policy_id,
+            sim_time=now, event_uid=item.uid, root_event_uid=item.root_event_uid,
+            crew_id=chosen.crew_id, category="RESERVE_UTILIZATION",
+            amount=self.costs.reserve.utilisation,
+        )
+        positioning_cost = self._book_positioning(chosen, item, now)
+        self.open_items.pop(item.uid, None)
+        self.log(
+            f"item {item.uid} ({item.pairing_id}) -> CROSS-BASE RESERVE "
+            f"{chosen.crew_id} from {chosen.base} (deadhead {lead/60:.1f}h, "
+            f"+${positioning_cost:,.0f} positioning)"
+        )
+        return True
+
+    def _book_positioning(self, crew: CrewMember, item: OpenTimeItem, now: float) -> float:
+        """Book §4.4.2's `q^pos` for a crew member who is not where the flight is.
+
+        One rule for both paths §7.3 applies it to -- a deadheaded reserve and a
+        drafted crew member away from the flight's station -- because it is one
+        coefficient in the objective, not two.
+
+        Returns the total booked, 0.0 when the crew member is already there.
+
+        Known limit, stated rather than papered over: "away" is decided by
+        `crew.base != item.base`, the only location this engine actually knows.
+        That is exact for a cross-base reserve. It is NOT exact for §7.3's third
+        worked example, the tier-1 draftee sitting in Punta Cana, because a
+        draftee is always in-scope (drafting is base-local, §5.6) and therefore
+        always scores 0 here. Making that case real needs down-route location
+        tracking -- D3 carries `layover_stations` per pairing, so the data is
+        there -- and that is a separate story, not an assumption to invent
+        inside this one. The wiring is shared so that story only has to change
+        how "away" is computed, not where the cost is booked.
+        """
+        pos = self.cfg.positioning
+        if pos is None or crew.base == item.base:
+            return 0.0
+
+        # All three of §5.8's positioning categories. TRANSPORT was nameable but
+        # unpriceable until the coefficient was added (§4.4.2 listed only the
+        # first two), so the engine had a ledger category it could never book.
+        total = 0.0
+        for category, amount in (
+            ("DEADHEAD", self.costs.positioning.deadhead),
+            ("HOTEL", self.costs.positioning.hotel if pos.hotel_on_every_deadhead else 0.0),
+            ("TRANSPORT",
+             self.costs.positioning.transport if pos.transport_on_every_deadhead else 0.0),
+        ):
+            if amount <= 0.0:
+                continue
+            self.ledger.book(
+                scenario_id=self.scenario_id, policy_id=self.policy_id,
+                sim_time=now, event_uid=item.uid, root_event_uid=item.root_event_uid,
+                crew_id=crew.crew_id, category=category, amount=amount,
+            )
+            total += amount
+        return total
+
     def _attempt_resolution(self, item: OpenTimeItem, first_attempt: bool = False) -> bool:
         """Reserve-first, then draft. Returns True if the item is resolved.
 
@@ -398,6 +537,15 @@ class Simulation:
             self.log(f"item {item.uid} ({item.pairing_id}) -> RESERVE {chosen.crew_id}")
             return True
 
+        # S1c-07 / §5.3 `XB`: the local pool is empty. Before drafting, ask
+        # whether the policy allows borrowing a reserve from another base and
+        # whether one is actually available there. Deliberately AFTER the
+        # blocked-on-arrival count above: V2's Erlang-B comparison is about the
+        # in-scope establishment, and a cross-base rescue does not mean the
+        # local pool had a free server.
+        if self._dispatch_cross_base(item, now):
+            return True
+
         if self.draft_mode == "myopic_total_cost":
             candidate = select_myopic_total_cost(self.roster, item, self.costs, self.cfg, now=now)
         else:
@@ -429,6 +577,12 @@ class Simulation:
                 sim_time=now, event_uid=item.uid, root_event_uid=item.root_event_uid,
                 crew_id=candidate.crew_id, category=f"DRAFT_TIER{tier}", amount=cost,
             )
+            # §7.3's draft term is `q^base + q^tier_k + q^pos`, not the first
+            # two: a draftee who is not at the flight's station has to be
+            # positioned like anyone else. Books $0 today for the reason set out
+            # in _book_positioning -- shared wiring so it starts costing the
+            # moment down-route location becomes knowable.
+            cost += self._book_positioning(candidate, item, now)
             self.open_items.pop(item.uid, None)
             self.log(f"item {item.uid} ({item.pairing_id}) -> DRAFT {candidate.crew_id} tier{tier} (${cost:,.0f})")
             for casc in cascaded:
@@ -555,7 +709,7 @@ def run_scenario(
     needs the per-attempt "unresolved for now" lines to show that an item was
     HELD across retries rather than cancelled on arrival.
     """
-    from .roster_loader import load_rosters
+    from .roster_loader import load_cross_base_reserves, load_rosters
 
     active, _ = load_rosters(
         cfg, base=cfg.scope.base, fleet=cfg.scope.fleet, position=cfg.scope.position, policy=policy
@@ -566,6 +720,17 @@ def run_scenario(
     active = copy.deepcopy(active)
     roster = [c for c in active if not getattr(c, "_is_reserve", False)]
     reserves = [c for c in active if getattr(c, "_is_reserve", False)]
+
+    # S1c-07: §5.3's cross-base branch, and the ONLY place the policy's
+    # allow_cross_base_reserve flag is read -- an empty pool downstream means
+    # "not permitted" and "none exist" alike, which is the same no-op either way.
+    cross_base: list[CrewMember] = []
+    if policy.stage2.allow_cross_base_reserve:
+        cross_base = copy.deepcopy(
+            load_cross_base_reserves(
+                cfg, home_base=cfg.scope.base, fleet=cfg.scope.fleet, position=cfg.scope.position
+            )
+        )
 
     streams = crn.generate_streams(master_seed, max(n_scenarios, scenario_id + 1))
     rng = np.random.default_rng(streams[scenario_id])
@@ -580,7 +745,7 @@ def run_scenario(
     sim = Simulation(
         env, cfg, costs, policy.policy_id, scenario_id, roster, reserves, rng, horizon_minutes,
         trace=trace, draft_mode=draft_mode, verbose_trace=verbose_trace,
-        cascades_enabled=cascades_enabled,
+        cascades_enabled=cascades_enabled, cross_base_reserves=cross_base,
     )
     # S1b-02 AC2: reserve bidders' displaced flying, if configured as open time.
     # Registered BEFORE the sick-call source so it is already on the queue when
@@ -616,6 +781,7 @@ def run_historical_replay(
     horizon_minutes: float,
     trace: bool = True,
     verbose_trace: bool = True,
+    cross_base_reserves: list[CrewMember] | None = None,
 ) -> Simulation:
     """The historical-replay analogue of run_scenario -- same Simulation
     class, same recovery_pipeline, but the arrival source is
@@ -643,6 +809,11 @@ def run_historical_replay(
     sim = Simulation(
         env, cfg, costs, policy.policy_id, scenario_id=0, roster=roster, reserves=reserves,
         rng=rng, horizon_minutes=horizon_minutes, trace=trace, verbose_trace=verbose_trace,
+        # S1c-07: without this the replay path silently has no cross-base pool,
+        # so gate V6's simulated positioning total would be a structural $0.00
+        # printed next to D10's real invoices -- a line that looks like a
+        # measurement and can never be non-zero.
+        cross_base_reserves=cross_base_reserves,
     )
     env.process(sim.real_absence_source(absences))
     env.run(until=horizon_minutes)

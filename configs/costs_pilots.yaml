@@ -29,9 +29,22 @@ draft:
 # rather than forbidden — and senior-first drafting reaches the crew holding the
 # best vacation. This moved from a corner case to a live cost driver (§4.4.2).
 
-positioning:
+positioning:                             # §4.4.2 q^pos
   deadhead: 400
   hotel:    220
+  # S1c-07 follow-up. §5.8 names TRANSPORT (ground transport between airport and
+  # hotel) as a positioning ledger category, but §4.4.2 priced only the two
+  # figures above, so the engine had a category it could never book. Added on
+  # the user's instruction 2026-08-09 with the value to be confirmed by Finance.
+  #
+  # PROVENANCE, so nobody mistakes this for a negotiated rate: 402.54 is the
+  # arithmetic mean of D10's 245 real TRANSPORT invoices. It is NOT of the same
+  # kind as the two values above -- those are Finance planning rates and do not
+  # track D10 at all (hotel is 220 against a D10 mean of 388; deadhead is 400
+  # against 370). There is no consistent ratio to extrapolate from, so an
+  # invoice mean is the only defensible placeholder, and the non-round figure is
+  # deliberate: it should read as provisional.
+  transport: 402.54                      # [CONFIRM: Finance] — see above
 
 disruption:
   cancellation:       25000              # internal cost of cancelling one flight

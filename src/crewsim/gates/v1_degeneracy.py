@@ -47,10 +47,20 @@ def policy_with_reserve_count(base_policy: Policy, n_reserves: int, policy_id: s
     roster_loader.load_rosters carves out max(short_call + long_call) crew per
     (base, fleet, position) group, so one all-short-call entry at the scope's
     own key sets the pool size exactly, and an empty reserve list sets it to
-    zero. Everything else -- costs_file, season, mode, stage2 -- is inherited
-    from a real policy file, so a degenerate run is priced off exactly the same
-    cost table as a normal one. A hand-built Policy would let this gate drift
-    away from the tariffs it is supposed to be checking.
+    zero. Everything else -- costs_file, season, mode -- is inherited from a
+    real policy file, so a degenerate run is priced off exactly the same cost
+    table as a normal one. A hand-built Policy would let this gate drift away
+    from the tariffs it is supposed to be checking.
+
+    The one stage-2 exception is `allow_cross_base_reserve`, pinned False for
+    the same reason `run_v1_gate` pins `displaced_flying`: this gate asks
+    whether the engine fabricates cost when the RESERVE ESTABLISHMENT is
+    degenerate, and R is the in-scope establishment. S1c-07 made cross-base
+    dispatch real, so a policy carving zero reserves could still be covered by
+    Toronto's -- correctly booking RESERVE_UTILIZATION and defeating the "zero
+    reserves, therefore no reserve cost" premise with a cost that is genuinely
+    justified. Real behaviour, wrong question: it belongs in a run, not in this
+    gate's degenerate configurations.
     """
     if n_reserves > 0:
         template = base_policy.stage1.reserves[0]
@@ -63,7 +73,11 @@ def policy_with_reserve_count(base_policy: Policy, n_reserves: int, policy_id: s
     else:
         reserves = []
     return base_policy.model_copy(
-        update={"policy_id": policy_id, "stage1": Stage1Config(reserves=reserves)}
+        update={
+            "policy_id": policy_id,
+            "stage1": Stage1Config(reserves=reserves),
+            "stage2": base_policy.stage2.model_copy(update={"allow_cross_base_reserve": False}),
+        }
     )
 
 

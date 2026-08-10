@@ -27,7 +27,8 @@ from ..data import loaders
 from .des import Simulation
 from .des import run_historical_replay as _run_historical_replay
 from .policy import Policy
-from .roster_loader import load_rosters
+from .roster_loader import load_cross_base_reserves, load_rosters
+from .state import CrewMember
 
 
 def _scope_filter(df: pl.DataFrame, cfg: config.BaseConfig) -> pl.DataFrame:
@@ -115,10 +116,25 @@ def run_historical_period(
     roster = [c for c in active if not getattr(c, "_is_reserve", False)]
     reserves = [c for c in active if getattr(c, "_is_reserve", False)]
 
+    # S1c-07: the same out-of-scope pool run_scenario uses, over THIS period's
+    # window rather than the template window -- a real month's cross-base
+    # availability is that month's, not the simulation template's. Gate V6
+    # reports the resulting positioning cost against D10's real invoices, so
+    # omitting it here would print a structural $0.00 beside real money.
+    cross_base: list[CrewMember] = []
+    if policy.stage2.allow_cross_base_reserve:
+        cross_base = copy.deepcopy(
+            load_cross_base_reserves(
+                cfg, home_base=cfg.scope.base, fleet=cfg.scope.fleet,
+                position=cfg.scope.position, window=(period_start, period_end),
+            )
+        )
+
     absences = _load_real_absences(cfg, period_start, period_end)
     horizon_minutes = (period_end - period_start).days * 1440.0
     return _run_historical_replay(
-        cfg, costs, policy, roster, reserves, absences, horizon_minutes, trace=trace, verbose_trace=verbose_trace,
+        cfg, costs, policy, roster, reserves, absences, horizon_minutes, trace=trace,
+        verbose_trace=verbose_trace, cross_base_reserves=cross_base,
     )
 
 

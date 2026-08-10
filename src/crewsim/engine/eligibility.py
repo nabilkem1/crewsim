@@ -39,7 +39,26 @@ class EligibilityEngine:
         item: OpenTimeItem,
         now: float,
         rng: np.random.Generator | None = None,
+        record: bool = True,
+        is_deadhead: bool = False,
     ) -> list[CrewMember]:
+        """Eligible members of `reserves` for `item` at time `now`.
+
+        `is_deadhead=True` tells L7 that this crew member is being POSITIONED to
+        the item's base rather than starting duty at their own. L7's own wording
+        is "crew must start duty at own base unless deadheaded", and its
+        `is_deadhead` parameter has existed unset since the rule was written --
+        so every cross-base candidate failed L7 by construction. S1c-07 is the
+        first caller that can legitimately set it: it only does so on the branch
+        that actually books the deadhead seat and writes the DEADHEAD block.
+
+        `record=False` evaluates without logging a sample into the distribution
+        get_distribution() returns. S1c-07 needs it: the cross-base pool is a
+        different population at different bases, and gate V3 compares this
+        distribution against a historical eligibility reconstruction for
+        cfg.scope alone. Mixing another base's rate into that series would move
+        V3's number without any in-scope mechanism having changed.
+        """
         pool = []
         for r in reserves:
             # Pool = reserves whose RESERVE block covers the WHOLE duty
@@ -73,10 +92,12 @@ class EligibilityEngine:
         else:
             elig = [
                 r for r in pool
-                if is_legal_assignment(r, item, now=now, cfg=self.cfg).legal
+                if is_legal_assignment(
+                    r, item, is_deadhead=is_deadhead, now=now, cfg=self.cfg
+                ).legal
             ]
 
-        if pool:
+        if pool and record:
             self.samples.append(len(elig) / len(pool))
             self._sample_times.append(now)
 

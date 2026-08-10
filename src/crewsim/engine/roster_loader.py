@@ -302,5 +302,50 @@ def load_rosters(
             
         active_crew = reserve_crew_all + line_crew_all
         active_crew.sort(key=lambda c: c.crew_id)
-        
+
     return active_crew, exclusion_counts
+
+
+def load_cross_base_reserves(
+    cfg: config.BaseConfig,
+    home_base: str,
+    fleet: str | None = None,
+    position: str | None = None,
+    window: tuple[datetime.date, datetime.date] | None = None,
+) -> list[CrewMember]:
+    """S1c-07: the reserve pool at every base EXCEPT `home_base`, taken from D2
+    exactly as it was.
+
+    Deliberately not policy-driven, and that is the whole design decision here.
+    A policy's `stage1.reserves` is the Stage-1 commitment for the scope being
+    optimised -- it sizes YUL. What Toronto and Vancouver staffed is not this
+    planner's decision variable; it is an exogenous fact about the network on
+    the modelled dates. So these crew are not minted from a reserve target the
+    way `load_rosters` mints the in-scope pool: they are the real crew who
+    really held RESERVE blocks at those bases in this window, with their real
+    calendars, PAIRING blocks and all.
+
+    Keeping their pairings is the point. An out-of-base reserve is available
+    only when D2 says they were on call and not already flying -- exactly the
+    availability that decides whether §5.3's `XB` question ("is a reserve
+    available there?") answers yes. Stripping the pairings, as the in-scope
+    carve-out does when it mints a pure reserve line, would invent availability
+    that never existed and make cross-base coverage look far more reliable than
+    it is.
+
+    Crew with no RESERVE block anywhere in the window are dropped: a line
+    holder at another base is not draftable from here (drafting is base-local,
+    §5.6) and has no reserve availability to offer.
+    """
+    all_crew, _ = load_rosters(cfg, base=None, fleet=fleet, position=position, window=window)
+    out: list[CrewMember] = []
+    for c in all_crew:
+        if c.base == home_base:
+            continue
+        if not any(b.btype == BlockType.RESERVE for b in c.calendar):
+            continue
+        c._is_reserve = True
+        c._is_cross_base = True
+        out.append(c)
+    out.sort(key=lambda c: c.crew_id)
+    return out

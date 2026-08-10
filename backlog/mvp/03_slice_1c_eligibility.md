@@ -1,6 +1,6 @@
 # Slice 1c — Eligibility Engine FULL
 
-**Epic E1c** · 6 stories · Gate: **V3 — eligibility rate on the HOLDOUT window**
+**Epic E1c** · 7 stories · Gate: **V3 — eligibility rate on the HOLDOUT window**
 Needs datasets **D2, D4, D5**.
 
 This slice completes the legality surrogate and turns eligibility into a measured, validated output.
@@ -304,3 +304,201 @@ Also implemented, since the story's own manual check explicitly says "both distr
 Also fixed along the way: `crewsim data eligibility-target --season winter_sun` (S0-04's own documented manual check) could never have run — `reconstruct_eligibility`'s second argument is a **window** (fitting/holdout), not a season; the CLI flag was renamed to `--window` to match what the function actually needs (season is already fixed by `cfg.scope.season`, not a per-call choice).
 
 **Known, documented limitation:** `eligibility_target.py` and `gates/v3_eligibility.py` are outside the mypy `--strict`-enforced `crewsim.engine.*` scope (`pyproject.toml`), so not policed; `roster_loader.py`'s new `window` parameter is itself clean, the file's other pre-existing gaps (predating this story) are unchanged, out of scope.
+
+---
+
+## ✅ [DONE] S1c-07 — Cross-base reserve dispatch and the positioning cost it incurs
+**Size:** `L` | **Depends on:** S1c-01, S1b-02 | **Spec:** §5.3, §5.8, §7.3, §4.4.2
+
+**As a** modeller **I want** a reserve flown in from another base to be charged the deadhead seat and
+hotel night it actually costs **so that** cross-base coverage stops looking free and the recommended
+reserve level is not biased low.
+
+### Description
+§5.3's recovery pipeline has a branch this engine does not have. When no local reserve is eligible, the
+flowchart asks `XB` — *does the policy allow cross-base, and is a reserve available there?* — and if so
+takes `DH`, **"Deadhead a reserve (incurs hotel + flight cost)"**, before assignment. Today
+`_attempt_resolution` goes straight from an empty local pool to drafting.
+
+The prices for that branch already exist and are already loaded. `costs_pilots.yaml` declares
+`positioning.deadhead: 400` and `positioning.hotel: 220` (§4.4.2, `q^pos`, sourced from D10 invoices),
+`config.py` parses them, and `BlockType.DEADHEAD` is already a member of the enum. **Nothing books
+them.** They are the two remaining entries in `config.DECLARED_NOT_YET_CONSUMED` with no owning story —
+found by the consumption guard added in S1c-01's P2 pass, the same defect class as the `mode` and
+`appr_compensation` gaps.
+
+This is worse than a missing feature, because gate V6 *reports* D10's real deadhead and hotel invoices
+on the actuals side of the backtest while the simulated side can never produce a matching dollar. Real
+numbers on screen, coming from data, not from the model. A reader reasonably concludes positioning is
+priced in. Every scenario that would need it is under-costed, in the direction that makes reserves look
+cheaper than they are.
+
+**Boundary with `S1e-04b`.** That story owns `allow_cross_base_reserve` as a *grid axis* — the
+restricting direction, "filter `eligible_reserves` to `r.base == item.base`", plus the four uncoded
+`reserve_selection` strategies. It says nothing about booking a cost. S1c-07 owns the opposite
+direction: reaching *out* to another base and paying for it. Implementing this one makes the cross-base
+bullet on S1e-04b a sweep of an axis that already works, and retires that bullet's
+"structurally untestable at MVP scope" caveat.
+
+**Why this is `L` and not `M`.** The corpus has three bases (`YUL`, `YVR`, `YYZ` in D1/D2), so the data
+supports it — but `cfg.scope.base` filters `load_rosters` to `YUL`, so the loaded reserve pool is
+single-base and there is nothing to dispatch across. Supplying an out-of-scope reserve pool is the bulk
+of the work and must land before the cost can be exercised against anything real.
+
+**Two domain questions to ask, not answer** (standing rule: never invent a modelling parameter for
+ambiguous domain input):
+1. **When is a hotel night incurred?** `q^pos` in §7.3's worked example charges deadhead **and** hotel
+   together, but a same-day out-and-back plainly does not need a room. The rule is a
+   `[CONFIRM: Crew Planning]`, and 400-vs-620 per dispatch is not a rounding difference.
+2. **`TRANSPORT` has no coefficient.** §5.8 names it as a positioning category and D10 carries real
+   `TRANSPORT` rows, but §4.4.2 prices only `deadhead_cost` and `hotel_cost`. Per
+   `COVERAGE_AUDIT.md` §3: **do not invent one.** Either Finance supplies it from D10, or §5.8 drops the
+   category.
+
+### Acceptance Criteria
+- [x] `load_rosters` can supply a reserve pool **wider than `cfg.scope.base`**, loaded from D2, with the
+  in-scope/out-of-scope distinction preserved on the crew member — not a second scope, a wider pool
+- [x] `_attempt_resolution` implements the `XB` branch: local pool empty → **if and only if**
+  `policy.stage2.allow_cross_base_reserve` → consider out-of-base reserves before drafting
+- [x] An out-of-base assignment books `DEADHEAD` and (per the confirmed rule) `HOTEL` ledger rows from
+  `positioning.deadhead` / `positioning.hotel` — **those config keys**, not new parallel ones — carrying
+  the same `root_event_uid` as the assignment, so `explain-cost --trace-root` attributes them
+- [x] The §7.3 draft case is booked too: a draftee who is **not at the flight's station** incurs `q^pos`
+  on top of `q^base + q^tier_k`. §7.3's own worked example is the tier-1 draftee in Punta Cana at
+  $500 + 0 + 620. This is reachable in a single-base roster and must not be left behind
+- [x] The category strings are exactly §5.8's `DEADHEAD` and `HOTEL`. `CostRow.category` is an open
+  `str`, so a misspelling would not fail — it would quietly create a thirteenth category that never
+  reconciles against §5.8's twelve or against gate V6's D10 invoice side
+- [x] The deadheaded crew member's calendar gets a real `DEADHEAD` block — positioning consumes duty
+  time (00_Intro glossary), so it must be visible to L1/L2/L3 like any other duty, not a free teleport
+- [x] `positioning.deadhead` and `positioning.hotel` are **removed** from
+  `config.DECLARED_NOT_YET_CONSUMED`, and `test_every_config_field_is_read_by_some_code_path` still
+  passes — the guard, not a reviewer, is what certifies this story is done
+- [x] `configs/grid_mvp.yaml`'s comment asserting cross-base is inert *"regardless of engine wiring"* is
+  corrected — it becomes false the moment this lands
+- [x] The hotel-night rule and the `TRANSPORT` coefficient are carried as `[CONFIRM: <owner>]` markers,
+  not resolved by the implementer
+
+### Verification
+*   🤖 **Automated:** `pytest tests/engine/test_positioning.py`
+*   🙋 **Manual:** `crewsim explain-cost --scenario 0 --category DEADHEAD --trace-root`
+    *   **Expect:** a named crew member, their home base, the station they were flown to, the dollar
+        amount, and the open-time item that caused it — traced back to its root event
+    *   **Fails if:** the multi-base reserve pool is constructed inside the test instead of loaded
+        through `load_rosters` — a test that validates a copy of the mechanism rather than the
+        mechanism is this codebase's most-repeated defect, and here it would leave the shipped engine
+        with the same $0 positioning cost it has today
+    *   **Fails if:** a hotel night is charged on every dispatch (or never) because the rule was assumed
+        rather than confirmed, or a `TRANSPORT` coefficient appears in `costs_pilots.yaml` without a
+        Finance source
+
+### How it was implemented
+
+**The blocker was a parameter that had existed, unset, since L7 was written.** `check_l7_base`'s
+signature is `(crew, item, is_deadhead=False)` and its docstring reads *"Crew must start duty at own
+base unless deadheaded"* — but nothing had ever passed `True`, so every out-of-base candidate failed
+L7 by construction. Measured before the fix, across the whole real corpus: **0 of 11,393 covering
+(crew, duty) pairs were legal**, and relaxing the rolling limits only moved the rejection from L3 to
+L7. `EligibilityEngine.eligible_reserves` now takes `is_deadhead` and forwards it, and the only caller
+that sets it is the branch that actually books the seat and writes the block.
+
+**The pool comes from D2, and is not minted.** `roster_loader.load_cross_base_reserves` loads the real
+crew who really held `RESERVE` blocks at other bases — 7 at YYZ, 3 at YVR, same fleet and position as
+the scope. Deliberately *not* policy-driven: a policy's `stage1.reserves` is the Stage-1 commitment for
+the scope being optimised, and what Toronto staffed is not this planner's decision variable. Their
+`PAIRING` blocks are kept, unlike the in-scope carve-out which strips them (S1b-02: a reserve bidder
+gives up their line). Stripping them here would invent availability that never existed and make
+cross-base coverage look far more reliable than it is. `test_cross_base_crew_keep_the_flying_that_makes
+_them_unavailable` pins that decision so it cannot be quietly reversed.
+
+**Positioning is modelled by widening the assignment window, not by bolting a cost onto an unchanged
+one.** `_dispatch_cross_base` builds `dataclasses.replace(item, start=item.start - lead)` and asks
+every legality question about the trip the crew member actually makes: L1 counts the deadhead hours,
+L3/L4 accumulate them, the `RESERVE` block has to cover the positioning as well as the flying, and L8
+notice is measured to the *positioning* report time — so a call four hours before departure can no
+longer be answered from Toronto. A cost-only implementation would have got all four wrong.
+
+**Two `[CONFIRM: Crew Planning]` figures were asked, not assumed** (decisions recorded with the user
+2026-08-09, `configs/base.yaml → positioning`):
+- `deadhead_duration_hours: 4.0` — not derivable from D1–D12. D3 carries only revenue legs from a base
+  to an outstation; D10's invoices carry an outstation, an amount and a date. No base-to-base
+  positioning leg exists anywhere in the corpus, so this is stated, not fitted.
+- `hotel_on_every_deadhead: true` — §7.3's only worked example charges $400 + $220 as one `q^pos`, and
+  D10 backs that shape (247 `DEADHEAD` rows against 250 `HOTEL`). A knob, not a rule in `des.py`;
+  `test_hotel_can_be_switched_off_without_touching_code` proves it.
+
+**Measured effect.** 16 cross-base dispatches across scenarios 0–3 under R6, each booking $400 + $220
+against the same `root_event_uid` as the assignment, with drafts falling correspondingly. The manual
+check traces one end to end: root event 173 → `RESERVE_UTILIZATION` $150 + `DEADHEAD` $400 + `HOTEL`
+$220, crew `P00503` (YYZ → YUL), $770 attributable.
+
+**Three things this changed elsewhere, none of them cosmetic:**
+1. **Gate V1 regressed, correctly, and was fixed at the gate.** With cross-base live, a policy carving
+   *zero* reserves could still be covered by Toronto's, booking `RESERVE_UTILIZATION` and defeating the
+   "zero reserves, therefore no reserve cost" premise — with a cost that is genuinely justified. Real
+   behaviour, wrong question. `policy_with_reserve_count` now pins `allow_cross_base_reserve=False` for
+   the same reason `run_v1_gate` already pins `displaced_flying`.
+2. **`assign_reserve` required only an *overlapping* `RESERVE` block, not a covering one.** Harmless
+   before, because the eligibility pool independently checks coverage — but it would have let a
+   cross-base crew member be positioned during hours they were not yet on call. Now checked.
+3. **Gate V6's "not modelled by the engine" line is no longer true.** D10's invoice side finally has a
+   simulated counterpart, reported beside it rather than folded into the headline gap: that gap is
+   against D7 *payroll*, and a deadhead seat is an invoice, not a pay code. The two sides are still not
+   like for like — D10 also carries `TRANSPORT`, which §4.4.2 prices with no coefficient at all.
+
+   **This line was a structural `$0.00` on first implementation, and that is worth recording.** V6 goes
+   through `run_historical_replay`, which builds its own `Simulation` and defaulted
+   `cross_base_reserves` to `None` — so the new line could never be non-zero, printed next to real
+   money, reading as a measurement. The engine underneath was correct; only the replay path was unwired.
+   Caught before it shipped, fixed by threading the pool through `replay.run_historical_period` over
+   *that period's* window, and pinned by
+   `test_the_historical_replay_path_also_gets_a_cross_base_pool`. V6 for 2026-03 now reports simulated
+   $2,480.00 against D10's actual $381.78 — the model **overstates** positioning by ~6.5× on the mock
+   corpus, which is a V6 finding for whoever runs the gate against real data, not a defect in this
+   story.
+
+**`crewsim explain-cost --category` was silently ignored when combined with `--trace-root`** (it was
+read only by `--summary`), so the story's own manual check would have traced a cancellation while
+looking like it had honoured the flag. `--category` now narrows the chain *selection*, and positioning
+rows print both ends of the trip.
+
+### Follow-up, same day: `TRANSPORT` now books
+Added on the user's instruction (2026-08-09), with the value to be confirmed with Finance. §5.8 named
+`TRANSPORT` — ground transport between airport and hotel — as one of three positioning categories while
+§4.4.2 priced only two, so the engine held a ledger category it could never book: **34% of D10's
+positioning spend** ($98,624 of $286,965 across the corpus) had no simulated counterpart, which also
+made gate V6's positioning comparison apples-to-oranges.
+
+**The placeholder is `402.54`, and its provenance is on the card because it is not the same kind of
+number as its neighbours.** It is the arithmetic mean of D10's 245 real `TRANSPORT` invoices. The two
+existing coefficients are Finance planning rates and do not track D10 at all — `hotel` is 220 against a
+D10 mean of 388, `deadhead` is 400 against 370 — so there is no consistent ratio to extrapolate from
+and an invoice mean is the only defensible stand-in. The non-round figure is deliberate: it should read
+as provisional. `[CONFIRM: Finance]` on the value.
+
+**A second `[CONFIRM]`, because the data does not settle the trigger.** The obvious hypothesis was that
+transport rides with the hotel (a ride to the room), and D10's near-equal row counts — 247 DEADHEAD,
+250 HOTEL, 245 TRANSPORT — look like support for it. **They are not.** All 742 D10 rows sit on unique
+`(crew, date, pairing)` keys and the three cost types never co-occur even once, so those counts are
+three independent draws from the mock generator, not a one-ride-per-room relationship. So
+`transport_on_every_deadhead` is its own knob rather than being welded to `hotel_on_every_deadhead`,
+defaulted true, `[CONFIRM: Finance]` — whether transport rides with the room or with the trip is
+precisely what Finance settles alongside the value.
+
+**One caveat this creates, stated in gate V6's own output.** The three categories now match on both
+sides, so the positioning pair is finally like for like — but the transport component of the simulated
+side is a mean *of the actual side it is being compared against*, so that part of the comparison is not
+independent. It stops being circular the moment Finance supplies a real rate.
+
+### Deliberately not done
+- **§7.3's away-from-base *draft* (the Punta Cana row) books $0.** The wiring is shared —
+  `_book_positioning` is called from both the reserve and the draft paths — but "away" is decided by
+  `crew.base != item.base`, the only location this engine knows, and a draftee is always in-scope
+  because drafting is base-local (§5.6). Making that case real needs down-route location tracking; D3
+  carries `layover_stations`, so the data exists. That is a separate story, not an assumption to invent
+  inside this one. Sharing the wiring means it only has to change how "away" is computed.
+- **The cross-base pool is excluded from gate V2 and gate V3 by construction.** V2's Erlang-B offered
+  load is measured against the in-scope establishment's on-call time, so a rescue served by a pool
+  outside that denominator must not enter the numerator (`n_cross_base_assignments` is counted
+  separately). V3 compares the eligibility distribution against a historical reconstruction for
+  `cfg.scope` alone, so cross-base evaluations pass `record=False`. Both are pinned by tests.

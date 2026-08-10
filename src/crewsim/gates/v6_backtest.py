@@ -139,6 +139,15 @@ def compute_simulated_cost(sim: Simulation) -> dict[str, Any]:
         "by_category": by_category,
         "comparable_total": float(comparable),
         "excluded_total": float(excluded),
+        # S1c-07: the engine books these now (cross-base reserve dispatch), so
+        # D10's invoice side finally has a simulated counterpart. Reported
+        # beside it rather than folded into the headline gap: the gap compares
+        # against D7 PAYROLL, and a deadhead seat is an invoice, not a pay code.
+        # All three of §5.8's positioning categories, matching what D10 carries
+        # -- so this IS a like-for-like comparison, unlike the D7 gap above.
+        "positioning_total": float(sum(
+            by_category.get(c, 0.0) for c in ("DEADHEAD", "HOTEL", "TRANSPORT")
+        )),
     }
 
 
@@ -182,8 +191,16 @@ def print_v6_report(result: dict[str, Any]) -> None:
     print("\n  Excluded from the comparable gap (no counterpart on the other side):")
     print(f"    Simulated CANCELLATION/TERMINAL_PENALTY (no payroll line item) = "
           f"${result['simulated']['excluded_total']:,.2f}")
-    print(f"    Actual D10 positioning/deadhead invoices (not modelled by the engine) = "
+    print(f"    Actual D10 positioning invoices (DEADHEAD/HOTEL/TRANSPORT) = "
           f"${result['actual']['positioning_total']:,.2f}")
+    print(f"    Simulated positioning (DEADHEAD/HOTEL/TRANSPORT, S1c-07 cross-base dispatch) = "
+          f"${result['simulated']['positioning_total']:,.2f}")
+    print("      Same three categories on both sides, so this pair IS comparable -- but it "
+          "is kept out of the gap above, which is against D7 PAYROLL, and a deadhead seat "
+          "is an invoice, not a pay code. Read the positioning pair with the transport "
+          "coefficient's status in mind: costs_pilots.yaml carries [CONFIRM: Finance] on "
+          "it, and its placeholder is D10's own invoice mean, so that component of the "
+          "simulated side is not independent of the actual side it is compared against.")
 
     print("\n  Bias decomposition (spec Sec9.2 -- qualitative, not computed):")
     for row in SPEC_BIAS_DECOMPOSITION:

@@ -1,19 +1,19 @@
 # S1e-04: grid over the R axis only.
 #
-# reserve_selection and cross-base are NOT swept here. Confirmed inert at
-# MVP scope, not merely unwired:
-#   - reserve_selection: des.py's Simulation._attempt_resolution hardcodes
-#     one dispatch strategy (shortest remaining window, seniority tiebreak)
-#     regardless of a policy's reserve_selection value. The spec names 4
-#     more strategies, each needing a real domain decision before it can be
+# reserve_selection and cross-base are NOT swept here:
+#   - reserve_selection: CONFIRMED INERT. des.py's Simulation._attempt_resolution
+#     hardcodes one dispatch strategy (shortest remaining window, seniority
+#     tiebreak) regardless of a policy's reserve_selection value. The spec names
+#     4 more strategies, each needing a real domain decision before it can be
 #     coded (e.g. which rolling window "lowest hours flown" reads, what
 #     distance metric "best fit" uses) -- tracked as a follow-up, S1e-04b.
-#   - allow_cross_base_reserve: the loaded roster is single-base (YUL only,
-#     confirmed via roster_loader.load_rosters), so there is nothing for a
-#     cross-base filter to restrict regardless of engine wiring.
-# Sweeping either axis today would silently multiply the grid by dimensions
-# that always collapse onto the same real result -- same disposition as
-# roster_size in S1d-05.
+#     Sweeping it would multiply the grid by a dimension that collapses onto the
+#     same real result -- same disposition as roster_size in S1d-05.
+#   - allow_cross_base_reserve: NO LONGER INERT as of S1c-07. That story added
+#     the out-of-scope reserve pool (roster_loader.load_cross_base_reserves
+#     loads the real YYZ/YVR reserves from D2) and §5.3's XB -> DH dispatch
+#     branch, so the flag now changes both coverage and cost. This file is
+#     S1e-04's R-axis grid and stays that shape; adding the axis is S1e-04b.
 policies:
   - R4
   - R6

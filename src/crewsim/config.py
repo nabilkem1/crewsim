@@ -206,6 +206,22 @@ class CascadeConfig(_Model):
     visibility_lag_hours: float
 
 
+class PositioningConfig(_Model):
+    """S1c-07: how cross-base reserve dispatch behaves. The PRICES live in
+    costs_pilots.yaml -> positioning; this is the behaviour that decides when
+    they are charged and how much duty time positioning consumes."""
+    deadhead_duration_hours: float
+    hotel_on_every_deadhead: bool
+    transport_on_every_deadhead: bool
+
+    @field_validator("deadhead_duration_hours")
+    @classmethod
+    def _non_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("positioning.deadhead_duration_hours must be >= 0")
+        return v
+
+
 class BaseConfig(_Model):
     paths: PathsConfig
     scope: ScopeConfig
@@ -217,6 +233,7 @@ class BaseConfig(_Model):
     cascade_reconstruction: CascadeReconstructionConfig
     legality: LegalityConfig | None = None
     cascade: CascadeConfig | None = None
+    positioning: PositioningConfig | None = None
     gates: GatesConfig | None = None
     reduced_mode: ReducedModeConfig | None = None
     mode: str
@@ -247,6 +264,7 @@ class DraftCosts(_Model):
 class PositioningCosts(_Model):
     deadhead: float
     hotel: float
+    transport: float
 
 
 class DisruptionCosts(_Model):
@@ -347,11 +365,6 @@ DECLARED_NOT_YET_CONSUMED: dict[str, str] = {
     "disruption.delay_per_minute":
         "the engine does not model delay propagation yet -- no code path books a "
         "per-minute delay cost (S1d-03 owns this)",
-    "positioning.deadhead":
-        "the engine does not model positioning yet -- D10's real invoices are "
-        "reported by gate v6 but never charged to a scenario",
-    "positioning.hotel":
-        "the engine does not model positioning yet -- see positioning.deadhead",
 }
 
 

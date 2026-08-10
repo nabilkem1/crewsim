@@ -76,6 +76,12 @@ class CrewMember:
     # load_rosters' signature (ten call sites) is unchanged, and so the flying
     # stays attributable to whose line it was.
     _displaced_pairings: list[Block] = field(default_factory=list)
+    # S1c-07: this reserve belongs to a base OTHER than cfg.scope.base, and can
+    # only cover an in-scope item by being deadheaded to it (§5.3's XB -> DH).
+    # A real field for the same reason as _is_reserve: the whole cross-base cost
+    # hinges on this flag, and as a runtime attribute it would be invisible to
+    # mypy and silently dropped by dataclasses.replace.
+    _is_cross_base: bool = False
 
     def blocks_in(self, start: float, end: float) -> list[Block]:
         """Return all blocks that overlap the interval [start, end]."""

@@ -262,6 +262,13 @@ before changing design" rule:
   interaction already found in `_attempt_resolution`: `min_rest` is 11h if `chosen.base == item.base` else
   10h — the away-base branch is reachable today even though nothing currently produces an away-base
   reserve, so restricting the pool would change real rest-hour calculations, not just eligibility counts.
+  **Superseded by `S1c-07` (done 2026-08-09), and the caveat above is now stale.** That story added the
+  out-of-scope reserve pool (`roster_loader.load_cross_base_reserves` loads the real YYZ/YVR reserves
+  from D2) and §5.3's `XB → DH` dispatch branch with its `q^pos` deadhead + hotel cost, and wired L7's
+  long-unset `is_deadhead` parameter. `allow_cross_base_reserve` now changes both coverage and cost — 16
+  dispatches across scenarios 0–3 under R6 — so what is left here is **sweeping** the axis, not
+  implementing it. The remaining real work on this card is the four uncoded `reserve_selection`
+  strategies.
 - The backlog-vs-spec grid-shape conflict (24 vs 60 combinations, and the missing R12 policy file) needs
   resolving once the other two axes are real, not before.
 

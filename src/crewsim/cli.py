@@ -1650,9 +1650,26 @@ def main(argv: list[str] | None = None) -> int:
             def chain_rank(item: tuple[int, list[LedgerRow]]) -> tuple[int, float]:
                 return len(item[1]), sum(r.amount for r in item[1])
 
+            # S1c-07: --category narrows the SELECTION, so
+            # `--category DEADHEAD --trace-root` traces a positioning cost back
+            # to the sick call that caused it. It used to be read only by
+            # --summary, so combining the two silently traced a cancellation
+            # instead -- the flag looked honoured and wasn't.
+            if args.category:
+                chains = {u: c for u, c in chains.items()
+                          if any(r.category == args.category for r in c)}
+                if not chains:
+                    present = sorted({r.category for r in rows if r.root_event_uid != 0})
+                    print(f"error: no causal chain in this scenario contains category "
+                          f"{args.category!r} (present: {present})")
+                    return 1
+
             with_cancellation = {u: c for u, c in chains.items()
                                  if any(r.category == "CANCELLATION" for r in c)}
-            if with_cancellation:
+            if args.category:
+                root_uid, chain = max(chains.items(), key=chain_rank)
+                selection = f"deepest chain containing a {args.category} row"
+            elif with_cancellation:
                 root_uid, chain = max(with_cancellation.items(), key=chain_rank)
                 selection = "deepest chain ending in a CANCELLATION"
             else:
@@ -1673,10 +1690,16 @@ def main(argv: list[str] | None = None) -> int:
             # a reader should see that rather than infer depth from one example.
             print("  chain depth: " + ", ".join(
                 f"{n} row(s) x{count}" for n, count in sorted(depths.items())) + "\n")
+            # S1c-07: a positioning row is meaningless without the two ends of
+            # the trip, and the ledger row carries only a crew_id.
+            home_base = {c.crew_id: c.base for c in sim.cross_base_reserves}
             for r in chain:
                 crew = r.crew_id or "-"
+                where = ""
+                if r.category in ("DEADHEAD", "HOTEL", "TRANSPORT") and r.crew_id in home_base:
+                    where = f"  ({home_base[r.crew_id]} -> {cfg.scope.base})"
                 print(f"  [t={r.sim_time:>9,.0f}  day {r.sim_time / 1440:>5.1f}]  "
-                      f"{r.category:<22} {_money(r.amount):>14}  event {r.event_uid:<5} crew {crew}")
+                      f"{r.category:<22} {_money(r.amount):>14}  event {r.event_uid:<5} crew {crew}{where}")
             print(f"\n  Total attributable to root event {root_uid}: "
                   f"{_money(sum(r.amount for r in chain))}")
             return 0
