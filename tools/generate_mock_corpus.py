@@ -141,6 +141,46 @@ PAY_CODES = {
 }
 
 
+def _reserve_shifts_from_config() -> list[dict]:
+    """The standby shift catalogue, read from configs/base.yaml -> reserve_lines.
+
+    Read, never restated: §4.4 puts every such value in exactly one place, and
+    a missing section raises rather than defaulting -- silently inventing a
+    shift is precisely the defect this exists to correct.
+    """
+    import yaml
+
+    cfg_path = pathlib.Path(__file__).resolve().parents[1] / "configs" / "base.yaml"
+    raw = yaml.safe_load(cfg_path.read_text())["reserve_lines"]["shifts"]
+    return [
+        {"label": s["label"], "start_hour": float(s["start_hour"]), "hours": float(s["hours"])}
+        for s in raw
+    ]
+
+
+RESERVE_SHIFTS = _reserve_shifts_from_config()
+
+
+def _max_duty_hours_from_config() -> float:
+    """L1's max duty period, read from configs/base.yaml -> legality.
+
+    OPEN-5: the generator used to build duty periods leg by leg with no regard
+    for L1 at all, producing duties of 13.6h at the 90th percentile and up to
+    15.1h against a 13h cap. Those duties are illegal for EVERY crew member in
+    the model -- reserve or drafted -- so they could only ever cancel, putting
+    an irreducible floor under uncovered flying at every reserve level. A
+    generator that emits rosters its own legality rules forbid is producing
+    demand nobody could ever have flown.
+    """
+    import yaml
+
+    cfg_path = pathlib.Path(__file__).resolve().parents[1] / "configs" / "base.yaml"
+    return float(yaml.safe_load(cfg_path.read_text())["legality"]["max_duty_hours"])
+
+
+MAX_DUTY_HOURS = _max_duty_hours_from_config()
+
+
 # ---------------------------------------------------------------------------
 # 4. GENERATOR
 # ---------------------------------------------------------------------------
@@ -325,10 +365,13 @@ class MockCorpus:
                 d = self.start
                 while d <= self.end:
                     if c["crew_id"] in reserve_ids and self.rng.random() < .55:
-                        # Reserve block: 5 on / 3 off rotation, SC or LC.
+                        # Reserve line: 3-6 days on, 2-3 off, SC or LC, on one
+                        # of the rostered standby shifts. Each of those days is
+                        # a SHIFT, not a full day -- see _reserve_block.
                         span = int(self.rng.integers(3, 7))
                         call = "SC" if self.rng.random() < .62 else "LC"
-                        self._block(roster_rows, c, d, span, "RESERVE", "", call)
+                        shift = RESERVE_SHIFTS[int(self.rng.integers(len(RESERVE_SHIFTS)))]
+                        self._reserve_block(roster_rows, c, d, span, call, shift)
                         d += timedelta(days=span + int(self.rng.integers(2, 4)))
                         continue
                     r = self.rng.random()
@@ -392,6 +435,50 @@ class MockCorpus:
                      pid, call])
         self.blocks[c["crew_id"]].append((d, d + timedelta(days=span), btype, pid))
 
+    def _reserve_block(self, rows, c, d, span, call, shift):
+        """A reserve line: `span` consecutive days on call, ONE D2 ROW PER DAY,
+        each carrying that day's on-call SHIFT.
+
+        Reserves cannot go through `_block` like every other block type. That
+        helper writes a single midnight-to-midnight span, which is right for a
+        day off or a vacation -- those genuinely are whole-day states -- but
+        wrong for standby: a reserve is available for a window each day and
+        off duty outside it (spec §5.0.2's "on call until Tue 18:00", §5.5's
+        "a reserve whose window ends at 18:00 is worth nothing after 18:00").
+
+        Emitting slabs was a real defect, not a simplification. Every one of
+        the 5,782 RESERVE rows this generator used to write started and ended
+        at hour 00, spanning 72-144h, so a reserve accrued 24h/day of on-call
+        time and blew L3's 60h rolling limit by their third standby day
+        without ever being called. That is what held simulated eligibility far
+        under the historical 30% and made gate V2 block 88% of arrivals
+        against Erlang-B's 55%.
+
+        `self.blocks` still gets ONE whole-rotation entry: it answers "which
+        calendar days is this crew on a reserve line", which is what the
+        reserve pool and the sick-call hazard downstream actually ask of it.
+        The hours live in the D2 rows, where the engine reads them.
+
+        `shift` is drawn per ROTATION, not per day: a reserve line is bid as a
+        pattern, so a crew member holds the same standby shift for the run of
+        days rather than being re-rolled nightly. Which shifts exist at all is
+        `configs/base.yaml -> reserve_lines.shifts`, a [CONFIRM: Crew Planning]
+        catalogue -- emitting a single fixed window for every reserve in the
+        corpus would just be a different uniform artifact from the 24h slab.
+        """
+        off = {"YUL": 4, "YYZ": 4, "YVR": 7}[c["base"]]
+        start_h = shift["start_hour"]
+        hours = shift["hours"]
+        for i in range(span):
+            s = datetime.combine(d + timedelta(days=i), datetime.min.time()) + timedelta(hours=start_h)
+            e = s + timedelta(hours=hours)
+            rows.append([c["crew_id"], c["base"], c["fleet"], c["position"], "RESERVE",
+                         (s + timedelta(hours=off)).strftime("%Y-%m-%dT%H:%M"),
+                         (e + timedelta(hours=off)).strftime("%Y-%m-%dT%H:%M"),
+                         s.strftime("%Y-%m-%dT%H:%M"), e.strftime("%Y-%m-%dT%H:%M"),
+                         "", call])
+        self.blocks[c["crew_id"]].append((d, d + timedelta(days=span), "RESERVE", ""))
+
     def _make_pairing(self, pid, base, fleet, d0, days, prows, lrows):
         season = season_of(d0)
         prim, wp, sec, ws, dom, _ = SEASON_DESTS[season]
@@ -413,6 +500,17 @@ class MockCorpus:
             n_legs = 1 if dest in LONG_HAUL else int(self.rng.integers(1, 3))
             t = rep + 1.0
             for k in range(n_legs):
+                # OPEN-5: stop adding legs once the duty period would breach
+                # L1's own max_duty_hours. Duty runs report -> last release,
+                # so leg k releases at t + blk + 0.5; a two-leg domestic day
+                # used to reach 15.1h against a 13h cap, making the whole
+                # pairing unflyable by anyone. Dropping the leg (rather than
+                # shortening it) keeps the fitted block-hour distribution
+                # intact and matches how a real pairing is built -- to fit
+                # legality, not in spite of it. The first leg always fits: a
+                # single leg is at most blk + 1.5h.
+                if k > 0 and (t + blk + 0.5) - rep > MAX_DUTY_HOURS:
+                    break
                 o = base if (dp == 0 and k == 0) else (dest if k else base)
                 lrows.append([pid, dp + 1, k + 1,
                               f"TS{int(self.rng.integers(100, 900))}",

@@ -23,15 +23,29 @@ def test_regime_fit(monkeypatch: pytest.MonkeyPatch) -> None:
         return pathlib.Path("/tmp")
 
     def mock_load_dataset(cfg: config.BaseConfig, name: str) -> pl.DataFrame:
+        # AUD-18: fit_regime's day states come from D9's disruption_class at
+        # cfg.scope.base (the same label source the NHPP/delay fits condition
+        # on), so the mock supplies a D9 sequence; d4/d8 now only feed the
+        # chaos-based intensity multipliers and carry base/origin columns.
         if name == "d4_absences":
             return pl.DataFrame({
-                "absence_start": [f"2023-01-{i:02d}T08:00:00" for i in range(1, 21) for _ in range(i)]
+                "absence_start": [f"2023-01-{i:02d}T08:00:00" for i in range(1, 21) for _ in range(i)],
+                "base": ["YUL"] * sum(range(1, 21)),
             })
         elif name == "d8_flight_movements":
             return pl.DataFrame({
                 "date": [f"2023-01-{i:02d}" for i in range(1, 21)],
                 "delay_minutes": [0]*20,
-                "cancelled": [0]*20
+                "cancelled": [0]*20,
+                "origin": ["YUL"]*20,
+            })
+        elif name == "d9_station_days":
+            classes = (["CALM"] * 10) + (["NORMAL"] * 4) + (["DISRUPTED"] * 4) + (["SEVERE"] * 2)
+            return pl.DataFrame({
+                "station": ["YUL"] * 20,
+                "date": [f"2023-01-{i:02d}" for i in range(1, 21)],
+                "disruption_class": classes,
+                "season": ["winter_sun"] * 20,
             })
         return pl.DataFrame()
         

@@ -93,6 +93,120 @@ def test_compute_kpis_no_drafts_or_eligibility_events():
     assert result["eligibility_mean"] is None
     assert result["cascade_rate_mean"] is None
 
+def test_compute_kpis_cost_by_category_sums_to_expected_cost():
+    """WN-002: the decomposition must be a real partition of the same total
+    already shown as expected_cost -- not a second, independently-summed
+    figure that could silently drift from it."""
+    cfg = config.load()
+    warmup_end, _ = des.measurement_window_bounds(cfg)
+    rows = [
+        {"sim_time": warmup_end + 1.0, "event_uid": 1, "root_event_uid": 1, "crew_id": "C1",
+             "category": "DRAFT_TIER1", "amount": 500.0},
+        {"sim_time": warmup_end + 2.0, "event_uid": 2, "root_event_uid": 2, "crew_id": "C2",
+             "category": "DRAFT_TIER1", "amount": 500.0},
+        {"sim_time": warmup_end + 3.0, "event_uid": 3, "root_event_uid": 3, "crew_id": "C3",
+             "category": "RESERVE_UTILIZATION", "amount": 250.0},
+        {"sim_time": warmup_end + 4.0, "event_uid": 4, "root_event_uid": 4, "crew_id": None,
+             "category": "CANCELLATION", "amount": 25000.0},
+    ]
+    sim_a = _fake_sim(cfg, rows)
+    # A second scenario with a DIFFERENT category present, to prove averaging
+    # divides by n_scenarios (2), not by however many scenarios booked that
+    # category.
+    sim_b = _fake_sim(cfg, rows=[
+        {"sim_time": warmup_end + 1.0, "event_uid": 1, "root_event_uid": 1, "crew_id": None,
+             "category": "RESERVE_STAFFING", "amount": 1000.0},
+    ])
+    result = compute_kpis(cfg, [sim_a, sim_b])
+
+    assert result["cost_by_category"]["DRAFT_TIER1"] == 500.0  # (1000 + 0) / 2 scenarios
+    assert result["cost_by_category"]["RESERVE_UTILIZATION"] == 125.0  # (250 + 0) / 2
+    assert result["cost_by_category"]["CANCELLATION"] == 12500.0  # (25000 + 0) / 2
+    assert result["cost_by_category"]["RESERVE_STAFFING"] == 500.0  # (0 + 1000) / 2
+    assert sum(result["cost_by_category"].values()) == result["expected_cost"]
+    # No category that never actually booked a row anywhere -- e.g. TERMINAL_PENALTY.
+    assert "TERMINAL_PENALTY" not in result["cost_by_category"]
+
+
+def test_compute_kpis_delay_ambient_is_the_one_deliberate_exception_to_that_sum():
+    """DELAY_AMBIENT is the single category this codebase deliberately keeps
+    OUT of expected_cost/cvar95 (des.EXCLUDED_FROM_OPTIMISED_COST) while still
+    showing it in cost_by_category -- so for a run that books it, the
+    previous test's invariant (sum(cost_by_category) == expected_cost) does
+    NOT hold, on purpose. Asserted explicitly so nobody re-derives that
+    invariant as a general rule and "fixes" this exclusion by accident."""
+    cfg = config.load()
+    warmup_end, _ = des.measurement_window_bounds(cfg)
+    rows = [
+        {"sim_time": warmup_end + 1.0, "event_uid": 0, "root_event_uid": 0, "crew_id": "C1",
+             "category": "DRAFT_TIER1", "amount": 500.0},
+        {"sim_time": warmup_end + 2.0, "event_uid": 0, "root_event_uid": 0, "crew_id": None,
+             "category": "DELAY_AMBIENT", "amount": 5000.0},
+    ]
+    sim = _fake_sim(cfg, rows)
+    result = compute_kpis(cfg, [sim])
+
+    assert result["cost_by_category"]["DELAY_AMBIENT"] == 5000.0
+    assert result["expected_cost"] == 500.0
+    assert sum(result["cost_by_category"].values()) != result["expected_cost"]
+
+
+def test_compute_kpis_utilization_rate_from_real_reserve_staffing_rows():
+    """WN-003: utilization_rate's denominator is the real count of
+    RESERVE_STAFFING rows booked (one per reserve per covered day), not a
+    hand-parsed reading of a policy YAML."""
+    cfg = config.load()
+    warmup_end, _ = des.measurement_window_bounds(cfg)
+    rows = [
+        {"sim_time": warmup_end + 1.0, "event_uid": 1, "root_event_uid": 1, "crew_id": "C1",
+             "category": "RESERVE_UTILIZATION", "amount": 250.0},
+    ]
+    # 4 RESERVE_STAFFING rows (4 reserve-days bought), 1 actual dispatch.
+    for i, crew in enumerate(["R1", "R1", "R2", "R2"], start=10):
+        rows.append({"sim_time": warmup_end + i, "event_uid": i, "root_event_uid": i,
+                      "crew_id": crew, "category": "RESERVE_STAFFING", "amount": 250.0})
+    sim = _fake_sim(cfg, rows)
+    result = compute_kpis(cfg, [sim])
+
+    assert result["reserve_staffing_days_mean"] == 4.0
+    assert result["reserve_dispatches_mean"] == 1.0
+    assert result["utilization_rate"] == 0.25
+
+
+def test_compute_kpis_utilization_rate_none_when_no_reserves_staffed():
+    cfg = config.load()
+    sim = _fake_sim(cfg, rows=[])
+    result = compute_kpis(cfg, [sim])
+    assert result["reserve_staffing_days_mean"] == 0.0
+    assert result["utilization_rate"] is None
+
+
+def test_compute_kpis_service_level_uses_the_real_configured_threshold():
+    """The real loaded config (not a mock) carries service_level (WN-004);
+    this proves compute_kpis reads it rather than a hardcoded assumption."""
+    cfg = config.load()
+    assert cfg.service_level is not None  # would fail loudly if configs/base.yaml regressed
+    warmup_end, _ = des.measurement_window_bounds(cfg)
+
+    def _cancellations(n: int, offset: int):
+        return [
+            {"sim_time": warmup_end + offset + i, "event_uid": offset + i, "root_event_uid": offset + i,
+             "crew_id": None, "category": "CANCELLATION", "amount": 25000.0}
+            for i in range(n)
+        ]
+
+    # u_max=3: a scenario with 4 uncovered legs (cancellations) exceeds it,
+    # one with 1 does not.
+    sim_over = _fake_sim(cfg, rows=_cancellations(4, 0))
+    sim_under = _fake_sim(cfg, rows=_cancellations(1, 100))
+    result = compute_kpis(cfg, [sim_over, sim_under])
+
+    assert result["service_level"]["u_max"] == cfg.service_level.u_max
+    assert result["service_level"]["epsilon"] == cfg.service_level.epsilon
+    assert result["service_level"]["p_uncovered_exceeds_u_max"] == 0.5  # 1 of 2 scenarios
+    assert result["service_level"]["service_level_met"] is False  # 0.5 > epsilon (0.05)
+
+
 def test_compute_kpis_real_scenarios():
     """Real, small-scale smoke test: the real CRN pipeline end to end,
     proving the window filter does non-trivial real work (fewer window-

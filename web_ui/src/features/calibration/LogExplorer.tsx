@@ -41,9 +41,14 @@ export const LogExplorer: React.FC<{ initialJobId?: string }> = ({ initialJobId 
       )}
 
       {logs.length > 0 && (
-        <div style={{ 
-          backgroundColor: 'var(--color-neutral-900)', 
-          color: 'var(--color-neutral-100)', 
+        <div style={{
+          // Chrome tokens, not the neutral ramp: this is a fixed-dark terminal
+          // panel (same convention as EventTape/LogView), so it must not
+          // invert when the neutral ramp does for dark mode -- --color-neutral-900
+          // becomes near-white there, which would turn this into a
+          // light-background panel with light-on-light text.
+          backgroundColor: 'var(--chrome-bg)',
+          color: 'var(--chrome-text-strong)',
           padding: 'var(--spacing-4)', 
           borderRadius: 'var(--radius-md)',
           fontFamily: 'var(--font-mono)',

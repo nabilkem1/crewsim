@@ -1,1 +1,0 @@
-export { ProvenanceDashboard } from './ProvenanceDashboard';

@@ -53,11 +53,11 @@ packages = ["src/crewsim"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
-# src/crewsim/api/ is the web-API workstream (backlog/mvp/web/), excluded while
-# it is in flight so slice-1a CI is meaningful rather than permanently red on
-# another stream's files. Mirrors EXCLUDED_TREES in tests/test_config.py, which
-# carries the same note and self-deletes once that tree is clean.
-exclude = ["src/crewsim/api"]
+# src/crewsim/api/ used to be excluded here while the web-API workstream was in
+# flight, mirrored by EXCLUDED_TREES in tests/workstreams.py. Both are gone: the
+# carve-out was what let a 500-ing health endpoint, a naive/aware datetime bug
+# (the very thing DTZ below is enabled to catch) and several fabricated-data
+# routers land unreviewed. The whole package is linted now.
 
 [tool.ruff.lint]
 # Pinned EXPLICITLY rather than inheriting ruff's default selection. Left
@@ -97,6 +97,20 @@ ignore = [
     # cfg, now, costs...). Capping the count would push them into ad-hoc
     # parameter objects for a metric, not for clarity.
     "PLR0917",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# `db: Session = Depends(get_db)` is FastAPI's dependency-injection syntax, not
+# a mutable default argument: the framework evaluates it per request. B008 flags
+# every route that touches the database otherwise. This is the setting ruff
+# documents for exactly this case -- it does not disable B008, it teaches it
+# which calls are safe in a default.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
 ]
 
 [tool.mypy]

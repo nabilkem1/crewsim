@@ -41,13 +41,15 @@ def test_evaluate_terminal_penalties():
     ]
     
     entries = evaluate_terminal_penalties(items, costs)
-    
+
     assert len(entries) == 2
-    
+
     assert entries[0][0] == "TERMINAL_PENALTY"
     assert entries[0][1] == 37500.0 # 25000 * 1.5
-    assert entries[0][2] == 5 # root_event_uid preserved
-    
+    assert entries[0][2] == 101 # the item's own uid (AUD-03: pairs with its OPEN_ITEM marker)
+    assert entries[0][3] == 5 # root_event_uid preserved
+
     assert entries[1][0] == "TERMINAL_PENALTY"
     assert entries[1][1] == 37500.0
-    assert entries[1][2] == 7
+    assert entries[1][2] == 102
+    assert entries[1][3] == 7

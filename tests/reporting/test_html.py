@@ -4,6 +4,7 @@ import re
 from crewsim import config
 from crewsim.reporting.report import (
     KNOWN_STUB_GATES,
+    NOT_EVALUATED_GATES,
     build_provenance,
     build_report,
     extract_confirm_markers,
@@ -90,6 +91,14 @@ def test_build_report_self_contained_and_honest(tmp_path):
     # V3/V4/V7/V9 must report a real verdict, never STUB.
     for gate in ("V3", "V4", "V7", "V9"):
         assert re.search(rf"<td>{gate}</td><td>(PASS|FAIL|STABLE|UNSTABLE)</td>", html)
+    # Prod-readiness review of 05_slice_1e (2026-08-11): V5/V6/V8 used to be
+    # silently absent from this table -- indistinguishable, on the page,
+    # from "these gates don't exist" -- when spec Sec9's own top line is
+    # "No output... until all nine gates (V1-V9) are passed". Each must
+    # appear, honestly marked NOT EVALUATED with a real reason, not omitted.
+    for gate, reason in NOT_EVALUATED_GATES.items():
+        assert f"<td>{gate}</td><td>NOT EVALUATED</td>" in html
+        assert reason in html
 
     assert "Reproducibility chain" in html
     assert "Outstanding [CONFIRM:] flags" in html

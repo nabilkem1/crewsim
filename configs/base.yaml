@@ -90,6 +90,19 @@ sensitivity:
   lambda_risk_dial: [0.0, 0.25, 0.5, 0.75, 1.0]
   instability_threshold: 2   # R* swing (units) across a swept parameter that counts as "unstable" (S1d-05)
 
+# The spec §7.5 service-level chance constraint: P(UncoveredLegs > u_max) <= epsilon.
+# Neither value is measured from Air Transat data or supplied by Crew Planning
+# yet -- WN-004 proposes the values below as the most defensible starting
+# point available, not an invented number: they are lifted verbatim from
+# spec_sections/00_Intro.md's own glossary worked example of what a
+# service-level target looks like ("At most 3 uncovered legs, in no more than
+# 5% of months"). Until Crew Planning confirms or replaces them, no candidate
+# reserve level is filtered as infeasible on their basis with any real
+# confidence -- see reporting/recommendation.py's own handling.
+service_level:
+  u_max:   3      # [CONFIRM: Crew Planning] max tolerable uncovered legs per scenario
+  epsilon: 0.05   # [CONFIRM: Crew Planning] max tolerable P(uncovered legs > u_max)
+
 # FULL computes eligibility from real crew state (S1c-01). REDUCED replaces it
 # with Bernoulli(p_elig) for fast smoke tests, and any command that would
 # produce a RECOMMENDATION refuses to run under it -- a recommendation derived
@@ -98,6 +111,9 @@ mode: FULL                   # FULL | REDUCED
 reduced_mode:
   # Only read when mode == REDUCED.
   p_elig: 0.3                # [CONFIRM: Data Science] Bernoulli eligibility for smoke tests
+  # §5.7's REDUCED cascade contract (AUD-21): each draft spawns a synthetic
+  # future open item with this probability. Screening only, like p_elig.
+  p_cascade: 0.2             # [CONFIRM: Data Science] spec §5.7 default
 costs_file: costs_pilots.yaml
 
 # =============================================================================
@@ -148,6 +164,29 @@ cascade_reconstruction:               # S0-05, §6.3-3 -- the 7-day follow-on sc
   cascade_reason_codes: [CASCADE_UNCOVERED]   # D6 reason_code values that count as "a flight broke"
   confidence_level: 0.95              # for the reported rate's CI -- a reporting choice, not a formula constant
 
+reserve_lines:                        # Standby shifts the MOCK corpus is built from
+  # THE ENGINE NEVER READS THIS. roster_loader takes each D2 row's own
+  # start/end verbatim, so whatever a real Air Transat extract rosters --
+  # morning, afternoon, night, varying by crew and by day -- is honoured
+  # exactly as scheduled. The ROSTER is the authority on when a reserve is on
+  # duty. This section only shapes the mock data the generator writes, so the
+  # corpus carries realistic shift variety instead of one hardcoded window.
+  #
+  # A reserve is on call for a shift and off duty outside it (spec §5.0.2's
+  # "on call until Tue 18:00", §5.5's "a reserve whose window ends at 18:00
+  # is worth nothing after 18:00") -- never a continuous multi-day block.
+  # The generator originally emitted midnight-to-midnight slabs of 3-6 WHOLE
+  # DAYS, so a reserve accrued 24h/day of on-call time and blew L3's 60h
+  # rolling limit by their third standby day without ever being called.
+  #
+  # [CONFIRM: Crew Planning] -- the shift CATALOGUE below is a plausible
+  # round-the-clock set, not a verified Air Transat roster pattern. Replace it
+  # with the real standby shifts; nothing in the engine has to change.
+  shifts:
+    - {label: morning,   start_hour: 6,  hours: 12}   # 06:00-18:00
+    - {label: afternoon, start_hour: 14, hours: 12}   # 14:00-02:00
+    - {label: night,     start_hour: 22, hours: 10}   # 22:00-08:00
+
 legality:                             # Rules configuration
   # S1a-07 L1/L2. These were literals in four separate modules (legality.py,
   # drafting.py, cascade.py, des.py), each independently re-deriving the same
@@ -162,6 +201,16 @@ legality:                             # Rules configuration
   rolling_7d_duty_limit_hours: 60.0   # [CONFIRM: Crew Planning] S1c-03 L3 duty limit
   rolling_7d_flight_limit_hours: 35.0 # [CONFIRM: Crew Planning] S1c-03 L3 flight limit
   rolling_28d_duty_limit_hours: 190.0 # [CONFIRM: Crew Planning] S1c-03 L4 duty limit
+
+  # AUD-24, the half the corpus fix does NOT answer: do the hours a reserve
+  # spends ON CALL BUT NOT FLYING accrue toward the rolling duty limits (L3,
+  # L4) and the L5 work streak? Sitting by the phone is not obviously "duty"
+  # -- but it is not obviously free either, and the answer moves the
+  # recommended reserve level. Sweep it rather than assume it: run the grid
+  # both ways and report the gap (that is what this being a flag is FOR).
+  # Even at the corrected 12h window this binds: 6 consecutive standby days
+  # is 72h, over L3's 60h limit.
+  reserve_counts_as_duty: true        # [CONFIRM: Labour Relations]
 
 positioning:                          # S1c-07 — cross-base reserve dispatch, §5.3's XB -> DH branch
   # The PRICES are in costs_pilots.yaml (`positioning.deadhead` / `.hotel`,
@@ -200,6 +249,10 @@ gates:                                # V&V gate parameters (§9.2)
   # against the closed-form Erlang-B value is a confidence-interval containment
   # test, not a hand-picked tolerance. This is that interval's level.
   v2_confidence_level: 0.95           # [CONFIRM: Data Science] S1b-07 Erlang-B CI level
+  # AUD-12 / §5.0.5 Welch warm-up check: the daily open-item mean counts as
+  # "settled" once it stays within this fraction of its measurement-window
+  # level. A verification tolerance, not a modelling input.
+  welch_tolerance: 0.5                # [CONFIRM: Data Science]
 
 cascade:
   visibility_lag_hours: 24.0        # [CONFIRM: Crew Planning] S1d-01 Cascade visibility lag

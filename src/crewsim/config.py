@@ -192,14 +192,73 @@ class LegalityConfig(_Model):
     rolling_7d_duty_limit_hours: float
     rolling_7d_flight_limit_hours: float
     rolling_28d_duty_limit_hours: float
+    # AUD-24: whether ON-CALL-BUT-NOT-FLYING hours accrue toward L3/L4's
+    # rolling limits and L5's work streak. A [CONFIRM: Labour Relations]
+    # question, so it is a swept flag rather than a hardcoded assumption.
+    reserve_counts_as_duty: bool
+
+
+class ReserveShift(_Model):
+    """One standby shift: when it starts and how long it runs."""
+
+    label: str
+    start_hour: float
+    hours: float
+
+    def window_label(self) -> str:
+        """The shift as a readable local clock range, e.g. "06:00-18:00 (12h)"."""
+        end = (self.start_hour + self.hours) % 24
+
+        def hhmm(h: float) -> str:
+            return f"{int(h):02d}:{round(h % 1 * 60):02.0f}"
+
+        return f"{hhmm(self.start_hour)}-{hhmm(end)} ({self.hours:g}h)"
+
+
+class ReserveLinesConfig(_Model):
+    """The standby SHIFTS the mock corpus's reserve lines are built from.
+
+    **The engine never reads this.** `roster_loader` takes each D2 row's own
+    start/end verbatim, so whatever a real Air Transat extract rosters --
+    morning, afternoon, night, varying by crew and by day -- is honoured
+    exactly as scheduled. The roster is the authority on when a reserve is on
+    duty; this section only shapes the MOCK data the generator writes, so that
+    the mock corpus has realistic variety instead of one hardcoded window.
+
+    A reserve is on call for a shift and off duty outside it (spec §5.0.2's
+    "on call until Tue 18:00", §5.5's "a reserve whose window ends at 18:00 is
+    worth nothing after 18:00") -- never a continuous multi-day block.
+    """
+
+    shifts: list[ReserveShift]
+
+    @field_validator("shifts")
+    @classmethod
+    def _at_least_one(cls, v: list[ReserveShift]) -> list[ReserveShift]:
+        if not v:
+            raise ValueError("reserve_lines.shifts must list at least one standby shift")
+        return v
+
+    def shift(self, label: str) -> ReserveShift:
+        for s in self.shifts:
+            if s.label == label:
+                return s
+        raise KeyError(f"unknown reserve shift {label!r}; known: {[s.label for s in self.shifts]}")
 
 
 class ReducedModeConfig(_Model):
     p_elig: float
+    # AUD-21 / §5.7: REDUCED-mode cascades are Bernoulli(p_cascade) spawning a
+    # synthetic future open item. Screening only, like p_elig.
+    p_cascade: float
 
 
 class GatesConfig(_Model):
     v2_confidence_level: float
+    # AUD-12 / §5.0.5 Welch check: how far (as a fraction of the tail mean)
+    # the daily open-item mean may sit from its settled level and still count
+    # as "stabilised". A verification tolerance, not a modelling input.
+    welch_tolerance: float
 
 
 class CascadeConfig(_Model):
@@ -222,6 +281,22 @@ class PositioningConfig(_Model):
         return v
 
 
+class ServiceLevelConfig(_Model):
+    """WN-004, spec Sec7.5's chance constraint: P(UncoveredLegs > u_max) <= epsilon.
+
+    No numeric default (test_no_config_model_field_has_a_numeric_default
+    enforces this repo-wide) -- both fields must come from configs/base.yaml,
+    where they carry a [CONFIRM: Crew Planning] marker. u_max/epsilon = 3/0.05
+    is proposed there, not invented here: it is spec_sections/00_Intro.md's own
+    glossary worked example of what a service-level target looks like ("At
+    most 3 uncovered legs, in no more than 5% of months"), used as the most
+    defensible starting point available pending a real Crew Planning number.
+    """
+
+    u_max: int
+    epsilon: float
+
+
 class BaseConfig(_Model):
     paths: PathsConfig
     scope: ScopeConfig
@@ -232,6 +307,7 @@ class BaseConfig(_Model):
     draft_reconstruction: DraftReconstructionConfig
     cascade_reconstruction: CascadeReconstructionConfig
     legality: LegalityConfig | None = None
+    reserve_lines: ReserveLinesConfig | None = None
     cascade: CascadeConfig | None = None
     positioning: PositioningConfig | None = None
     gates: GatesConfig | None = None
@@ -241,6 +317,7 @@ class BaseConfig(_Model):
     windows: WindowsConfig | None = None
     demand: DemandConfig | None = None
     sensitivity: SensitivityConfig | None = None
+    service_level: ServiceLevelConfig | None = None
     config_path: pathlib.Path | None = None
 
 
@@ -329,7 +406,41 @@ def load(config_path: str | pathlib.Path | None = None) -> BaseConfig:
         for notice in unconsumed_notices(cfg):
             print(f"[NOTICE] {notice}")
 
+    for warning in open_question_warnings(cfg):
+        print(f"[WARN] {warning}")
+
     return cfg
+
+
+def open_question_warnings(cfg: BaseConfig) -> list[str]:
+    """Configured values that are internally contradictory and are waiting on
+    a business answer, surfaced at load time rather than discovered as a
+    baffling zero three layers down.
+
+    Today there is one: a long-call reserve whose daily on-call window is no
+    longer than L8's required notice can never be legally called. Any duty
+    they could be notified for while on call starts at or after their window
+    closes, and the eligibility pool requires the RESERVE block to cover the
+    whole duty -- so LC utilisation is structurally zero, and that is a
+    property of the configuration, not a finding about reserves.
+    """
+    warnings: list[str] = []
+    if cfg.reserve_lines is not None and cfg.legality is not None:
+        lc_notice = cfg.legality.long_call_notice_hours
+        too_short = [s for s in cfg.reserve_lines.shifts if s.hours <= lc_notice]
+        if too_short:
+            names = ", ".join(f"{s.label} {s.window_label()}" for s in too_short)
+            scope = ("every" if len(too_short) == len(cfg.reserve_lines.shifts) else "some")
+            warnings.append(
+                f"{scope} standby shift is no longer than legality.long_call_notice_hours "
+                f"({lc_notice:g}h) -- {names}. A long-call reserve on such a shift can never "
+                f"be legally called: L8 measures notice from the call to the report, both of "
+                f"which have to fall inside the shift, so the longest notice such a shift can "
+                f"offer is strictly less than its own length. LC utilisation on those shifts is "
+                f"structurally zero. This is the open [CONFIRM: Crew Planning] question recorded "
+                f"in configs/base.yaml -> reserve_lines, not a simulation result."
+            )
+    return warnings
 
 
 def load_costs(cfg: BaseConfig) -> CostsConfig:
@@ -351,6 +462,35 @@ def load_costs(cfg: BaseConfig) -> CostsConfig:
     return CostsConfig.model_validate({**raw, "config_path": path})
 
 
+def verify_policy_costs(cfg: BaseConfig, policy: Any, costs: CostsConfig) -> None:
+    """AUD-16: make a policy's `costs_file` pin a CHECK, not a label.
+
+    C3 (§2.3) promises policies "hash-pinned to a cost-coefficient file
+    version", but every run loads `cfg.costs_file` and the policy's own
+    `costs_file` string only ever reached provenance displays -- a policy
+    claiming v3.2.1 silently priced against whatever base.yaml pointed at.
+    Called at the single chokepoint every simulation passes through
+    (des.run_scenario / run_historical_replay).
+
+    Accepts `name` or `name@version`. A bare name pins the file only.
+    """
+    pinned = getattr(policy, "costs_file", None)
+    if not pinned:
+        return
+    name, _, version = pinned.partition("@")
+    if name != cfg.costs_file:
+        raise ValueError(
+            f"policy {getattr(policy, 'policy_id', '?')!r} pins costs file {name!r} "
+            f"but this run loads {cfg.costs_file!r} (configs/base.yaml -> costs_file)"
+        )
+    if version and version != costs.version:
+        raise ValueError(
+            f"policy {getattr(policy, 'policy_id', '?')!r} pins {name}@{version} "
+            f"but the loaded file's version is {costs.version!r} -- update the "
+            f"policy pin or load the pinned costs version"
+        )
+
+
 # Config fields that are deliberately declared ahead of the code that will read
 # them. THE single source of truth: unconsumed_notices() surfaces these at
 # runtime, and tests/test_config.py's consumption guard treats exactly this set
@@ -362,10 +502,6 @@ DECLARED_NOT_YET_CONSUMED: dict[str, str] = {
         "flying is exogenous until slice 1b",
     "demand.credit_hours_per_bid_period":
         "flying is exogenous until slice 1b",
-    "disruption.delay_per_minute":
-        "the engine does not model delay propagation yet -- no code path books a "
-        "per-minute delay cost (event E2 DELAY, owned by S1b-09; this notice "
-        "previously misattributed it to S1d-03, which is E9's terminal penalty)",
 }
 
 

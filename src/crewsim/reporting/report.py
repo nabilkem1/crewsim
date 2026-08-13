@@ -8,13 +8,6 @@ import numpy as np
 
 _CONFIRM_RE = re.compile(r"\[CONFIRM:\s*([^\]]*)\]")
 
-# How much real simulation the report's V7 gate-status row is worth (S1a-11).
-# V7 stopped being free when it started hashing real ledgers instead of
-# synthetic draws, and this runs on every report build.
-V2_REPORT_SCENARIOS = 2
-V7_REPORT_SCENARIOS = 2
-V7_REPORT_JOBS = 2
-
 # Gates that are still hardcoded stubs (pre-existing, not fixed here -- their
 # own backlog stories, not S1e-02's, own actually building a real check).
 # The whole point of this report is "no black box" (spec Sec9.3) -- a report
@@ -25,6 +18,29 @@ V7_REPORT_JOBS = 2
 # the report's whole premise is "no black box" (spec Sec9.3), so if a future gate
 # ships as a stub it must be labelled STUB here rather than printing a fake PASS.
 KNOWN_STUB_GATES: dict[str, str] = {}
+
+# Prod-readiness review of 05_slice_1e (2026-08-11): this report's "Gate
+# status" table used to list only V1/V2/V3/V4/V7/V9 -- 6 of the 9 gates spec
+# Sec9's own top line requires ("No output... until all nine gates (V1-V9)
+# are passed") and Sec9.3 item 3 requires this exact report to show. V5/V6/V8
+# were simply absent, not shown as unevaluated -- indistinguishable, on this
+# page, from "these gates don't exist". Each of the three genuinely cannot be
+# computed from build_report's own inputs (policy names + scenario count):
+# V5/V6 need a human SME session / real payroll data neither of which this
+# repo has (see gates/v5_trace.py, gates/v6_backtest.py's own module
+# docstrings), and V8 is a property-based invariant over the whole engine
+# (`pytest tests/engine/test_legality.py`), not a per-run verdict. Shown here
+# as NOT EVALUATED rather than silently omitted, so "only 6 gates" is never
+# what a planner reading this page comes away believing.
+NOT_EVALUATED_GATES: dict[str, str] = {
+    "V5": "requires a real IOC duty manager SME walkthrough session -- run `crewsim gate v5` "
+          "and hold that session; this report cannot self-certify a human verdict.",
+    "V6": "requires real D7 payroll / D10 invoice data, which does not exist in this repo "
+          "(mock corpus only) -- run `crewsim gate v6 --period YYYY-MM` for the mechanics; "
+          "see its own MOCK CORPUS DATA caveat.",
+    "V8": "a property-based invariant over the whole engine, not a per-run verdict -- "
+          "run `pytest tests/engine/test_legality.py`.",
+}
 
 
 def extract_confirm_markers(paths: list[pathlib.Path]) -> list[dict[str, Any]]:
@@ -65,12 +81,16 @@ def build_provenance(cfg: Any, policy: Any, master_seed: str) -> dict[str, Any]:
     """The reproducibility chain (spec Sec9.3, item 2): data window, params
     version, master seed, costs version, policy hash -- same fields as the
     CLI's `run --print-provenance`, factored out so both share one source.
+
+    That source is `reporting/provenance.py`. It used to be `cli._params_provenance`
+    -- a reporting module reaching back into the CLI for a helper the CLI does
+    not own -- which broke the moment the helper moved.
     """
-    from ..cli import _params_provenance
+    from .provenance import params_provenance
 
     data_window = f"{cfg.windows.fitting.start} to {cfg.windows.holdout.end}" if cfg.windows else "unknown"
     costs_ver = policy.costs_file.split("@")[1] if "@" in policy.costs_file else "unknown"
-    params_ver, params_hash = _params_provenance(cfg)
+    params_ver, params_hash = params_provenance(cfg)
     return {
         "data_window": data_window,
         # Real params-store version + blake2b receipt, shared with the CLI's
@@ -113,13 +133,11 @@ def build_report(
     from .. import config
     from ..engine import des
     from ..engine.policy import load_policy
-    from ..gates.v1_degeneracy import run_v1_gate
-    from ..gates.v2_erlang import run_v2_gate
     from ..gates.v3_eligibility import run_v3_gate
     from ..gates.v4_cascade import run_v4_gate
-    from ..gates.v7_reproducibility import run_v7_gate
     from ..gates.v9_sensitivity import _real_r_recommender
     from .drilldown import build_scenario_drilldown, select_exemplar_scenarios
+    from .gate_status import compute_core_gates
 
     representative_policy = representative_policy or policy_names[0]
 
@@ -154,27 +172,16 @@ def build_report(
     v3_result = run_v3_gate(cfg, [f for sim in rep_sims for f in sim.elig.get_distribution()], window="holdout")
     v4_cascade_rates = [sim.n_cascading_drafts / sim.n_drafts for sim in rep_sims if sim.n_drafts > 0]
     v4_result = run_v4_gate(cfg, v4_cascade_rates, window="holdout")
-    # V7 now runs REAL scenarios and compares REAL ledger hashes (S1a-11), so
-    # it costs 2 x V7_REPORT_SCENARIOS simulations rather than being free. Kept
-    # deliberately small: the property is "does process topology change the
-    # answer", which a handful of scenarios settles as well as twenty, and this
-    # runs on every report build. jobs must be > 1 or the gate degenerates into
-    # comparing a sequential run against itself -- single-process agreement is
-    # not the configuration v2 failed.
-    # V1 (S1a-10): three real degeneracy scenarios, not the hardcoded PASS text
-    # this table used to have to label STUB.
-    v1_result = run_v1_gate(cfg, costs, per_policy[representative_policy]["policy"],
-                            master_seed=master_seed)
 
-    # V2 (S1b-07): the Erlang-B bound, measured from real cascade-disabled runs.
-    v2_result = run_v2_gate(cfg, costs, per_policy[representative_policy]["policy"],
-                             n_scenarios=V2_REPORT_SCENARIOS, master_seed=master_seed)
-
-    v7_result = run_v7_gate(
-        cfg, costs, per_policy[representative_policy]["policy"],
-        n_scenarios=V7_REPORT_SCENARIOS, jobs=V7_REPORT_JOBS, master_seed=master_seed,
+    # V1/V2/V7 each need their own small, independent simulation run -- see
+    # reporting/gate_status.py's own module docstring for why this is a
+    # shared function rather than inline calls here: api/routers/processing.py
+    # needs the exact same three gates on the native Results page, and two
+    # copies of "run V1/V2/V7 and format the row" is exactly the kind of
+    # drift-prone duplication this project keeps finding and fixing.
+    core_gates = compute_core_gates(
+        cfg, costs, per_policy[representative_policy]["policy"], master_seed
     )
-    v7_passed = v7_result["pass"]
 
     # V9: the real argmin-over-R lambda curve, from the SAME per-policy sims
     # already run above -- not a second simulation pass (build_r_star_lookup
@@ -188,25 +195,17 @@ def build_report(
     v9_unstable = (max(r for _, r in lambda_curve) - min(r for _, r in lambda_curve)) > cfg.sensitivity.instability_threshold
 
     gate_rows = [
-        ("V1", "PASS" if v1_result["pass"] else "FAIL",
-         "; ".join(f"{c['name']}: {c['computed']}" for c in v1_result["configurations"])),
-        ("V2", "PASS" if v2_result["pass"] else "FAIL",
-         (f"DES shortfall {v2_result['p_hat']:.3f} "
-          f"[{v2_result['ci_low']:.3f}, {v2_result['ci_high']:.3f}] vs Erlang-B "
-          f"{v2_result['theory']:.3f} at s={v2_result['servers']}, a={v2_result['offered_load']:.2f} "
-          f"(bound p_hat >= B; containment is informational)")),
+        *[(row["gate"], row["verdict"], row["detail"]) for row in core_gates],
         ("V3", "PASS" if v3_result["pass"] else "FAIL",
          (f"sim mean {v3_result['sim_mean']:.3f} vs historical band "
          f"[{v3_result['ci_lower']:.3f}, {v3_result['ci_upper']:.3f}] (policy {representative_policy})")),
         ("V4", "PASS" if v4_result["pass"] else "FAIL",
          (f"sim mean {v4_result['sim_mean']:.3f} vs historical band "
          f"[{v4_result['ci_lower']:.3f}, {v4_result['ci_upper']:.3f}] (policy {representative_policy})")),
-        ("V7", "PASS" if v7_passed else "FAIL",
-         (f"{v7_result['n_scenarios']} real ledger(s) hashed, sequential vs "
-          f"{v7_result['jobs']} worker(s)")),
         ("V9", "UNSTABLE" if v9_unstable else "STABLE",
          (f"R* ranges {min(r for _, r in lambda_curve)}-{max(r for _, r in lambda_curve)} across "
          f"lambda={lambdas[0]}..{lambdas[-1]}")),
+        *[(gate, "NOT EVALUATED", reason) for gate, reason in NOT_EVALUATED_GATES.items()],
     ]
 
     provenance = build_provenance(cfg, per_policy[representative_policy]["policy"], master_seed)

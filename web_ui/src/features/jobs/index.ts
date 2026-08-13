@@ -1,3 +1,3 @@
-export { JobQueue } from './JobQueue';
 export { GlobalErrorBoundary } from './ErrorBoundary';
-export { NotificationProvider, useNotification } from './NotificationContext';
+export { NotificationProvider } from './NotificationProvider';
+export { useNotification } from './useNotification';

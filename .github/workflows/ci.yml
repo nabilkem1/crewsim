@@ -55,3 +55,37 @@ jobs:
         # multi-process configuration is the one v2 failed, so running it
         # single-process here would defeat the point.
         run: uv run pytest -q
+
+  # web_ui had no CI of any kind until 2026-08-09. Nothing type-checked it:
+  # `vite dev` transpiles without running tsc, so the app ran fine locally while
+  # `npm run build` had been failing on 8 TypeScript errors -- invisible to every
+  # existing check, exactly like the fabricated-evidence problem the Python side
+  # spent three slices fixing.
+  web_ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web_ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+
+      - name: Install dependencies
+        # `ci` not `install`: fail if package-lock.json is out of date rather
+        # than silently resolving something different from what runs locally.
+        run: npm ci
+
+      - name: Lint (oxlint)
+        run: npx oxlint
+
+      - name: Build (tsc -b && vite build)
+        # This is the type-check. It is the step that would have caught the
+        # 8 errors this job was added for.
+        run: npm run build

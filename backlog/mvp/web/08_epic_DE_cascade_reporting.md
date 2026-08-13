@@ -1,5 +1,52 @@
 # Epic D — Cascade Evaluation & Epic E — Reporting & Analytics
 
+## Implementation note, 2026-08-12 — WD-001/002/003/004 built
+
+`reporting/cascade_analytics.py` + `api/routers/analytics.py` + the
+`features/analytics` view. Three things diverge from the ACs below, each
+because the data does not support what was specified:
+
+1. **No cascade DEPTH anywhere (WD-002/WD-004).** `LedgerRow` carries
+   `root_event_uid`, never the immediate parent, so a chain that cascaded four
+   levels and one that broke four pairings at once are identical in the
+   ledger — `tape.py::_depth_of` reads the same map and can only ever return 0
+   or 1. Chain **size** (distinct open items sharing a root) is reported
+   instead. Recording parentage in the engine is what WD-002's node-edge graph
+   would need first; drawing it today would mean inventing the edges.
+2. **No gate V4 verdict on the page.** V4 is INCONCLUSIVE (S1d-04: holdout
+   draft reconstruction recall is 0.000, so the historical band has zero
+   width). A "validated cascade rate" card would be the same fabrication this
+   router's predecessor was deleted for.
+3. **No seed-mismatch warning (WD-004).** Every row comes from one grid job,
+   and `run_grid` passes one master seed to every policy in it, so the warning
+   could never fire. The response states the pairing basis instead.
+
+Computed in `grid._run_one_policy` while the Simulation objects are still in
+memory (same reason `daily_outcomes` is) and stored on the batch job, so the
+endpoints read a completed run rather than simulating on request — that keeps
+the cascade figures and the E[C] beside them drawn from the same CRN set, and
+keeps WD-001's "< 1s" bar reachable.
+
+**Measured on the real corpus (R6/R10, 10 CRN scenarios, seed `master`):**
+amplification **6.5×** ($464 mean per chain resolved where it landed vs
+$3,000 once it cascaded), cascade rate 0.41% for R10 and 0.00% for R6, all 5
+cascading drafts falling in scenario 7 alone. The costliest chain is 5 open
+items and $3,400 — three successive tier-2 drafts. **A run with no cascades is
+the common case at this roster scale, not an edge case**, so the empty state
+is an explicit measured-zero panel, and a job that predates this feature is
+reported as "no data, re-run" rather than rendered as zero — the two look
+identical in a chart and mean opposite things.
+
+**Open, found while building this (engine, not the dashboard).** Every ledger
+row in both exemplar chains is booked at the *same simulated minute* as the
+draft that triggered it, so `cascade.visibility_lag_hours` (24h) is currently
+inert for them. The traces show why: the "future" pairing often starts
+*before* `now` (item 170: pairing at `[31328, 32041]`, drafted at t=32026), and
+where it is genuinely ahead it is inside the 24h lead, so
+`visible_at = max(now, start - lag)` collapses to `now`. Worth a look against
+S1d-01's own `fails_if` ("the cascade fires immediately — recovery then happens
+with foresight nobody has"); not touched here.
+
 ## Epic D: Cascade Evaluation
 
 ### WD-001: Cascade Summary Dashboard

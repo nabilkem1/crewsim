@@ -8,6 +8,7 @@ Acceptance (backlog/mvp/00_phase0_data_foundation.md):
 from __future__ import annotations
 
 import datetime
+import json
 
 import polars as pl
 import pytest
@@ -168,6 +169,23 @@ def test_real_corpus_cascade_rate_is_computed_not_the_ground_truth_shortcut() ->
     """
     cfg = config.load()
     result = cascades.cascade_target(cfg)
-    assert result["rate"] == pytest.approx(0.269, abs=0.01)
+    truth = json.loads((cfg.paths.corpus_dir / "_ground_truth.json").read_text())
+
+    # Asserted as a PROPERTY, not a pinned constant. The exact figure is a
+    # function of the corpus, and pinning it (it was `approx(0.269)`) turned
+    # every legitimate corpus regeneration into a spurious failure -- which is
+    # what happened when the 2026-08-12 reserve-shift fix moved it to 0.250.
+    # What this test actually exists to prove is that the number comes from a
+    # real per-draft causal scan rather than being read off the manifest.
+    assert result["rate"] != pytest.approx(truth["cascade_rate_true"], abs=1e-6), (
+        "the reconstruction returned the manifest's own figure -- it is reading the "
+        "ground-truth shortcut instead of scanning D6 per draft"
+    )
+    assert result["rate"] > truth["cascade_rate_true"], (
+        "the per-draft scan runs against S0-03's RECALLED subset, so it must come out "
+        "above the manifest's total-rows/full-draft-count ratio"
+    )
+    assert 0.0 < result["rate"] < 1.0
+    assert result["n_drafts"] > 0
     assert result["draft_recall"] is not None
     assert result["draft_recall"]["recall"] == pytest.approx(0.877, abs=0.01)

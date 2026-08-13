@@ -14,6 +14,11 @@ OCCUPYING_BLOCKS = {
     BlockType.DRAFTED_DUTY,
     BlockType.REST,
     BlockType.DEADHEAD,
+    # AUD-02 / spec §5.0.4 E1: a sick crew member is "marked unavailable for
+    # the absence duration". The ABSENCE block sick_calls inserts makes that
+    # unavailability physical -- without it the sick crew member read as a
+    # free tier-1 draft candidate for their whole absence.
+    BlockType.ABSENCE,
 }
 
 DUTY_BLOCKS = {
@@ -24,6 +29,33 @@ DUTY_BLOCKS = {
     BlockType.SIMULATOR,
     BlockType.TRAINING,
 }
+
+
+def _counts_reserve_as_duty(cfg: Any) -> bool:
+    """AUD-24: whether on-call-but-not-flying hours ACCRUE toward the rolling
+    limits (L3, L4) and the L5 work streak.
+
+    A [CONFIRM: Labour Relations] question, swept rather than assumed --
+    `configs/base.yaml -> legality.reserve_counts_as_duty`. Defaults True (the
+    conservative reading, and the long-standing behaviour) when no config is
+    supplied, so the many unit tests that call these rules with a bare cfg
+    keep their existing meaning.
+
+    Note this governs ACCRUAL only. It never affects L0: two overlapping
+    duties are physically impossible whatever the accrual rule says, so
+    `find_l0_violations` keeps the full DUTY_BLOCKS set.
+    """
+    legality = getattr(cfg, "legality", None) if cfg is not None else None
+    if legality is None:
+        return True
+    return bool(getattr(legality, "reserve_counts_as_duty", True))
+
+
+def accrual_duty_blocks(cfg: Any = None) -> set[BlockType]:
+    """DUTY_BLOCKS, minus RESERVE when on-call time does not accrue."""
+    if _counts_reserve_as_duty(cfg):
+        return DUTY_BLOCKS
+    return DUTY_BLOCKS - {BlockType.RESERVE}
 
 def check_l0_single_assignment(crew: CrewMember, start: float, end: float) -> LegalityResult:
     """
@@ -134,33 +166,46 @@ def check_l8_notice_time(crew: CrewMember, item: OpenTimeItem, now: float | None
     L8: Reserve notification time.
     Short-call and long-call minimum notice limits pulled from config.
     Applied against the call time (`now`), not the report time.
+
+    AUD-10: L8 applies ONLY to a crew member who is actually on reserve at
+    the call time. §5.4 defines it as a reserve call-out rule ("minimum
+    notification-to-report 2 h short-call / 12 h long-call"); no notice rule
+    is specified for drafting a line holder. The previous implementation
+    defaulted every non-reserve to "SC", silently inventing a 2 h draft
+    notice floor that made last-minute drafts structurally impossible.
     """
     if now is None:
         return LegalityResult(legal=True)
-        
+
     notice_mins = item.start - now
 
     # Find the active reserve block at the CALL time (`now`), not the report
     # time -- a reserve's SC/LC classification is which on-call regime they
     # were under when actually notified, and that block can differ from the
     # one covering item.start if a call happens near a shift boundary.
-    reserve_type = "SC" # Default if not found
-    for b in crew.blocks_in(now, now):
+    reserve_type: str | None = None
+    for b in crew.calendar:
         if b.btype == BlockType.RESERVE and b.start <= now and b.end > now:
             reserve_type = b.reserve_call_type or "SC"
             break
-            
+
+    if reserve_type is None:
+        # Not on reserve when called: L8 does not apply. Drafting notice, if
+        # Air Transat has such a rule, is a [CONFIRM: Crew Planning] question
+        # -- not a default to invent here.
+        return LegalityResult(legal=True)
+
     if not cfg or not cfg.legality:
         raise ValueError("L8 check requires legality configuration in cfg")
-        
+
     sc_hours = cfg.legality.short_call_notice_hours
     lc_hours = cfg.legality.long_call_notice_hours
-    
+
     req_mins = sc_hours * 60 if reserve_type == "SC" else lc_hours * 60
-    
+
     if notice_mins < req_mins:
         return LegalityResult(legal=False, fail_rule="ILLEGAL_L8", reason=f"Insufficient notice ({notice_mins/60:.1f}h < {req_mins/60:.1f}h for {reserve_type})")
-        
+
     return LegalityResult(legal=True)
 
 def check_l3_rolling_7d(crew: CrewMember, item: OpenTimeItem, cfg: Any = None) -> LegalityResult:
@@ -172,8 +217,10 @@ def check_l3_rolling_7d(crew: CrewMember, item: OpenTimeItem, cfg: Any = None) -
         
     duty_limit = cfg.legality.rolling_7d_duty_limit_hours * 60
     flight_limit = cfg.legality.rolling_7d_flight_limit_hours * 60
-    
-    duty_7d, flight_7d = crew.get_rolling_counters(item.start, 7)
+
+    duty_7d, flight_7d = crew.get_rolling_counters(
+        item.start, 7, count_reserve_as_duty=_counts_reserve_as_duty(cfg)
+    )
     
     # We must also add the current item being assigned
     added_duty = item.end - item.start
@@ -195,8 +242,10 @@ def check_l4_rolling_28d(crew: CrewMember, item: OpenTimeItem, cfg: Any = None) 
         raise ValueError("L4 check requires legality configuration in cfg")
         
     duty_limit = cfg.legality.rolling_28d_duty_limit_hours * 60
-    
-    duty_28d, _ = crew.get_rolling_counters(item.start, 28)
+
+    duty_28d, _ = crew.get_rolling_counters(
+        item.start, 28, count_reserve_as_duty=_counts_reserve_as_duty(cfg)
+    )
     added_duty = item.end - item.start
     
     if (duty_28d + added_duty) > duty_limit:
@@ -204,20 +253,23 @@ def check_l4_rolling_28d(crew: CrewMember, item: OpenTimeItem, cfg: Any = None) 
         
     return LegalityResult(legal=True)
 
-def check_l5_duty_free_day(crew: CrewMember, item: OpenTimeItem) -> LegalityResult:
+def check_l5_duty_free_day(
+    crew: CrewMember, item: OpenTimeItem, cfg: Any = None
+) -> LegalityResult:
     """
     L5: One duty-free day (24 hours) per rolling 7 days.
     Equivalent to: No continuous period of duty (or duties separated by < 24h)
     can span more than 6 days (144 hours = 8640 minutes).
+
+    Whether on-call time counts toward the streak follows the same AUD-24
+    flag as L3/L4 -- a run of standby days is only a "work streak" if
+    standby is work.
     """
     window_start = item.start - (7 * 24 * 60.0)
     window_end = item.end + (7 * 24 * 60.0)
-    
-    duty_btypes = {
-        BlockType.PAIRING, BlockType.RESERVE, BlockType.DRAFTED_DUTY, 
-        BlockType.DEADHEAD, BlockType.SIMULATOR, BlockType.TRAINING
-    }
-    
+
+    duty_btypes = accrual_duty_blocks(cfg)
+
     duties = []
     for b in crew.blocks_in(window_start, window_end):
         if b.btype in duty_btypes:
@@ -302,6 +354,31 @@ def find_l0_violations(crew: CrewMember) -> list[tuple[Block, Block]]:
             if b.start >= a.end:
                 break  # sorted by start: nothing later can overlap `a` either
             violations.append((a, b))
+    return violations
+
+
+def find_duty_during_rest_violations(crew: CrewMember) -> list[tuple[Block, Block]]:
+    """Every (duty, rest) pair where a DUTY block overlaps a REST block in a
+    crew's realized calendar -- crew working during mandatory rest.
+
+    AUD-11: `find_l0_violations` deliberately excludes REST from its scan
+    (rest overlapping the day off it is spent on is normal), but that also
+    made it blind to the opposite case -- a duty inserted INTO a rest period,
+    which is exactly the violation class the pre-AUD-01 `blocks_in` bug let
+    through. This is the missing half of the V8 invariant: REST blocks
+    further duty (it is in OCCUPYING_BLOCKS for the pre-assignment check),
+    so a realized calendar where a duty sits inside one is as physically
+    wrong as two overlapping duties.
+    """
+    duties = sorted((b for b in crew.calendar if b.btype in DUTY_BLOCKS), key=lambda b: b.start)
+    rests = sorted((b for b in crew.calendar if b.btype == BlockType.REST), key=lambda b: b.start)
+    violations: list[tuple[Block, Block]] = []
+    for duty in duties:
+        for rest in rests:
+            if rest.start >= duty.end:
+                break
+            if duty.start < rest.end and duty.end > rest.start:
+                violations.append((duty, rest))
     return violations
 
 
@@ -416,7 +493,7 @@ def is_legal_assignment(crew: CrewMember, duty: OpenTimeItem, is_deadhead: bool 
     r4 = check_l4_rolling_28d(crew, duty, cfg)
     if not r4.legal: return r4
     
-    r5 = check_l5_duty_free_day(crew, duty)
+    r5 = check_l5_duty_free_day(crew, duty, cfg)
     if not r5.legal: return r5
     
     r6 = check_l6_qualifications(crew, duty)

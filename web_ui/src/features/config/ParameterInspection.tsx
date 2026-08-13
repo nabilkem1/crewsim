@@ -46,7 +46,7 @@ export const ParameterInspection: React.FC<ParameterInspectionProps> = ({ catego
   useEffect(() => {
     setLoading(true);
     setError(null);
-    fetch(`http://localhost:8000/api/config/schema/${category}`)
+    fetch(`/api/config/schema/${category}`)
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch schema');
         return res.json();

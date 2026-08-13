@@ -6,7 +6,7 @@ export const PolicyBrowser: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/config/policies')
+    fetch('/api/config/policies')
       .then(res => {
         if (!res.ok) throw new Error('Failed to load policies');
         return res.json();

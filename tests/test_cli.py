@@ -121,7 +121,16 @@ def test_cli_explain_crew_rolling_counters():
     max_drop = max(
         duty_7d_values[i] - duty_7d_values[i + 1] for i in range(len(duty_7d_values) - 1)
     )
-    assert max_drop > 30.0
+    # Threshold is a fraction of a DUTY PERIOD, not a standalone constant: a
+    # real rolling-window decay drops by at least one duty period's worth as
+    # blocks age out of the 7-day window. It was 30.0h, which only cleared
+    # because reserve blocks were 72-144h slabs; since the 2026-08-12 fixes a
+    # reserve shift is 10-12h and a duty period is capped at 13h, so the
+    # largest genuine drop is that order of magnitude.
+    from crewsim import config
+
+    cfg = config.load()
+    assert max_drop > cfg.legality.max_duty_hours / 2.0
 
     timeline = subprocess.run(
         ["uv", "run", "crewsim", "explain-crew", "--crew", "P00002", "--timeline"],

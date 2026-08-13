@@ -62,6 +62,15 @@ Gini's "arithmetic, not insight" caveat (spec's glossary and §9 language) is pr
 alongside every Gini value, not gated behind an invented numeric rarity threshold — the spec gives no such
 threshold, and its own language reads as a standing caveat, not a conditional warning.
 
+**Update 2026-08-11 — `cost_by_category` no longer always sums to `expected_cost`.** This card's own
+framing above ("the decomposition must be a real partition of the same total already shown as
+`expected_cost`") stopped being universally true the moment ambient flight delay (`DELAY_AMBIENT`) shipped:
+it's real, measured, and shown in `cost_by_category`, but deliberately excluded from `expected_cost`/CVaR95
+(`des.EXCLUDED_FROM_OPTIMISED_COST`) because it's exogenous and doesn't vary by reserve policy — folding it
+in would dilute CVaR95's reserve-policy tail-risk signal. `DELAY_AMBIENT` is the one, tested exception
+(`tests/reporting/test_kpis.py::test_compute_kpis_delay_ambient_is_the_one_deliberate_exception_to_that_sum`);
+every other category still sums exactly as this card originally described.
+
 ---
 
 ## 🟢 [DONE] S1e-02 — Self-contained HTML report

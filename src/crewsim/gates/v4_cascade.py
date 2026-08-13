@@ -51,7 +51,14 @@ def _recall_of(draft_recall: dict[str, Any] | None) -> float | None:
             f"score_recall's contract changed -- fix this lookup rather than "
             f"defaulting, or the marginal-recall warning silently dies again."
         )
-    return float(draft_recall["recall"])
+    value = draft_recall["recall"]
+    # None means "undefined", not "zero": score_recall returns it when the
+    # window holds no ground-truth drafts to find. The key must still be
+    # PRESENT -- that contract is what keeps this lookup honest -- but a
+    # present None is a real answer and must not be coerced to 0.0, which
+    # would fire the zero-recall blocker for a window that simply had
+    # nothing to reconstruct.
+    return None if value is None else float(value)
 
 
 def run_v4_gate(cfg: Any, sim_cascade_rates: Any, window: str = "holdout") -> dict[str, Any]:

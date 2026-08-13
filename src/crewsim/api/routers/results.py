@@ -1,136 +1,187 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+"""Run summaries and generated artifacts.
 
-from crewsim.api.db import get_db, Job
+Scope note: this router used to carry `/metrics/comparison` and eight
+`/charts/*` endpoints. Every one of them returned hardcoded literals describing
+a different product entirely -- a hiring funnel under `/charts/gates`, CPU and
+memory series under `/charts/timeseries`, "Alpha Node"/"Beta Node" under
+`/charts/grid`. They were deleted rather than filled in: the real quantities
+live in `crewsim.reporting` and `crewsim.gates`, and wiring fabricated response
+shapes to real numbers would have baked in a contract nobody designed.
+
+What is left is the part that was always real -- it reads the job table and the
+configured output directories, and invents nothing.
+"""
+
+from __future__ import annotations
+
+import csv
+import html
+import mimetypes
+import os
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
+from sqlalchemy.orm import Session
+
+from crewsim import config
+from crewsim.api.db import Job, get_db
 
 router = APIRouter(prefix="", tags=["results"])
 
+# Structural, not simulation parameters: how many rows the dashboard asks for,
+# and the byte arithmetic for a megabyte.
+_SUMMARY_LIMIT = 20
+_BYTES_PER_MB = 1024 * 1024
+
+
 @router.get("/summaries")
-def get_run_summaries(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
-    jobs = db.query(Job).filter(Job.type.like('processing%')).order_by(Job.created_at.desc()).limit(20).all()
-    summaries = []
-    for j in jobs:
-        summaries.append({
+def get_run_summaries(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    jobs = (
+        db.query(Job)
+        .filter(Job.type.like("processing%"))
+        .order_by(Job.created_at.desc())
+        .limit(_SUMMARY_LIMIT)
+        .all()
+    )
+    return [
+        {
             "id": j.id,
             "name": f"Processing Run ({j.type})",
+            "type": j.type,
             "status": j.status,
-            "duration": str(j.updated_at - j.created_at) if j.updated_at else "0s",
-            "total_events": 0, # Could be parsed from logs if needed
-            "success_rate": 1.0 if j.status == 'completed' else 0.0,
-            "created_at": j.created_at.isoformat()
-        })
-    return summaries
+            # Both timestamps come back from SQLite naive, so this subtraction is
+            # well-defined -- see db.py's note on why they are stored that way.
+            "duration": str(j.updated_at - j.created_at) if j.updated_at else None,
+            "created_at": j.created_at.isoformat(),
+            # True only for a completed 'processing_batch' job -- the one job
+            # type that carries a policy-comparison scoreboard (see /{job_id}
+            # below). A single-policy run or an incomplete/failed job has no
+            # comparison to show.
+            "has_comparison": j.type == "processing_batch" and j.status == "completed",
+        }
+        for j in jobs
+    ]
+
 
 @router.get("/artifacts")
-def get_artifacts() -> List[Dict[str, Any]]:
-    from crewsim import config
-    import os
-    
+def get_artifacts() -> list[dict[str, Any]]:
     cfg = config.load()
     artifacts = []
-    
-    for d in [cfg.paths.reports_dir, cfg.paths.params_dir]:
+    for d in (cfg.paths.reports_dir, cfg.paths.params_dir):
         if not d.exists():
             continue
-        for idx, f in enumerate(d.glob("*")):
-            if f.is_file():
-                artifacts.append({
+        for idx, f in enumerate(sorted(d.glob("*"))):
+            if not f.is_file():
+                continue
+            artifacts.append(
+                {
                     "id": f"art-{d.name}-{idx}",
-                    "run_id": "auto",
                     "filename": f.name,
                     "type": f.suffix.lstrip("."),
-                    "size_mb": round(os.path.getsize(f) / (1024 * 1024), 2),
-                    "url": f"/api/results/artifacts/download/{f.name}"
-                })
-                
+                    "size_mb": round(os.path.getsize(f) / _BYTES_PER_MB, 2),
+                    "url": f"/api/results/artifacts/download/{f.name}",
+                }
+            )
     return artifacts
 
-@router.get("/metrics/comparison")
-def get_metric_comparisons() -> Dict[str, Any]:
+
+def _render_csv(file_path) -> str:
+    """CSV as an HTML table. Every cell is escaped: these files are generated
+    from customer data extracts, and this response is served as text/html from
+    the app's own origin."""
+    rows = []
+    with open(file_path, encoding="utf-8") as f:
+        for i, row in enumerate(csv.reader(f)):
+            tag = "th" if i == 0 else "td"
+            cells = "".join(f"<{tag}>{html.escape(col)}</{tag}>" for col in row)
+            rows.append(f"<tr>{cells}</tr>")
+    style = (
+        "table { border-collapse: collapse; width: 100%; font-family: sans-serif; } "
+        "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; } "
+        "th { background-color: #f2f2f2; }"
+    )
+    return f"<html><head><style>{style}</style></head><body><table>{''.join(rows)}</table></body></html>"
+
+
+def _render_text(file_path) -> str:
+    style = (
+        "pre { background: #f4f4f4; padding: 16px; border-radius: 8px; "
+        "overflow: auto; font-family: monospace; }"
+    )
+    content = html.escape(file_path.read_text(encoding="utf-8"))
+    return f"<html><head><style>{style}</style></head><body><pre>{content}</pre></body></html>"
+
+
+@router.get("/artifacts/download/{filename}")
+def download_artifact(filename: str, raw: bool = False):
+    """Serve a generated artifact.
+
+    Two modes, because "look at this" and "give me the file" are different
+    jobs and the rendered one cannot do the second. By default the response is
+    a readable HTML view -- a CSV becomes a table, JSON/YAML is escaped into a
+    <pre>. With `?raw=1` the original bytes are returned as an attachment, so
+    saving `params_v0.1.0_winter_sun.json` yields the parameter store itself
+    rather than an HTML page wrapped around a pretty-printed copy of it.
+    """
+    cfg = config.load()
+
+    # Only ever the configured output directories, and only a direct child of
+    # one: `filename` is a path parameter, so Starlette will not match a
+    # separator, and resolve() below refuses anything that escapes anyway.
+    file_path = None
+    for d in (cfg.paths.reports_dir, cfg.paths.params_dir):
+        candidate = (d / filename).resolve()
+        if candidate.is_file() and candidate.parent == d.resolve():
+            file_path = candidate
+            break
+
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    # Dispatch on media type rather than on a suffix literal: only config.py is
+    # allowed to know how a dataset is stored on disk
+    # (tests/test_project_structure.py::test_dataset_suffixes_have_one_authority).
+    mime, _ = mimetypes.guess_type(file_path.name)
+
+    if raw:
+        return FileResponse(
+            path=file_path,
+            media_type=mime or "application/octet-stream",
+            filename=file_path.name,
+        )
+
+    if mime == "text/html":
+        return FileResponse(
+            path=file_path, media_type="text/html", headers={"Content-Disposition": "inline"}
+        )
+    if mime == "text/csv":
+        return HTMLResponse(content=_render_csv(file_path))
+    return HTMLResponse(content=_render_text(file_path))
+
+
+# Declared LAST and after every other /results/... route above: FastAPI
+# matches path operations in declaration order, and this catch-all path
+# parameter would otherwise swallow /summaries, /artifacts, etc. as a
+# job_id of "summaries".
+@router.get("/{job_id}")
+def get_job_detail(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """A processing job's full detail, including the real `results` payload
+    (scoreboard, pairwise comparisons, gate V3 verdict, R* recommendation)
+    `run_processing_job` computes and stores -- previously written to the
+    database and never read back by any endpoint. `/summaries` stays a light
+    list; this is what Results & Reports fetches once a job is selected.
+    """
+    job = db.query(Job).filter(Job.id == job_id, Job.type.like("processing%")).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Processing job not found")
     return {
-        "metrics": ["throughput", "latency", "error_rate"],
-        "runs": ["run-001", "run-002"],
-        "data": {
-            "throughput": {"run-001": 150.5, "run-002": 310.2},
-            "latency": {"run-001": 45.2, "run-002": 120.8},
-            "error_rate": {"run-001": 0.02, "run-002": 0.15}
-        }
-    }
-
-@router.get("/charts/gantt")
-def get_gantt_data() -> List[Dict[str, Any]]:
-    return [
-        {"task": "Initialization", "start": "2026-08-01T10:00:00Z", "end": "2026-08-01T10:05:00Z", "resource": "System"},
-        {"task": "Data Processing", "start": "2026-08-01T10:05:00Z", "end": "2026-08-01T10:30:00Z", "resource": "Worker 1"},
-        {"task": "Report Generation", "start": "2026-08-01T10:30:00Z", "end": "2026-08-01T10:45:00Z", "resource": "Worker 2"}
-    ]
-
-@router.get("/charts/waterfall")
-def get_waterfall_data() -> List[Dict[str, Any]]:
-    return [
-        {"category": "Initial Capacity", "value": 1000, "type": "total"},
-        {"category": "New Allocations", "value": 250, "type": "positive"},
-        {"category": "Deallocations", "value": -150, "type": "negative"},
-        {"category": "System Overhead", "value": -50, "type": "negative"},
-        {"category": "Final Capacity", "value": 1050, "type": "total"}
-    ]
-
-@router.get("/charts/heatmap")
-def get_heatmap_data() -> Dict[str, Any]:
-    return {
-        "x_labels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-        "y_labels": ["Morning", "Afternoon", "Evening"],
-        "values": [
-            [10, 25, 15, 30, 45],
-            [20, 35, 40, 50, 60],
-            [5, 10, 15, 20, 25]
-        ]
-    }
-
-@router.get("/charts/timeseries")
-def get_timeseries_data() -> Dict[str, Any]:
-    return {
-        "timestamps": ["10:00", "10:10", "10:20", "10:30", "10:40", "10:50"],
-        "series": [
-            {"name": "CPU Usage", "data": [45, 50, 55, 80, 65, 40]},
-            {"name": "Memory Usage", "data": [30, 32, 35, 40, 38, 35]}
-        ]
-    }
-
-@router.get("/charts/eligibility")
-def get_eligibility_data() -> Dict[str, Any]:
-    return {
-        "eligible": 8500,
-        "ineligible": 1500,
-        "reasons": [
-            {"reason": "Missing Credentials", "count": 800},
-            {"reason": "Expired License", "count": 500},
-            {"reason": "Age Restriction", "count": 200}
-        ]
-    }
-
-@router.get("/charts/grid")
-def get_grid_explorer_data() -> List[Dict[str, Any]]:
-    return [
-        {"id": "G-01", "name": "Alpha Node", "status": "Active", "load": 45.2},
-        {"id": "G-02", "name": "Beta Node", "status": "Inactive", "load": 0.0},
-        {"id": "G-03", "name": "Gamma Node", "status": "Active", "load": 88.5},
-        {"id": "G-04", "name": "Delta Node", "status": "Warning", "load": 95.0}
-    ]
-
-@router.get("/charts/gates")
-def get_gates_dashboard_data() -> List[Dict[str, Any]]:
-    return [
-        {"gate": "Initial Screening", "passed": 10000, "failed": 500, "rate": 0.95},
-        {"gate": "Background Check", "passed": 9200, "failed": 800, "rate": 0.92},
-        {"gate": "Technical Interview", "passed": 4600, "failed": 4600, "rate": 0.50},
-        {"gate": "Final Review", "passed": 4140, "failed": 460, "rate": 0.90}
-    ]
-
-@router.get("/charts/data-quality")
-def get_data_quality_data() -> Dict[str, Any]:
-    return {
-        "dimensions": ["Completeness", "Validity", "Accuracy", "Consistency"],
-        "scores": [98.5, 95.0, 92.3, 99.1]
+        "id": job.id,
+        "type": job.type,
+        "status": job.status,
+        "progress": job.progress,
+        "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "error_message": job.error_message,
+        "results": job.results,
     }

@@ -3,13 +3,72 @@ from typing import Any, Literal
 import numpy as np
 
 from crewsim.engine.legality import is_legal_assignment
-from crewsim.engine.state import BlockType, CrewMember, OpenTimeItem
+from crewsim.engine.state import Block, BlockType, CrewMember, OpenTimeItem
+
+
+def on_call_block(crew: CrewMember, when: float) -> Block | None:
+    """The RESERVE block covering `when`, or None.
+
+    THE definition of "on call at an instant" -- the eligibility pool, the
+    remaining-window dispatch rule, the V3 historical reconstruction and the
+    trace's alternatives log all call this, so they cannot drift apart.
+    """
+    for b in crew.calendar:
+        if b.btype == BlockType.RESERVE and b.start <= when < b.end:
+            return b
+    return None
+
+
+def oncall_minutes_in(crew: CrewMember, start: float, end: float) -> float:
+    """How much of [start, end) this crew member was actually ON CALL for.
+
+    The capacity an assignment really consumes (OPEN-7). A duty plus its
+    obliged rest can run 19h, but if only 4h of that fell inside the crew
+    member's standby shift then only 4h of *server capacity* was taken -- for
+    the remaining 15h they were off duty and were never available anyway.
+    Counting the full 19h against a pool measured in on-call time compares two
+    different currencies, which is what made gate V2's offered load diverge
+    from its server count.
+    """
+    total = 0.0
+    for b in crew.calendar:
+        if b.btype is not BlockType.RESERVE:
+            continue
+        overlap = min(b.end, end) - max(b.start, start)
+        if overlap > 0:
+            total += overlap
+    return total
+
+
+def is_on_call_at(crew: CrewMember, when: float) -> bool:
+    """Whether `crew` holds a RESERVE block covering the instant `when`.
+
+    OPEN-4, 2026-08-12: this replaced a rule requiring the RESERVE block to
+    cover the WHOLE duty window [item.start, item.end]. That reading made a
+    reserve unusable for any trip longer than their standby shift -- and since
+    duty periods run to 13.6h at the 90th percentile against 10-12h shifts,
+    76-90% of arriving open items found no eligible reserve at all, which
+    flattened the reserve-sizing cost curve into "always buy the fewest".
+
+    The spec is self-contradictory here: §5.5's code requires whole-duty
+    coverage, but the worked example justifying it is about the REPORT time
+    ("a reserve whose on-call period ends at 18:00 cannot take a trip
+    REPORTING at 19:00"). Operationally the report-time reading is the correct
+    one -- a reserve is called while on standby and then flies a trip that may
+    well run past the end of their window; the window governs when they can be
+    given a trip, not how long the trip may last. Business decision,
+    2026-08-12.
+    """
+    return on_call_block(crew, when) is not None
 
 
 class EligibilityEngine:
     # Only used when a caller supplies neither cfg.reduced_mode nor an explicit
     # p_elig -- the real value lives in configs/base.yaml -> reduced_mode.
     DEFAULT_P_ELIG = 0.3
+    # Same convention, for REDUCED-mode cascades (AUD-21): §5.7's own stated
+    # default. The real value lives in configs/base.yaml -> reduced_mode.
+    DEFAULT_P_CASCADE = 0.2
 
     def __init__(self, mode: Literal["FULL", "REDUCED"] = "FULL",
                  p_elig: float | None = None, cfg: Any = None) -> None:
@@ -59,21 +118,7 @@ class EligibilityEngine:
         cfg.scope alone. Mixing another base's rate into that series would move
         V3's number without any in-scope mechanism having changed.
         """
-        pool = []
-        for r in reserves:
-            # Pool = reserves whose RESERVE block covers the WHOLE duty
-            # window [item.start, item.end], not just the report-time instant
-            # -- a reserve whose on-call window ends partway through the duty
-            # can't actually take it (S1c-01's own acceptance criterion).
-            overlap = r.blocks_in(item.start, item.end)
-            has_reserve_coverage = False
-            for b in overlap:
-                if b.btype == BlockType.RESERVE and b.start <= item.start and b.end >= item.end:
-                    has_reserve_coverage = True
-                    break
-
-            if has_reserve_coverage:
-                pool.append(r)
+        pool = [r for r in reserves if is_on_call_at(r, item.start)]
 
         if self.mode == "REDUCED":
             # REDUCED replaces the LEGALITY evaluation with a coin flip, not

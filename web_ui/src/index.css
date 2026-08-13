@@ -1,13 +1,29 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
+/*
+ * Theming. Two states, switched explicitly (`data-theme` on <html>), not
+ * three -- there is no "system" option here, the user picks Light or
+ * "GitHub Dark" and the choice is persisted (see App.tsx). `:root` below is
+ * the complete LIGHT set; `:root[data-theme="dark"]` redefines every color
+ * token, and only color tokens -- spacing/radius/type are theme-independent
+ * and defined once.
+ *
+ * Every component in this app reads colors through these custom properties
+ * (a handful of deliberately theme-INVARIANT surfaces -- the terminal-style
+ * log/tape panels, the sidebar rail, hover tooltips -- use the --chrome-*
+ * tokens below instead of the neutral ramp, precisely because they must NOT
+ * invert: see the --chrome-* comment for why that split exists). As long as
+ * a component uses a token rather than a literal hex, toggling the theme
+ * re-colors it with no further code change.
+ */
 :root {
-  /* Brand & Neutrals */
+  /* Brand & Neutrals -- current light theme, unchanged. */
   --color-primary-50: #eff6ff;
   --color-primary-100: #dbeafe;
   --color-primary-500: #3b82f6;
   --color-primary-600: #2563eb;
   --color-primary-700: #1d4ed8;
-  
+
   --color-neutral-50: #f8fafc;
   --color-neutral-100: #f1f5f9;
   --color-neutral-200: #e2e8f0;
@@ -22,8 +38,14 @@
   /* Semantic Status Colors */
   --color-success-bg: #f0fdf4;
   --color-success-text: #15803d;
+  --color-success-50: #f0fdf4;
+  --color-success-500: #22c55e;
+  --color-success-700: #15803d;
   --color-warning-bg: #fffbeb;
   --color-warning-text: #b45309;
+  --color-warning-50: #fffbeb;
+  --color-warning-500: #f59e0b;
+  --color-warning-700: #b45309;
   --color-error-bg: #fef2f2;
   --color-error-text: #b91c1c;
   --color-info-bg: #eff6ff;
@@ -33,27 +55,148 @@
   --surface-default: #ffffff;
   --surface-muted: var(--color-neutral-50);
   --border-default: var(--color-neutral-200);
+  --border-subtle: var(--color-neutral-100);
+  /* A background one step recessed from --surface-default -- code/pre blocks,
+   * input fields sitting inside a card. Several components already referenced
+   * these two by name with a literal fallback; defined properly now so the
+   * fallback never has to fire. */
+  --color-bg-base: var(--color-neutral-50);
+  --color-bg-subtle: var(--color-neutral-50);
+  /* The default body/heading text color, as its OWN token rather than reused
+   * from the neutral ramp. This is what lets text invert correctly in dark
+   * mode while --color-neutral-900 can still separately serve non-text roles
+   * (borders, subtle fills) without the two pulling in different directions. */
+  --color-text-base: var(--color-neutral-900);
+  --text-default: var(--color-text-base);
+
+  /*
+   * Chrome: surfaces that are ALWAYS dark, in both themes, on purpose --
+   * the sidebar rail, terminal-style log/event-tape panels, hover tooltips.
+   * They must NOT invert the way --color-neutral-900 does (that token
+   * becomes near-white in dark mode, because in most of this app it means
+   * "strongest text," not "this panel's background"). Kept as a separate,
+   * small token set so "always dark" is declared once and can't drift back
+   * into using a neutral rung that later gets re-themed out from under it.
+   */
+  --chrome-bg: #0f172a;
+  --chrome-bg-strong: #1e293b;
+  --chrome-text: #cbd5e1;
+  --chrome-text-strong: #e2e8f0;
+  --chrome-text-muted: #94a3b8;
+
+  /*
+   * Cascade semantics (Cascade Analytics). The HUE is fixed -- "amber means
+   * this one cascaded" has to mean the same thing in both themes -- but the
+   * lightness is not, because the same amber cannot be legible as text on
+   * both a white and a near-black ground: #d29922 measures 2.5:1 on white,
+   * which fails for text. Same split Primer itself uses for attention.fg.
+   *
+   * -fg is for TEXT and must clear 4.5:1 on that theme's surface; the fills
+   * used for bars stay fixed in the component (a graphical element only needs
+   * to be distinguishable, and a bar that changed hue per theme would break
+   * the legend).
+   */
+  --cascade-fg: #9a6700;
+  --uncovered-fg: #cf222e;
 
   /* Typography */
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-  
-  /* Spacing */
+
+  /* Spacing -- theme-independent */
   --spacing-1: 0.25rem;
   --spacing-2: 0.5rem;
   --spacing-3: 0.75rem;
   --spacing-4: 1rem;
+  --spacing-5: 1.25rem;
   --spacing-6: 1.5rem;
   --spacing-8: 2rem;
 
-  /* Radii */
+  /* Radii -- theme-independent */
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
   --radius-lg: 0.5rem;
+  --radius-full: 999px;
 
-  /* Shadows */
+  /* Shadows -- left as plain black-alpha in both themes: correct in light,
+   * and a deliberately quiet choice in dark (GitHub's own dark UI leans on
+   * borders for definition rather than shadows, which is why --border-default
+   * carries more of the work there). */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+
+  /* Hints the browser to render native form controls, scrollbars and the
+   * selection color in the light palette -- without this, a <select> or a
+   * checkbox stays stark OS-light chrome inside an otherwise dark page. */
+  color-scheme: light;
+}
+
+/*
+ * "GitHub Dark" -- anchored on Primer's actual dark palette (canvas #0d1117,
+ * panel #161b22, border #30363d, fg.default #c9d1d9, accent #58a6ff /
+ * #1f6feb) rather than a generic dark-mode inversion, so it reads as the
+ * named theme rather than "the app, but darker." The neutral ramp keeps its
+ * light-theme ROLE at each rung (50 = barely-there wash, 900 = strongest
+ * text) while the literal shade inverts, per rung -- see the file header.
+ */
+:root[data-theme="dark"] {
+  --color-primary-50: #112d4e;
+  --color-primary-100: #1c3f66;
+  --color-primary-500: #1f6feb;
+  --color-primary-600: #1158c7;
+  --color-primary-700: #58a6ff;
+
+  --color-neutral-50: #0d1117;
+  --color-neutral-100: #161b22;
+  --color-neutral-200: #21262d;
+  --color-neutral-300: #30363d;
+  --color-neutral-400: #484f58;
+  --color-neutral-500: #6e7681;
+  --color-neutral-600: #8b949e;
+  --color-neutral-700: #adbac7;
+  --color-neutral-800: #c9d1d9;
+  --color-neutral-900: #e6edf3;
+
+  --color-success-bg: #0f2b1a;
+  --color-success-text: #3fb950;
+  --color-success-50: #0f2b1a;
+  --color-success-500: #2ea043;
+  --color-success-700: #3fb950;
+  --color-warning-bg: #2b2111;
+  --color-warning-text: #d29922;
+  --color-warning-50: #2b2111;
+  --color-warning-500: #bb8009;
+  --color-warning-700: #d29922;
+  --color-error-bg: #2d1214;
+  --color-error-text: #f85149;
+  --color-info-bg: #112d4e;
+  --color-info-text: #58a6ff;
+
+  --surface-default: #161b22;
+  --surface-muted: #0d1117;
+  --border-default: #30363d;
+  --border-subtle: #21262d;
+  --color-bg-base: #0d1117;
+  --color-bg-subtle: #0d1117;
+  --color-text-base: #c9d1d9;
+  --text-default: var(--color-text-base);
+
+  /* The sidebar rail goes a step DARKER than the page canvas (#0d1117),
+   * not the same value -- in the light theme the navy rail already reads
+   * as a distinct, darker plane than the white content; matching that same
+   * relationship here needs actual separation, not just "also dark." */
+  --chrome-bg: #010409;
+  --chrome-bg-strong: #161b22;
+  --chrome-text: #c9d1d9;
+  --chrome-text-strong: #e2e8f0;
+  --chrome-text-muted: #94a3b8;
+
+  /* Same hue as light, lifted for a dark ground: 6.9:1 and 5.2:1 on the
+     panel surface, where the light theme's darker pair would disappear. */
+  --cascade-fg: #d29922;
+  --uncovered-fg: #f85149;
+
+  color-scheme: dark;
 }
 
 * {
@@ -64,10 +207,11 @@
 
 body {
   font-family: var(--font-sans);
-  color: var(--color-neutral-900);
+  color: var(--color-text-base);
   background-color: var(--surface-muted);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.18s ease, color 0.18s ease;
 }
 
 /* App Shell Layout */
@@ -77,19 +221,72 @@ body {
   overflow: hidden;
 }
 
+/* The rail is deliberately dark in BOTH themes -- see the --chrome-* token
+ * comment in the :root block for why it does not use the (theme-inverting)
+ * neutral ramp the rest of the app reads text/borders from. */
 .app-sidebar {
   width: 250px;
-  background-color: var(--color-neutral-900);
+  background-color: var(--chrome-bg);
   color: white;
   display: flex;
   flex-direction: column;
+  transition: width 0.18s ease, background-color 0.18s ease;
+  flex-shrink: 0;
+}
+
+/* Collapsed rail: wide enough for a centred glyph and its focus ring. */
+.app-sidebar.is-collapsed {
+  width: 56px;
 }
 
 .app-sidebar-header {
   padding: var(--spacing-4);
   font-weight: 600;
-  border-bottom: 1px solid var(--color-neutral-800);
+  border-bottom: 1px solid var(--chrome-bg-strong);
   font-size: 1.125rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  min-height: 60px; /* line the divider up with .app-header's own 60px */
+}
+
+.app-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.app-sidebar.is-collapsed .app-sidebar-header {
+  padding: var(--spacing-4) 0;
+  justify-content: center;
+}
+
+/* Collapsed rail: this asset is a wide "Air transat" wordmark, not the
+   compact round badge -- it doesn't fit the 56px icon rail any better than
+   the "CrewSim" text does, so both hide together. */
+.app-sidebar.is-collapsed .app-sidebar-brand-label,
+.app-sidebar.is-collapsed .app-logo-plate {
+  display: none;
+}
+
+.app-sidebar-toggle {
+  background: transparent;
+  border: 1px solid var(--chrome-bg-strong);
+  color: var(--chrome-text);
+  border-radius: var(--radius-md);
+  width: 26px;
+  height: 26px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.app-sidebar-toggle:hover {
+  background-color: var(--chrome-bg-strong);
+  color: white;
 }
 
 .app-nav {
@@ -102,15 +299,48 @@ body {
 .app-nav-item {
   padding: var(--spacing-2) var(--spacing-3);
   border-radius: var(--radius-md);
-  color: var(--color-neutral-300);
+  color: var(--chrome-text);
   text-decoration: none;
   font-size: 0.875rem;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .app-nav-item:hover {
-  background-color: var(--color-neutral-800);
+  background-color: var(--chrome-bg-strong);
   color: white;
+}
+
+/* Which page you are on was not shown at all before. */
+.app-nav-item.is-active {
+  background-color: var(--color-primary-600);
+  color: white;
+}
+
+.app-nav-glyph {
+  width: 1.25rem;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 1rem;
+}
+
+.app-sidebar.is-collapsed .app-nav {
+  padding: var(--spacing-2) 0;
+  align-items: center;
+}
+
+.app-sidebar.is-collapsed .app-nav-item {
+  justify-content: center;
+  padding: var(--spacing-2);
+  width: 40px;
+}
+
+.app-sidebar.is-collapsed .app-nav-label {
+  display: none;
 }
 
 .app-main {
@@ -128,6 +358,53 @@ body {
   align-items: center;
   padding: 0 var(--spacing-6);
   font-weight: 500;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+/*
+ * The Air Transat mark on a fixed white plate, in BOTH themes -- this SVG
+ * (rendered and inspected) is the full "Air transat" wordmark: a light-blue
+ * star plus dark-navy (#172c54) text on a transparent background, drawn for
+ * a light surface. It sits in the sidebar header, which is the dark
+ * --chrome-bg surface in both themes (chrome doesn't invert), so without the
+ * plate the navy text would be unreadable in light mode too, not just dark.
+ * There is no reversed/white variant to swap in, and recoloring the brand
+ * mark is not a call to make unilaterally.
+ */
+.app-logo-plate {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  background-color: #ffffff;
+  border: 1px solid var(--chrome-bg-strong);
+  border-radius: var(--radius-md);
+  padding: 0.25rem 0.5rem;
+}
+
+.app-logo-plate img {
+  display: block;
+  height: 20px;
+  width: auto;
+}
+
+.app-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--surface-default);
+  color: var(--color-neutral-600);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.app-theme-toggle:hover {
+  background-color: var(--surface-muted);
+  color: var(--color-text-base);
 }
 
 .app-content {
@@ -144,6 +421,7 @@ body {
   box-shadow: var(--shadow-sm);
   padding: var(--spacing-6);
   margin-bottom: var(--spacing-6);
+  transition: background-color 0.18s ease, border-color 0.18s ease;
 }
 
 /* Tablet Layout */
@@ -159,18 +437,38 @@ body {
     flex-direction: column;
   }
   
-  .app-sidebar {
+  .app-sidebar,
+  .app-sidebar.is-collapsed {
     width: 100%;
     height: auto;
     order: 2;
-    border-top: 1px solid var(--color-neutral-800);
+    border-top: 1px solid var(--chrome-bg-strong);
     border-right: none;
   }
+
+  /* The rail is a desktop affordance; on mobile the bar is already compact
+     and collapsing it would hide the only navigation there is. */
+  .app-sidebar-toggle {
+    display: none;
+  }
+
+  .app-sidebar.is-collapsed .app-nav,
+  .app-sidebar.is-collapsed .app-nav-item {
+    width: auto;
+    justify-content: flex-start;
+    padding: var(--spacing-2) var(--spacing-3);
+  }
+
+  .app-sidebar.is-collapsed .app-nav-label {
+    display: inline;
+  }
   
+  /* Also takes the logo with it, same as it did with the "CrewSim" text
+     before -- the rail is a compact horizontal strip here, no room for it. */
   .app-sidebar-header {
     display: none;
   }
-  
+
   .app-nav {
     flex-direction: row;
     overflow-x: auto;

@@ -108,6 +108,13 @@ def run_v1_gate(
     """
     headcount = scoped_headcount(cfg)
     zero_arrivals = [0] * cfg.horizon.horizon_days
+    # Spec's own table for configuration 1 is "0 reserves, 0 sick calls, 0
+    # DELAYS" -- and configurations 2/3's expected results ("pure staffing",
+    # "zero staffing costs") are claims this gate proves BY HAND, which a
+    # real calibrated (stochastic, per-run) DELAY_AMBIENT figure would break
+    # for all three: this whole gate's premise is "computable on paper",
+    # and ambient delay is the one input here that genuinely is not.
+    zero_delays = [0.0] * cfg.horizon.horizon_days
     # Pin displaced_flying for all three configurations rather than inheriting
     # base.yaml. This gate asks one question -- does the engine fabricate cost
     # in a degenerate case -- and reserve bidders' displaced flying (S1b-02 AC2)
@@ -126,7 +133,7 @@ def run_v1_gate(
     no_reserves = policy_with_reserve_count(base_policy, 0, "V1-zero-reserves")
     sim1 = des.run_scenario(
         cfg, costs, no_reserves, scenario_id=scenario_id, master_seed=master_seed,
-        daily_sick_calls=zero_arrivals,
+        daily_sick_calls=zero_arrivals, daily_delay_minutes=zero_delays,
     )
     total1 = sim1.ledger.total_cost()
     configurations.append({
@@ -150,6 +157,7 @@ def run_v1_gate(
     all_reserve = policy_with_reserve_count(base_policy, headcount, "V1-all-reserve")
     sim2 = des.run_scenario(
         cfg, costs, all_reserve, scenario_id=scenario_id, master_seed=master_seed,
+        daily_delay_minutes=zero_delays,
     )
     totals2 = _category_totals(sim2.ledger.rows)
     non_staffing = sorted(c for c in totals2 if c != "RESERVE_STAFFING")
@@ -195,6 +203,7 @@ def run_v1_gate(
     # -- 3: no reserves, normal sick calls -> reserve categories never appear -
     sim3 = des.run_scenario(
         cfg, costs, no_reserves, scenario_id=scenario_id, master_seed=master_seed,
+        daily_delay_minutes=zero_delays,
     )
     totals3 = _category_totals(sim3.ledger.rows)
     present = sorted(c for c in RESERVE_CATEGORIES if c in totals3)

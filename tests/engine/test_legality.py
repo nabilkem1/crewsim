@@ -2,6 +2,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from crewsim.engine.legality import (
+    OCCUPYING_BLOCKS,
     check_l0_single_assignment,
     find_l0_violations,
     is_legal_assignment,
@@ -43,10 +44,12 @@ def test_l0_invariant(cal, start, duration):
     end = start + duration
     res = check_l0_single_assignment(crew, start, end)
     
-    # Manually check if there is an overlapping occupying block
-    occupying_types = {BlockType.DRAFTED_DUTY, BlockType.REST, BlockType.DEADHEAD}
+    # Manually check if there is an overlapping occupying block. Uses the
+    # canonical OCCUPYING_BLOCKS set: this test's subject is the overlap
+    # MECHANISM, and a locally restated set silently drifts when a new
+    # occupying type is added (it did -- AUD-02's ABSENCE).
     has_occupying_overlap = any(
-        b.start < end and b.end > start and b.btype in occupying_types
+        b.start < end and b.end > start and b.btype in OCCUPYING_BLOCKS
         for b in cal
     )
     

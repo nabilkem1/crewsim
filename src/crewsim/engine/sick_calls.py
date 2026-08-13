@@ -1,8 +1,26 @@
-import random
+import numpy as np
 
 from crewsim import config
 
 from .state import Block, BlockType, CrewMember, OpenTimeItem
+
+
+def uncovered_deadline_minutes(cfg: config.BaseConfig) -> float:
+    """The configured lead time (minutes before report) at which an uncovered
+    item cancels -- `demand.uncovered_deadline_hours`, `default` key when the
+    config carries a per-haul dict.
+
+    THE single definition (AUD-20): it used to be re-derived inline in
+    _break_pairings, des.displaced_flying_source, and hardcoded as a bare
+    `60.0` in cascade.compute_draft_delta -- so cascade items cancelled on a
+    different clock than every other item and sweeping the configured
+    deadline did not move them.
+    """
+    if cfg.demand is None:
+        return 0.0
+    raw = cfg.demand.uncovered_deadline_hours
+    dl_hours = raw.get("default", 0.0) if isinstance(raw, dict) else float(raw)
+    return dl_hours * 60.0
 
 
 def _break_pairings(
@@ -14,17 +32,10 @@ def _break_pairings(
     the affected crew member and their overlapping PAIRING blocks are known;
     only HOW that crew/blocks pair is chosen differs between the two."""
     open_time = []
+    lead = uncovered_deadline_minutes(cfg)
     for b in overlapping_blocks:
         if b.btype != BlockType.PAIRING:
             continue
-        dl_hours = 0.0
-        if cfg.demand is not None:
-            if isinstance(cfg.demand.uncovered_deadline_hours, dict):
-                dl_hours = cfg.demand.uncovered_deadline_hours.get("default", 0.0)
-            else:
-                dl_hours = float(cfg.demand.uncovered_deadline_hours)
-
-        deadline = b.start - (dl_hours * 60.0)
         oti = OpenTimeItem(
             uid=uid_counter,
             pairing_id=b.pairing_id or "UNKNOWN",
@@ -33,7 +44,7 @@ def _break_pairings(
             position=c.position,
             start=b.start,
             end=b.end,
-            deadline=deadline,
+            deadline=b.start - lead,
             origin="SICK_CALL",
             root_event_uid=uid_counter,
             # S1b-04 (P2): carried through, matching cascade.py's own item
@@ -53,10 +64,35 @@ def _break_pairings(
     return open_time
 
 
-def apply_sick_call(cfg: config.BaseConfig, active_crew: list[CrewMember], current_time: float, duration_days: float, uid_counter: int) -> tuple[CrewMember | None, list[OpenTimeItem]]:
+def _mark_unavailable(c: CrewMember, start: float, end: float) -> None:
+    """AUD-02 / spec §5.0.4 E1's second clause: the absent crew member is
+    physically unavailable for the whole absence, not merely relieved of the
+    pairings it broke. The ABSENCE block is in legality.OCCUPYING_BLOCKS, so
+    L0 rejects any assignment overlapping it -- without this the sick crew
+    member remained a legal tier-1 draft candidate and could be selected to
+    cover the very pairing their own absence created."""
+    if end <= start:
+        return
+    c.calendar.append(Block(start=start, end=end, btype=BlockType.ABSENCE))
+    c.calendar.sort(key=lambda b: b.start)
+
+
+def apply_sick_call(
+    cfg: config.BaseConfig,
+    active_crew: list[CrewMember],
+    current_time: float,
+    duration_days: float,
+    uid_counter: int,
+    rng: np.random.Generator,
+) -> tuple[CrewMember | None, list[OpenTimeItem]]:
     """
     Applies a sick call to a random crew member who is on or about to report for duty (PAIRING).
     Returns the removed CrewMember and a list of OpenTimeItems generated from their broken pairings.
+
+    `rng` is the caller's per-arrival CRN generator (AUD-26): crew selection
+    used to run through the process-global stdlib `random`, reseeded per
+    arrival -- deterministic, but exactly the hidden global state §4.3 bans,
+    and one stray `random` consumer away from silently breaking CRN.
     """
     # 1. Sample from crew who are on or about to report for duty.
     # "About to report" means starting a PAIRING within the next 24 hours, for instance.
@@ -74,11 +110,13 @@ def apply_sick_call(cfg: config.BaseConfig, active_crew: list[CrewMember], curre
     if not eligible:
         return None, []
 
-    c, overlapping_blocks = random.choice(eligible)
+    c, overlapping_blocks = eligible[int(rng.integers(len(eligible)))]
 
     # 2. The absent crew member is removed for the sampled duration; multi-day absences break several pairings
     # 3. Their pairing(s) become open-time items with the correct deadline
     open_time = _break_pairings(cfg, c, overlapping_blocks, uid_counter)
+    # 4. And they are unavailable for anything else until the absence ends (E1).
+    _mark_unavailable(c, current_time, search_end)
     return c, open_time
 
 
@@ -115,4 +153,7 @@ def apply_named_absence(
         b for b in c.blocks_in(start_min, end_min) if b.btype == BlockType.PAIRING and b.start >= 0
     ]
     open_time = _break_pairings(cfg, c, overlapping_blocks, uid_counter)
+    # E1's unavailability clause, clamped to the replay window's own clock:
+    # an absence that began before minute 0 still blocks the crew from 0.
+    _mark_unavailable(c, max(start_min, 0.0), end_min)
     return c, open_time

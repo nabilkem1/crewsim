@@ -1,29 +1,70 @@
 import { useState, useEffect } from 'react'
 import { ConfigDashboard } from './features/config'
+import { DataDashboard } from './features/data'
 import { CalibrationDashboard } from './features/calibration'
 import { ProcessingDashboard } from './features/processing'
 import { ResultsDashboard } from './features/results'
-import { RunManagementDashboard } from './features/runs'
 import { AnalyticsDashboard } from './features/analytics'
-import { ProvenanceDashboard } from './features/provenance'
-import { JobQueue, GlobalErrorBoundary, NotificationProvider } from './features/jobs'
+import { GlobalErrorBoundary, NotificationProvider } from './features/jobs'
+import { HealthDashboard, AuditLogViewer } from './features/platform'
+import airTransatLogo from './assets/air-transat-logo.svg'
+
+/** The sidebar's items. `glyph` is what shows when the rail is collapsed --
+ *  deliberately monochrome geometry rather than emoji, which render at
+ *  inconsistent sizes and colours across platforms. */
+const NAV_ITEMS: { id: string; label: string; glyph: string }[] = [
+  { id: 'dashboard', label: 'Dashboard', glyph: '▣' },
+  { id: 'config', label: 'Configuration', glyph: '⚙' },
+  { id: 'data', label: 'Data', glyph: '▤' },
+  { id: 'calibration', label: 'Calibration', glyph: '∿' },
+  { id: 'processing', label: 'Processing', glyph: '▶' },
+  { id: 'results', label: 'Results & Reports', glyph: '▦' },
+  { id: 'analytics', label: 'Cascade Analytics', glyph: '⋔' },
+];
+
+const SIDEBAR_STORAGE_KEY = 'crewsim.sidebarCollapsed';
+
+type Theme = 'light' | 'dark';
+// Kept in sync with the inline script in index.html, which stamps
+// `data-theme` on <html> BEFORE this file (or React) ever runs -- that is
+// what prevents a flash of the wrong theme on load. Same storage key here.
+const THEME_STORAGE_KEY = 'crewsim.theme';
 
 function App() {
-  const [healthStatus, setHealthStatus] = useState<string>('Checking...')
-  const [healthData, setHealthData] = useState<any>(null)
   const [activeTab, setActiveTab] = useState<string>('dashboard')
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [isHelpOpen, setIsHelpOpen] = useState(false)
+  // Read synchronously on first render: resolving it in an effect would paint
+  // the expanded sidebar first and visibly snap shut on every page load.
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(
+    () => localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true',
+  )
+  // Read from the DOM, not from localStorage a second time: the inline head
+  // script already resolved stored-preference-or-OS-default and stamped it
+  // on <html> before this component ever mounted, so re-deriving the same
+  // answer here would just be a second, independent implementation of that
+  // same fallback logic that could quietly drift from the first one.
+  const [theme, setTheme] = useState<Theme>(
+    () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'),
+  )
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(isSidebarCollapsed))
+  }, [isSidebarCollapsed])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem(THEME_STORAGE_KEY, theme)
+  }, [theme])
 
   const helpContent: Record<string, { title: string, description: string, features: string[] }> = {
-    dashboard: { 
-      title: 'Platform Overview', 
+    dashboard: {
+      title: 'Platform Overview',
       description: 'This page shows high-level metrics and system health. Check this page to verify backend connectivity.',
       features: [
-        'Total Active Runs: Tracks simulations currently executing.',
-        'Average Queue Wait Time: Monitor processing bottlenecks.',
-        'System Memory Usage: Resource utilization metrics.',
-        'API Connection Status: Real-time backend liveness.'
+        'Active runs and queued-job wait time: live from the jobs database.',
+        'CPU/memory: reported only when the host metrics library is installed, never guessed.',
+        'System audit log: who ran what, and when.'
       ]
     },
     config: { 
@@ -33,6 +74,15 @@ function App() {
         'Select a category to inspect its full JSON schema.',
         'Search across all parameters for specific values to edit.',
         'Validate configuration markers before executing runs.'
+      ]
+    },
+    data: {
+      title: 'Corpus Data',
+      description: 'Browse the D1-D12 source tables and their quality gates.',
+      features: [
+        'Select a table on the left to page through its rows.',
+        'Column types are the ones the loaders validate and cast to.',
+        'Data Quality runs the real Sec6.2 gates against the configured corpus.'
       ]
     },
     calibration: { 
@@ -53,51 +103,32 @@ function App() {
         'Configure policy overrides prior to execution.'
       ]
     },
-    runs: { 
-      title: 'Run Management History', 
-      description: 'Browse all historical runs.',
+
+    results: {
+      title: 'Simulation Results & Reporting',
+      description: 'Compare candidate reserve policies on real simulated cost, risk and validity, to decide which one to run.',
       features: [
-        'View a searchable table of all past executions.',
-        'Filter runs by status (Completed, Failed, Running).',
-        'Quickly jump to results or logs for a specific run ID.'
+        'Scoreboard: E[cost], CVaR95, uncovered legs, eligibility and cascade rate per policy.',
+        'Recommended reserve level (R*) by risk tolerance (lambda), from the same argmin used by gate V9.',
+        'Gate V3 eligibility-validity banner: a recommendation is flagged, never hidden, when unvalidated.',
+        'Pairwise paired-CRN comparisons with a 95% confidence interval and t-statistic.',
+        'Every completed processing run, plus generated reports and parameter artifacts.'
       ]
     },
-    jobs: { 
-      title: 'Job Execution Queue', 
-      description: 'Monitor active and queued background tasks.',
+    analytics: {
+      title: 'Deep Cascade Analytics',
+      description:
+        'What a draft costs after it is paid for. Drafting a crew member who holds a trip tomorrow breaks that trip, which re-enters as open time and has to be covered again. This page prices that whole chain from the cost ledger, reading a completed policy-grid run from Processing.',
       features: [
-        'Track live progress of simulations and calibrations.',
-        'Cancel long-running or stuck background jobs.',
-        'Retry previously failed executions.'
+        'Summary: amplification — what a disruption costs once it cascades against one absorbed where it landed — plus cascade rate, chain sizes and the draft-tier mix that drives them. Switch policy with the chips at the top.',
+        'Exemplar Chains: the costliest real chains, expandable to every ledger row traced back through root_event_uid to the disruption that started it.',
+        'Policy Comparison: cascade rate, amplification and tier-2 draft counts side by side. All policies come from one CRN scenario set, so differences are policy effects, not sampling noise.',
+        'Two populations, labelled on every figure: cascade RATE is whole-simulation (matching gate V4), chain ECONOMICS are measurement-window attributed so the dollars reconcile with E[cost].',
+        'Chain size, not depth: the ledger records each row\'s root, never its immediate parent, so a deep chain and a wide one cannot be told apart in it. Size is what the data supports.',
+        'A run with no cascades reports a measured zero and explains it. A run predating this feature says so instead — the two look identical in a chart and mean opposite things.',
+        'No gate V4 verdict is shown: V4 is currently INCONCLUSIVE (holdout draft-reconstruction recall is 0.000), so no validated cascade rate exists to display.'
       ]
     },
-    results: { 
-      title: 'Simulation Results & Reporting', 
-      description: 'View detailed outcome charts.',
-      features: [
-        'Analyze dynamic Gantt and Waterfall charts.',
-        'Click on any chart to trigger Universal Drill-down.',
-        'Download bulk raw JSON/CSV artifacts.'
-      ]
-    },
-    analytics: { 
-      title: 'Deep Cascade Analytics', 
-      description: 'Analyze the ripple effects of drafting policies.',
-      features: [
-        'Compare multi-policy fatigue vs cost tradeoffs.',
-        'View complex cascade summaries and analytical grids.',
-        'Dive into shift timelines and schedule changes.'
-      ]
-    },
-    provenance: { 
-      title: 'Run Comparison & Provenance', 
-      description: 'Track the lineage of results back to their configuration snapshot.',
-      features: [
-        'Diff two configurations side-by-side.',
-        'Ensure reproducible runs through artifact tracking.',
-        'Statistically compare two runs via T-Test.'
-      ]
-    }
   }
 
   useEffect(() => {
@@ -111,59 +142,79 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  useEffect(() => {
-    fetch('http://localhost:8000/api/health')
-      .then(res => res.json())
-      .then(data => {
-        setHealthStatus(`API Status: ${data.status.toUpperCase()}`)
-        setHealthData(data)
-      })
-      .catch(() => {
-        setHealthStatus('API Status: DISCONNECTED')
-        setHealthData(null)
-      })
-  }, [])
-
   return (
     <GlobalErrorBoundary>
       <NotificationProvider>
         <div className="app-container">
-          <aside className="app-sidebar">
+          <aside className={`app-sidebar${isSidebarCollapsed ? ' is-collapsed' : ''}`}>
             <div className="app-sidebar-header">
-              CrewSim
+              <span className="app-sidebar-brand">
+                <span className="app-logo-plate" title="Air Transat">
+                  <img src={airTransatLogo} alt="Air Transat" />
+                </span>
+                <span className="app-sidebar-brand-label">CrewSim</span>
+              </span>
+              <button
+                type="button"
+                className="app-sidebar-toggle"
+                onClick={() => setIsSidebarCollapsed(v => !v)}
+                aria-expanded={!isSidebarCollapsed}
+                aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                {isSidebarCollapsed ? '»' : '«'}
+              </button>
             </div>
             <nav className="app-nav" aria-label="Main Navigation">
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Dashboard" onClick={(e) => { e.preventDefault(); setActiveTab('dashboard'); }}>Dashboard</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Configuration" onClick={(e) => { e.preventDefault(); setActiveTab('config'); }}>Configuration</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Calibration" onClick={(e) => { e.preventDefault(); setActiveTab('calibration'); }}>Calibration</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Processing" onClick={(e) => { e.preventDefault(); setActiveTab('processing'); }}>Processing</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Run Management" onClick={(e) => { e.preventDefault(); setActiveTab('runs'); }}>Run Management</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Runs and Jobs" onClick={(e) => { e.preventDefault(); setActiveTab('jobs'); }}>Runs & Jobs</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Results and Reports" onClick={(e) => { e.preventDefault(); setActiveTab('results'); }}>Results & Reports</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Cascade Analytics" onClick={(e) => { e.preventDefault(); setActiveTab('analytics'); }}>Cascade Analytics</a>
-              <a href="#" className="app-nav-item" role="button" tabIndex={0} aria-label="Navigate to Comparison and Provenance" onClick={(e) => { e.preventDefault(); setActiveTab('provenance'); }}>Comparison & Provenance</a>
+              {NAV_ITEMS.map(item => (
+                <a
+                  key={item.id}
+                  href="#"
+                  className={`app-nav-item${activeTab === item.id ? ' is-active' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-current={activeTab === item.id ? 'page' : undefined}
+                  aria-label={`Navigate to ${item.label}`}
+                  // The label is hidden when collapsed, so the tooltip is the
+                  // only way to identify a glyph without expanding.
+                  title={isSidebarCollapsed ? item.label : undefined}
+                  onClick={(e) => { e.preventDefault(); setActiveTab(item.id); }}
+                >
+                  <span className="app-nav-glyph" aria-hidden="true">{item.glyph}</span>
+                  <span className="app-nav-label">{item.label}</span>
+                </a>
+              ))}
             </nav>
           </aside>
-          
+
           <main className="app-main">
             <header className="app-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>{activeTab === 'config' ? 'Configuration Management' : activeTab === 'calibration' ? 'Calibration Pipeline' : activeTab === 'processing' ? 'Simulation Processing' : activeTab === 'runs' ? 'Run Management History' : activeTab === 'results' ? 'Simulation Results & Reporting' : activeTab === 'analytics' ? 'Deep Cascade Analytics' : activeTab === 'provenance' ? 'Run Comparison & Provenance' : activeTab === 'jobs' ? 'Job Execution Queue' : 'Platform Overview'}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <button 
+                <div>{activeTab === 'config' ? 'Configuration Management' : activeTab === 'data' ? 'Corpus Data' : activeTab === 'calibration' ? 'Calibration Pipeline' : activeTab === 'processing' ? 'Simulation Processing' : activeTab === 'results' ? 'Simulation Results & Reporting' : activeTab === 'analytics' ? 'Deep Cascade Analytics' : 'Platform Overview'}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <button
+                  type="button"
+                  className="app-theme-toggle"
+                  onClick={() => setTheme(t => (t === 'light' ? 'dark' : 'light'))}
+                  aria-label={theme === 'light' ? 'Switch to GitHub Dark theme' : 'Switch to Light theme'}
+                  title={theme === 'light' ? 'Switch to GitHub Dark theme' : 'Switch to Light theme'}
+                >
+                  <span aria-hidden="true">{theme === 'light' ? '☾' : '☀'}</span>
+                  {theme === 'light' ? 'Dark' : 'Light'}
+                </button>
+                <button
                   onClick={() => setIsHelpOpen(true)}
                   aria-label="Help"
                   title="Page Help"
                   style={{
-                    width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--color-primary-500)', 
-                    color: 'white', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                    width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--color-primary-500)',
+                    color: 'white', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', padding: 0
                   }}
                 >
                   ?
                 </button>
-                <div style={{ fontSize: '0.875rem', color: 'var(--color-neutral-500)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span style={{ padding: '0.25rem 0.5rem', backgroundColor: 'var(--color-neutral-100)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}>Ctrl K</span> to search
-                </div>
               </div>
             </header>
             <div className="app-content">
@@ -174,9 +225,13 @@ function App() {
                   display: 'flex', justifyContent: 'center', alignItems: 'center'
                 }} onClick={() => setIsHelpOpen(false)}>
                   <div style={{
-                    backgroundColor: '#ffffff', padding: '2.5rem',
+                    backgroundColor: 'var(--surface-default)', padding: '2.5rem',
                     borderRadius: 'var(--radius-lg)', width: '100%', maxWidth: '550px',
-                    boxShadow: '0 20px 40px rgba(0,0,0,0.15)', border: '1px solid var(--border-default)'
+                    boxShadow: '0 20px 40px rgba(0,0,0,0.15)', border: '1px solid var(--border-default)',
+                    // Pages with a long feature list (Cascade Analytics) ran
+                    // taller than the viewport, cutting off the heading and
+                    // the dismiss button with no way to reach either.
+                    maxHeight: 'calc(100vh - 4rem)', overflowY: 'auto'
                   }} onClick={e => e.stopPropagation()}>
                     <h2 style={{ marginBottom: '1rem', color: 'var(--color-primary-600)', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <span style={{ backgroundColor: 'var(--color-primary-50)', color: 'var(--color-primary-700)', padding: '0.2rem 0.6rem', borderRadius: 'var(--radius-full)', fontSize: '1rem' }}>?</span>
@@ -226,7 +281,7 @@ function App() {
                   display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '10vh'
                 }} onClick={() => setIsSearchOpen(false)}>
                   <div style={{
-                    backgroundColor: '#ffffff', padding: '1rem',
+                    backgroundColor: 'var(--surface-default)', padding: '1rem',
                     borderRadius: 'var(--radius-lg)', width: '100%', maxWidth: '600px',
                     boxShadow: '0 10px 25px rgba(0,0,0,0.1)'
                   }} onClick={e => e.stopPropagation()}>
@@ -248,51 +303,16 @@ function App() {
               )}
               {activeTab === 'dashboard' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-4)' }}>
-                  <div className="card">
-                    <h2>Welcome to CrewSim Platform</h2>
-                    <p style={{ marginTop: '0.5rem', color: 'var(--color-neutral-500)' }}>
-                      The backend API connection is active and ready.
-                    </p>
-                    <div style={{
-                      marginTop: '1.5rem',
-                      display: 'inline-block',
-                      padding: '0.5rem 1rem',
-                      backgroundColor: healthStatus.includes('HEALTHY') || healthStatus.includes('OK') ? 'var(--color-success-bg)' : 'var(--color-error-bg)',
-                      color: healthStatus.includes('HEALTHY') || healthStatus.includes('OK') ? 'var(--color-success-text)' : 'var(--color-error-text)',
-                      borderRadius: 'var(--radius-md)',
-                      fontWeight: 500,
-                      fontSize: '0.875rem'
-                    }}>
-                      {healthStatus}
-                    </div>
-                  </div>
-                  
-                  {healthData && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 'var(--spacing-4)' }}>
-                      <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '2rem' }}>
-                        <div style={{ fontSize: '3rem', fontWeight: 700, color: 'var(--color-primary-600)', marginBottom: '0.5rem' }}>{healthData.kpis?.active_runs || 0}</div>
-                        <div style={{ fontSize: '0.875rem', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Total Active Runs</div>
-                      </div>
-                      <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '2rem' }}>
-                        <div style={{ fontSize: '3rem', fontWeight: 700, color: 'var(--color-primary-600)', marginBottom: '0.5rem' }}>{healthData.kpis?.avg_queue_wait_seconds || 0}s</div>
-                        <div style={{ fontSize: '0.875rem', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Avg Queue Wait Time</div>
-                      </div>
-                      <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '2rem' }}>
-                        <div style={{ fontSize: '3rem', fontWeight: 700, color: 'var(--color-primary-600)', marginBottom: '0.5rem' }}>{healthData.memory?.usage_percent || 0}%</div>
-                        <div style={{ fontSize: '0.875rem', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>System Memory Usage</div>
-                      </div>
-                    </div>
-                  )}
+                  <HealthDashboard />
+                  <AuditLogViewer />
                 </div>
               )}
               {activeTab === 'config' && <ConfigDashboard />}
+              {activeTab === 'data' && <DataDashboard />}
               {activeTab === 'calibration' && <CalibrationDashboard />}
               {activeTab === 'processing' && <ProcessingDashboard />}
-              {activeTab === 'runs' && <RunManagementDashboard />}
               {activeTab === 'results' && <ResultsDashboard />}
               {activeTab === 'analytics' && <AnalyticsDashboard />}
-              {activeTab === 'provenance' && <ProvenanceDashboard />}
-              {activeTab === 'jobs' && <JobQueue />}
             </div>
           </main>
         </div>

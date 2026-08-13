@@ -14,11 +14,9 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-import hashlib
 import importlib.metadata
 import json
 import math
-import random
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
@@ -31,15 +29,20 @@ from scipy import stats
 from .. import config
 from . import crn
 from .cascade import apply_delta, compute_draft_delta
-from .costs import book_reserve_staffing
+from .costs import book_flight_delays, book_reserve_staffing
 from .counterfactuals import select_myopic_total_cost
-from .drafting import determine_tier, select_draft_candidate
-from .eligibility import EligibilityEngine
+from .drafting import determine_tier, draft_cost, select_draft_candidate
+from .eligibility import (
+    EligibilityEngine,
+    is_on_call_at,
+    on_call_block,
+    oncall_minutes_in,
+)
 from .events import assign_reserve
 from .ledger import CostLedger, LedgerRow
 from .legality import is_legal_assignment, min_rest_minutes
 from .policy import Policy
-from .sick_calls import apply_named_absence, apply_sick_call
+from .sick_calls import apply_named_absence, apply_sick_call, uncovered_deadline_minutes
 from .state import BlockType, CrewMember, OpenTimeItem
 from .terminal import evaluate_terminal_penalties
 
@@ -70,23 +73,17 @@ def _load_sick_call_duration_params(cfg: config.BaseConfig) -> tuple[float, floa
 
 
 def _scenario_cache_path(cfg: config.BaseConfig, season: str, master_seed: str, n_scenarios: int) -> Path:
-    """Same cache-key computation as scenarios/generator.py::generate_scenarios,
-    duplicated rather than imported into: that function returns None on a cache
-    hit instead of the path, so callers that just want "the file, generated if
-    needed" have to reconstruct the path themselves either way."""
-    from ..scenarios.generator import generate_scenarios
+    """The scenario-set parquet for this configuration, generated if absent.
+
+    AUD-07: delegates to generator.scenario_set_path rather than carrying a
+    second copy of the cache-key computation -- the two copies had already
+    drifted from the generation inputs (neither included scope/horizon/
+    template window), and a duplicated key is a duplicated staleness bug.
+    """
+    from ..scenarios.generator import generate_scenarios, scenario_set_path
 
     generate_scenarios(cfg, season, master_seed, n_scenarios)  # ensures the cache exists
-
-    params_dir = config.resolve(cfg, "params_dir")
-    params_path = params_dir / f"params_v{_package_version()}_{season}.json"
-    store = json.loads(params_path.read_text())
-    content_hash = store.get("content_hash", "missing")
-    # n_scenarios is part of the key -- see the matching comment in
-    # generate_scenarios (S1d-04d) for why.
-    cache_key = f"{master_seed}_{n_scenarios}_{content_hash}"
-    h = hashlib.blake2b(cache_key.encode(), digest_size=16).hexdigest()
-    return params_dir / "scenarios" / f"scenario_set_{h}.parquet"
+    return scenario_set_path(cfg, season, master_seed, n_scenarios)
 
 
 def _load_daily_sick_calls(
@@ -97,11 +94,44 @@ def _load_daily_sick_calls(
     path = _scenario_cache_path(cfg, season, master_seed, n_scenarios)
     df = pl.read_parquet(path).filter(pl.col("scenario") == scenario_id).sort("day")
     horizon_days = cfg.horizon.horizon_days
+    # AUD-07: the generator writes one row per horizon day, zero-count days
+    # included -- so a short read means a stale cache (e.g. the horizon grew
+    # after the set was generated), and silently zero-filling the missing
+    # days would simulate a disruption-free tail with no warning.
+    if df.height < horizon_days:
+        raise ValueError(
+            f"scenario cache {path} holds {df.height} day-rows for scenario "
+            f"{scenario_id} but the horizon is {horizon_days} days -- stale "
+            f"cache; delete it or regenerate (crewsim scenarios generate)."
+        )
     counts = [0] * horizon_days
     for row in df.iter_rows(named=True):
         if row["day"] < horizon_days:
             counts[row["day"]] = int(row["sick_calls"])
     return counts
+
+
+def _load_daily_delay_minutes(
+    cfg: config.BaseConfig, season: str, master_seed: str, n_scenarios: int, scenario_id: int
+) -> list[float]:
+    """Real calibrated per-day AMBIENT delay minutes for one scenario
+    (scenarios/generator.py's delay_minutes column) -- same cache, same
+    per-day/0-where-absent convention as _load_daily_sick_calls above.
+    """
+    path = _scenario_cache_path(cfg, season, master_seed, n_scenarios)
+    df = pl.read_parquet(path).filter(pl.col("scenario") == scenario_id).sort("day")
+    horizon_days = cfg.horizon.horizon_days
+    if df.height < horizon_days:
+        raise ValueError(
+            f"scenario cache {path} holds {df.height} day-rows for scenario "
+            f"{scenario_id} but the horizon is {horizon_days} days -- stale "
+            f"cache; delete it or regenerate (crewsim scenarios generate)."
+        )
+    minutes = [0.0] * horizon_days
+    for row in df.iter_rows(named=True):
+        if row["day"] < horizon_days:
+            minutes[row["day"]] = float(row["delay_minutes"])
+    return minutes
 
 
 class Simulation:
@@ -124,6 +154,8 @@ class Simulation:
         verbose_trace: bool = False,
         cascades_enabled: bool = True,
         cross_base_reserves: list[CrewMember] | None = None,
+        scenario_stream: np.random.SeedSequence | None = None,
+        daily_delay_minutes: list[float] | None = None,
     ) -> None:
         if cfg.cascade is None:
             raise ValueError("Simulation requires cfg.cascade (visibility_lag_hours) to be configured")
@@ -152,6 +184,14 @@ class Simulation:
         # `a` is measured against the in-scope establishment alone.
         self.cross_base_reserves = cross_base_reserves or []
         self.rng = rng
+        # This scenario's CRN stream, used ONLY to derive a per-arrival RNG in
+        # sick_call_source. Kept separate from self.rng deliberately: self.rng
+        # is also drawn from by policy-DEPENDENT recovery (eligibility,
+        # positioning), and SimPy interleaves those processes with the arrival
+        # generator, so sharing one Generator made the arrival stream depend on
+        # how much recovery work the policy happened to do first. See
+        # sick_call_source for the measurement that exposed it.
+        self.scenario_stream = scenario_stream
         self.horizon_minutes = horizon_minutes
         self.trace_enabled = trace
         self.trace: list[str] = []
@@ -182,6 +222,12 @@ class Simulation:
         self.open_items: dict[int, OpenTimeItem] = {}
         self.n_drafts = 0
         self.n_cascading_drafts = 0
+        # WHEN each cascading draft happened, recorded at the same point the
+        # counter above increments so a per-day tally cannot drift from the
+        # scenario total. The ledger cannot supply this: it books a DRAFT_TIERn
+        # row whether or not that draft went on to break anything, and nothing
+        # in the row distinguishes the two.
+        self.cascading_draft_minutes: list[float] = []
         # S1d-02: the reserve-loss half of the cascade mechanism. Counters, not
         # ledger rows: losing a future reserve block carries no direct dollar
         # cost -- its cost is emergent, arriving later as a draft or a
@@ -209,6 +255,13 @@ class Simulation:
         self.n_blocked_on_arrival = 0
         self.n_reserve_assignments = 0
         self.reserve_service_minutes = 0.0
+        # OPEN-7: the same occupancy measured in ON-CALL time -- the capacity
+        # an assignment actually removes from the pool. reserve_service_minutes
+        # counts the whole duty+rest span, which since shift-based reserves can
+        # far exceed the shift it was drawn from; gate V2's offered load has to
+        # be in the same currency as its server count or the comparison is
+        # dimensionally meaningless.
+        self.reserve_oncall_minutes = 0.0
         # S1c-07: counted separately from n_reserve_assignments for the same
         # reason the pool is separate -- gate V2 divides assignments by the
         # in-scope establishment's on-call time, and folding cross-base rescues
@@ -217,6 +270,14 @@ class Simulation:
         self.n_cross_base_assignments = 0
 
         self._book_reserve_staffing()
+        # None (not []) for every caller that doesn't pass real calibrated
+        # delay data -- run_historical_replay, gate V1/V7's degenerate/hashed
+        # configurations, and any other direct Simulation(...) construction.
+        # Those callers have no scenario_id/master_seed to look ambient
+        # delay up from, so "book nothing" is correct, not a silent zero
+        # standing in for a real figure.
+        if daily_delay_minutes is not None:
+            self._book_flight_delays(daily_delay_minutes)
 
     def next_uid(self) -> int:
         self._uid += 1
@@ -244,13 +305,50 @@ class Simulation:
             horizon_minutes=self.horizon_minutes,
         )
 
+    def _book_flight_delays(self, daily_delay_minutes: list[float]) -> None:
+        """Delegates to engine/costs.py::book_flight_delays -- same
+        WHEN-here/WHAT-there split as _book_reserve_staffing above.
+        """
+        book_flight_delays(
+            ledger=self.ledger,
+            scenario_id=self.scenario_id,
+            policy_id=self.policy_id,
+            daily_delay_minutes=daily_delay_minutes,
+            delay_per_minute=self.costs.disruption.delay_per_minute,
+        )
+
     # -- processes ------------------------------------------------------------
     def sick_call_source(self, daily_counts: list[int]) -> Generator[simpy.Event, None, None]:
         """Drives sick-call arrivals from the real calibrated per-day counts.
 
-        Per-event time-of-day and absence duration are CRN-derived (this
-        scenario's own rng / a stable per-event seed), not fixed constants.
+        Every draw for arrival `i` on `day` comes from an RNG derived solely
+        from (this scenario's CRN stream, day, i) -- never from a Generator
+        shared with anything else.
+
+        That isolation is the whole point, and it was not always so. This used
+        to draw time-of-day and duration from `self.rng`, which is ALSO drawn
+        from by policy-dependent recovery (eligibility at `_dispatch`,
+        cross-base positioning). SimPy interleaves the recovery processes with
+        this generator, so the number of draws taken before the next arrival
+        depended on how much work the policy had done -- and the arrival stream
+        silently desynchronised between policies partway through a scenario.
+        Measured on scenario 0: R4 and R10 shared 44 of ~85 arrivals and then
+        diverged, which quietly weakened every paired comparison built on top
+        (reporting/paired.py assumes scenario i is the same scenario for both
+        sides).
+
+        Deriving per (day, i) rather than sequentially is deliberate: it makes
+        an arrival's draws independent of how many arrivals preceded it, so the
+        stream cannot drift even if the surrounding code changes its own
+        consumption.
         """
+        if self.scenario_stream is None:
+            raise ValueError(
+                "sick_call_source needs scenario_stream to derive per-arrival CRN "
+                "streams; run_scenario supplies it. (The replay path drives "
+                "arrivals from real_absence_source and never reaches here.)"
+            )
+
         duration_shape, duration_scale = _load_sick_call_duration_params(self.cfg)
         all_crew = self.roster + self.reserves
         for day, count in enumerate(daily_counts):
@@ -258,20 +356,24 @@ class Simulation:
             if day_start > self.env.now:
                 yield self.env.timeout(day_start - self.env.now)
             for i in range(count):
-                current_time = day_start + float(self.rng.uniform(0, 1440.0))
+                arrival_rng = crn.event_rng(self.scenario_stream, f"sick_call:{day}:{i}")
+                current_time = day_start + float(arrival_rng.uniform(0, 1440.0))
                 if current_time > self.env.now:
                     yield self.env.timeout(current_time - self.env.now)
                 duration_days = float(
-                    stats.lognorm.rvs(duration_shape, loc=0, scale=duration_scale, random_state=self.rng)
+                    stats.lognorm.rvs(
+                        duration_shape, loc=0, scale=duration_scale, random_state=arrival_rng
+                    )
                 )
                 duration_days = max(self.cfg.calibration.sick_call_min_duration_days, duration_days)
-                # apply_sick_call (S1b-04) samples via the stdlib random module,
-                # not an injected Generator -- seed it from this scenario's CRN
-                # stream so the draw stays reproducible without editing that module.
-                seed = crn.stable_seed((self.scenario_id, "sick_call", day, i))
-                random.seed(seed)
+                # AUD-26: crew selection now draws from this arrival's own CRN
+                # generator, injected -- it used to reseed the process-global
+                # stdlib `random` per arrival, which was deterministic but
+                # exactly the hidden global state §4.3 bans (any other
+                # `random` consumer, or a thread-based joblib backend, would
+                # have silently broken CRN).
                 sick_crew, items = apply_sick_call(
-                    self.cfg, all_crew, current_time, duration_days, self._uid + 1
+                    self.cfg, all_crew, current_time, duration_days, self._uid + 1, arrival_rng
                 )
                 # sick_crew is None when no crew had a pairing to break; items is
                 # then empty too, but narrow explicitly rather than relying on that.
@@ -301,21 +403,27 @@ class Simulation:
         Before any of this the blocks were simply discarded, so a higher R
         carried no opportunity cost at all and R* was biased upward.
         """
+        lead = uncovered_deadline_minutes(self.cfg)
         for crew, block in displaced:
-            dl_hours = 0.0
-            if self.cfg.demand is not None:
-                raw = self.cfg.demand.uncovered_deadline_hours
-                dl_hours = raw.get("default", 0.0) if isinstance(raw, dict) else float(raw)
+            uid = self.next_uid()
             item = OpenTimeItem(
-                uid=self.next_uid(),
+                uid=uid,
                 pairing_id=block.pairing_id or "UNKNOWN",
                 base=crew.base,
                 fleet=next(iter(crew.fleet_quals)) if crew.fleet_quals else "UNKNOWN",
                 position=crew.position,
                 start=block.start, end=block.end,
-                deadline=block.start - (dl_hours * 60.0),
+                deadline=block.start - lead,
                 origin="DISPLACED_LINE",
-                root_event_uid=0,   # structural: caused by the bid, not by an event
+                # Its own uid as chain root, not the 0 sentinel: 0 means "no
+                # causal chain at all" (RESERVE_STAFFING, DELAY_AMBIENT), and a
+                # displaced item HAS one -- every row it causes (positioning,
+                # cancellation, terminal penalty) must trace back to it, and
+                # the measurement-window rule must treat its costs as one
+                # chain anchored at its OPEN_ITEM marker. That the chain is
+                # structural (caused by the bid, not a disruption) is what
+                # origin="DISPLACED_LINE" records.
+                root_event_uid=uid,
                 flight_mins=block.flight_mins,
             )
             self.log(f"DISPLACED_LINE: {crew.crew_id} bid reserve -> item {item.uid} ({item.pairing_id})")
@@ -350,6 +458,19 @@ class Simulation:
 
     def recovery_pipeline(self, item: OpenTimeItem) -> Generator[simpy.Event, None, None]:
         self.open_items[item.uid] = item
+        # AUD-03: a zero-dollar causal marker at the moment the item enters
+        # the pipeline -- the spec's own §2.3 example ledger carries exactly
+        # this row shape (`SICK_LEAVE_PAY 0`). Without it, a chain whose first
+        # COSTED row books during cool-down (an item held to a post-window
+        # deadline and then cancelled) had no in-window row to anchor its
+        # origin, so rows_in_measurement_window dropped its entire cost --
+        # systematically shaving cancellations/terminal penalties off exactly
+        # the low-reserve policies that produce them.
+        self.ledger.book(
+            scenario_id=self.scenario_id, policy_id=self.policy_id,
+            sim_time=self.env.now, event_uid=item.uid, root_event_uid=item.root_event_uid,
+            crew_id=None, category="OPEN_ITEM", amount=0.0,
+        )
         if self._attempt_resolution(item, first_attempt=True):
             return
 
@@ -357,24 +478,30 @@ class Simulation:
         # Re-check times are the reserve pool's own future RESERVE-block start
         # times up to the deadline -- derived from calendar data already
         # loaded, not an arbitrary polling interval.
-        retry_times = sorted(
-            {
-                b.start
-                for r in self.reserves
-                for b in r.calendar
-                if b.btype == BlockType.RESERVE and self.env.now < b.start <= item.deadline
-            }
-        )
-        if not retry_times or retry_times[-1] < item.deadline:
-            retry_times.append(item.deadline)
-
-        for t in retry_times:
+        #
+        # AUD-23: recomputed after every failed attempt rather than snapshotted
+        # once at hold-setup -- a reserve assignment made while this item is
+        # held inserts a restored post-rest RESERVE block whose start the
+        # original snapshot could not contain, and the held item would have
+        # slept through that capacity all the way to its deadline.
+        while True:
+            future = sorted(
+                {
+                    b.start
+                    for r in self.reserves
+                    for b in r.calendar
+                    if b.btype == BlockType.RESERVE and self.env.now < b.start <= item.deadline
+                }
+            )
+            t = future[0] if future else item.deadline
             if t > self.env.now:
                 yield self.env.timeout(t - self.env.now)
             if item.uid not in self.open_items:
                 return
             if self._attempt_resolution(item):
                 return
+            if self.env.now >= item.deadline:
+                break
 
         self.open_items.pop(item.uid, None)
         self.ledger.book(
@@ -437,11 +564,12 @@ class Simulation:
             return False
 
         def remaining(r: CrewMember) -> float:
-            covering = [
-                b for b in r.blocks_in(positioned.start, positioned.end)
-                if b.btype == BlockType.RESERVE
-            ]
-            return min((b.end for b in covering), default=float("inf"))
+            # How much of their shift is left at the moment they'd be called
+            # out -- the "use them or lose them" figure (§5.5). Read off the
+            # block covering the POSITIONING report, the same instant
+            # eligibility is judged at since OPEN-4.
+            block = on_call_block(r, positioned.start)
+            return block.end if block is not None else float("inf")
 
         elig.sort(key=lambda r: (remaining(r), r.seniority))
         chosen = elig[0]
@@ -449,11 +577,13 @@ class Simulation:
         # item.base), which min_rest_minutes already handles -- passing the real
         # bases rather than hardcoding keeps that one definition authoritative.
         min_rest = min_rest_minutes(self.cfg, chosen.base, item.base)
+        oncall_taken = oncall_minutes_in(chosen, positioned.start, item.end + min_rest)
         assign_reserve(
             chosen, item.start, item.end, min_rest, item.pairing_id,
             deadhead_start=positioned.start,
         )
         self.n_cross_base_assignments += 1
+        self.reserve_oncall_minutes += oncall_taken
         self.ledger.book(
             scenario_id=self.scenario_id, policy_id=self.policy_id,
             sim_time=now, event_uid=item.uid, root_event_uid=item.root_event_uid,
@@ -529,19 +659,23 @@ class Simulation:
                 self.n_blocked_on_arrival += 1
         if elig:
             def remaining(r: CrewMember) -> float:
-                covering = [b for b in r.blocks_in(item.start, item.end) if b.btype == BlockType.RESERVE]
-                return min((b.end for b in covering), default=float("inf"))
+                # Shift time left at report -- see the cross-base twin above.
+                block = on_call_block(r, item.start)
+                return block.end if block is not None else float("inf")
 
             elig.sort(key=lambda r: (remaining(r), r.seniority))
             chosen = elig[0]
             if self.verbose_trace and self.trace_enabled:
                 self._log_reserve_alternatives(item, now, elig, chosen, remaining)
             min_rest = min_rest_minutes(self.cfg, chosen.base, item.base)
+            # Measured BEFORE assign_reserve mutates the calendar.
+            oncall_taken = oncall_minutes_in(chosen, item.start, item.end + min_rest)
             assign_reserve(chosen, item.start, item.end, min_rest, item.pairing_id)
             # Occupancy this assignment costs the pool: the duty plus the rest it
             # obliges. That product with the arrival rate is the offered load `a`.
             self.n_reserve_assignments += 1
             self.reserve_service_minutes += (item.end - item.start) + min_rest
+            self.reserve_oncall_minutes += oncall_taken
             self.ledger.book(
                 scenario_id=self.scenario_id, policy_id=self.policy_id,
                 sim_time=now, event_uid=item.uid, root_event_uid=item.root_event_uid,
@@ -572,6 +706,14 @@ class Simulation:
             if self.verbose_trace and self.trace_enabled:
                 self._log_draft_alternatives(item, now, candidate, tier)
             delta, cascaded = compute_draft_delta(candidate, item, self.cfg, now)
+            if self.elig.mode == "REDUCED":
+                # AUD-21 / §2.3 C4, §5.7: REDUCED mode replaces the emergent
+                # cascade evaluation with Bernoulli(p_cascade) spawning one
+                # synthetic future open item -- previously only the
+                # eligibility half of C4's reduced contract existed. The
+                # calendar delta still applies (the draft physically happens);
+                # only the downstream-disruption question becomes a coin flip.
+                cascaded = self._reduced_mode_cascades(item)
             if not self.cascades_enabled:
                 cascaded = []
             # S1d-02 AC2: a draft can break a future PAIRING (which re-enters as
@@ -587,6 +729,7 @@ class Simulation:
             self.n_drafts += 1
             if cascaded:
                 self.n_cascading_drafts += 1
+                self.cascading_draft_minutes.append(float(self.env.now))
             if reserve_losses:
                 self.n_reserve_loss_cascades += 1
                 self.n_reserve_blocks_lost += reserve_losses
@@ -600,9 +743,7 @@ class Simulation:
             # both return tier 4). Known pre-existing mismatch (S1a-08 vs the
             # cost table) -- not resolved here, just not silently hidden:
             # SIMULATOR drafts are under-costed at today's tier-4 rate.
-            cost = self.costs.draft.base_premium + self.costs.draft.tier.get(tier, 0.0)
-            if tier in (3, 5):
-                cost += self.costs.draft.train_reschedule
+            cost = draft_cost(self.costs, tier)
             self.ledger.book(
                 scenario_id=self.scenario_id, policy_id=self.policy_id,
                 sim_time=now, event_uid=item.uid, root_event_uid=item.root_event_uid,
@@ -640,6 +781,42 @@ class Simulation:
             )
         return False
 
+    def _reduced_mode_cascades(self, item: OpenTimeItem) -> list[OpenTimeItem]:
+        """§5.7's REDUCED contract: Bernoulli(p_cascade) spawning a synthetic
+        future open item -- screening only, never a recommendation (the same
+        refusal guard as reduced eligibility applies).
+
+        The synthetic item replays the drafted item one day later: REDUCED
+        mode has no calendar mechanism to say WHICH future pairing broke, and
+        a one-day-later same-shape item is the smallest stand-in that still
+        exercises the re-entry path. Drawn from a per-item CRN stream so the
+        flip for item N is identical under every policy.
+        """
+        p_cascade = (
+            self.cfg.reduced_mode.p_cascade
+            if self.cfg.reduced_mode is not None
+            else EligibilityEngine.DEFAULT_P_CASCADE
+        )
+        rng = (
+            crn.event_rng(self.scenario_stream, f"reduced_cascade:{item.uid}")
+            if self.scenario_stream is not None
+            else self.rng
+        )
+        if float(rng.random()) >= p_cascade:
+            return []
+        day = 1440.0
+        return [
+            dataclasses.replace(
+                item,
+                uid=0,  # engine re-assigns, same as cascade.py's real items
+                pairing_id=f"SYNTH-{item.pairing_id}",
+                start=item.start + day,
+                end=item.end + day,
+                deadline=item.deadline + day,
+                origin="CASCADE",
+            )
+        ]
+
     def _log_reserve_alternatives(
         self,
         item: OpenTimeItem,
@@ -656,13 +833,7 @@ class Simulation:
         legally rejected -- recomputed here rather than exposed from
         EligibilityEngine, so its tested return shape is untouched.
         """
-        pool = [
-            r for r in self.reserves
-            if any(
-                b.btype == BlockType.RESERVE and b.start <= item.start and b.end >= item.end
-                for b in r.blocks_in(item.start, item.end)
-            )
-        ]
+        pool = [r for r in self.reserves if is_on_call_at(r, item.start)]
         elig_ids = {r.crew_id for r in elig}
         considered = "; ".join(
             f"{r.crew_id} (remaining={remaining(r) / 60.0:.1f}h, seniority={r.seniority})" for r in elig
@@ -734,6 +905,7 @@ def run_scenario(
     verbose_trace: bool = False,
     daily_sick_calls: list[int] | None = None,
     cascades_enabled: bool = True,
+    daily_delay_minutes: list[float] | None = None,
 ) -> Simulation:
     """Runs one CRN scenario for one policy through the real recovery pipeline.
 
@@ -745,11 +917,20 @@ def run_scenario(
     (the default, and every pre-existing caller) loads the real calibrated
     counts exactly as before.
 
+    daily_delay_minutes is the same override, for ambient flight-delay
+    minutes: None (the default) loads the real calibrated per-day figures
+    from the scenario cache; gate V1 passes an explicit all-zero list for the
+    same "provably zero, computable on paper" reason it zeroes sick calls.
+
     verbose_trace is forwarded to Simulation -- `explain-event` (S1b-04/S1b-06)
     needs the per-attempt "unresolved for now" lines to show that an item was
     HELD across retries rather than cancelled on arrival.
     """
     from .roster_loader import load_cross_base_reserves, load_rosters
+
+    # AUD-16: the policy's costs pin is verified against what this run actually
+    # loaded, at the one chokepoint every simulation passes through.
+    config.verify_policy_costs(cfg, policy, costs)
 
     active, _ = load_rosters(
         cfg, base=cfg.scope.base, fleet=cfg.scope.fleet, position=cfg.scope.position, policy=policy
@@ -779,6 +960,10 @@ def run_scenario(
         daily_counts = list(daily_sick_calls)
     else:
         daily_counts = _load_daily_sick_calls(cfg, cfg.scope.season, master_seed, n_scenarios, scenario_id)
+    if daily_delay_minutes is not None:
+        daily_delay = list(daily_delay_minutes)
+    else:
+        daily_delay = _load_daily_delay_minutes(cfg, cfg.scope.season, master_seed, n_scenarios, scenario_id)
     horizon_minutes = cfg.horizon.horizon_days * 1440.0
 
     env = simpy.Environment()
@@ -786,6 +971,7 @@ def run_scenario(
         env, cfg, costs, policy.policy_id, scenario_id, roster, reserves, rng, horizon_minutes,
         trace=trace, draft_mode=draft_mode, verbose_trace=verbose_trace,
         cascades_enabled=cascades_enabled, cross_base_reserves=cross_base,
+        scenario_stream=streams[scenario_id], daily_delay_minutes=daily_delay,
     )
     # S1b-02 AC2: reserve bidders' displaced flying, if configured as open time.
     # Registered BEFORE the sick-call source so it is already on the queue when
@@ -803,10 +989,10 @@ def run_scenario(
     env.run(until=horizon_minutes)
 
     residual = list(sim.open_items.values())
-    for category, amount, root_uid in evaluate_terminal_penalties(residual, costs):
+    for category, amount, event_uid, root_uid in evaluate_terminal_penalties(residual, costs):
         sim.ledger.book(
             scenario_id=scenario_id, policy_id=policy.policy_id, sim_time=horizon_minutes,
-            event_uid=0, root_event_uid=root_uid, crew_id=None, category=category, amount=amount,
+            event_uid=event_uid, root_event_uid=root_uid, crew_id=None, category=category, amount=amount,
         )
     return sim
 
@@ -844,6 +1030,7 @@ def run_historical_replay(
     backtest only needs ledger totals, not a readable timeline, so it
     passes both False.
     """
+    config.verify_policy_costs(cfg, policy, costs)  # AUD-16, same check as run_scenario
     env = simpy.Environment()
     rng = np.random.default_rng(0)  # FULL-mode EligibilityEngine (the only mode this replay uses) never draws from it
     sim = Simulation(
@@ -859,10 +1046,10 @@ def run_historical_replay(
     env.run(until=horizon_minutes)
 
     residual = list(sim.open_items.values())
-    for category, amount, root_uid in evaluate_terminal_penalties(residual, costs):
+    for category, amount, event_uid, root_uid in evaluate_terminal_penalties(residual, costs):
         sim.ledger.book(
             scenario_id=0, policy_id=policy.policy_id, sim_time=horizon_minutes,
-            event_uid=0, root_event_uid=root_uid, crew_id=None, category=category, amount=amount,
+            event_uid=event_uid, root_event_uid=root_uid, crew_id=None, category=category, amount=amount,
         )
     return sim
 
@@ -964,10 +1151,23 @@ def rows_in_measurement_window(cfg: config.BaseConfig, sim: Simulation) -> list[
     return result
 
 
+# Categories real and measured, shown in kpis.py's cost_by_category, but
+# excluded from the figure this function returns -- and therefore from
+# E[C], CVaR95, the paired CRN comparison, and the R* recommendation, all
+# of which are built from this function's output. DELAY_AMBIENT is real
+# D8-calibrated flight-delay cost for this base+fleet, but it does not vary
+# by reserve policy at all (drawn from an independent CRN stream, the same
+# for every policy) -- folding it into CVaR95 would inject scenario-to-
+# scenario variance that has nothing to do with reserve-policy tail risk,
+# diluting the exact signal the R* argmin exists to read. User-confirmed
+# disposition (see engine/costs.py::book_flight_delays' own note).
+EXCLUDED_FROM_OPTIMISED_COST = frozenset({"DELAY_AMBIENT"})
+
+
 def measured_window_costs(cfg: config.BaseConfig, sims: list[Simulation]) -> list[float]:
     """Per-scenario total cost attributed to the measurement window --
     sum(amount) over `rows_in_measurement_window` (see its docstring for the
-    attribution rule).
+    attribution rule), excluding EXCLUDED_FROM_OPTIMISED_COST categories.
 
     Fixed 2026-08-07 (S1e-01): the previous version (min_time=warmup_end, no
     max_time) treated EVERY cool-down-booked row as in-window, including
@@ -979,7 +1179,14 @@ def measured_window_costs(cfg: config.BaseConfig, sims: list[Simulation]) -> lis
     R6 scenarios, was cool-down-originated cost that should never have
     counted -- not a rounding difference.
     """
-    return [sum(row.amount for row in rows_in_measurement_window(cfg, sim)) for sim in sims]
+    return [
+        sum(
+            row.amount
+            for row in rows_in_measurement_window(cfg, sim)
+            if row.category not in EXCLUDED_FROM_OPTIMISED_COST
+        )
+        for sim in sims
+    ]
 
 
 def cvar95(scenario_costs: list[float]) -> float:

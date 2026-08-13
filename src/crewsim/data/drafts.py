@@ -78,7 +78,9 @@ def prior_status_distribution(drafts: pl.DataFrame) -> dict[str, float]:
     return {row["prior_status"]: row["len"] / drafts.height for row in counts.iter_rows(named=True)}
 
 
-def score_recall(cfg: config.BaseConfig, drafts: pl.DataFrame) -> dict[str, Any] | None:
+def score_recall(
+    cfg: config.BaseConfig, drafts: pl.DataFrame, true_n: int | None = None
+) -> dict[str, Any] | None:
     """Recall against `_ground_truth.json`, if the corpus ships one.
 
     Only the mock corpus does. Real data has no ground truth: recall must
@@ -87,14 +89,34 @@ def score_recall(cfg: config.BaseConfig, drafts: pl.DataFrame) -> dict[str, Any]
     rather than fabricating a number is what keeps that distinction honest.
     Reuses `quality_gates.d6_d7_join_pass`: spec §6.3-1 names it explicitly
     as the *same* 80% Reality Check gate defined in §6.2, not a second one.
+
+    `true_n` overrides the manifest's corpus-wide denominator for a
+    window-scoped reconstruction (AUD-04): a windowed numerator over the
+    corpus-wide denominator would understate recall by exactly the window
+    share. The manifest is still required -- on real data (no manifest) there
+    is no denominator of either scope, and None is still the answer.
     """
     truth_path = cfg.paths.corpus_dir / "_ground_truth.json"
     if not truth_path.is_file():
         return None
     truth = json.loads(truth_path.read_text())
-    true_n = truth["drafts_true"]
-    recall = drafts.height / true_n if true_n else 0.0
+    true_n = truth["drafts_true"] if true_n is None else true_n
     gate = cfg.quality_gates.d6_d7_join_pass
+    if not true_n:
+        # No ground-truth drafts in scope: recall is undefined, not zero. A
+        # window with nothing to find used to report recall 0.0 -- a hard FAIL
+        # against the 80% gate -- condemning a vacuously perfect
+        # reconstruction. `recall: None` says "no measurement", which every
+        # consumer already has to handle (real data ships no ground truth at
+        # all and gets None from the branch above).
+        return {
+            "recall": None,
+            "found": drafts.height,
+            "true_n": 0,
+            "gate": gate,
+            "gate_pass": True,
+        }
+    recall = drafts.height / true_n
     return {
         "recall": recall,
         "found": drafts.height,

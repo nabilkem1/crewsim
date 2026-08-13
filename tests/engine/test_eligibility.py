@@ -52,11 +52,18 @@ def test_full_mode_eligibility():
     assert engine.check_recommendation_safe() is True
 
 
-def test_pool_requires_coverage_of_whole_duty_window():
-    """S1c-01's own acceptance criterion: pool = reserves whose RESERVE block
-    covers the DUTY WINDOW, not merely the report-time instant. A reserve
-    whose on-call window ends partway through the duty can't actually fly it
-    and must not be counted as pool-eligible."""
+def test_pool_is_who_is_on_call_at_report_time_not_who_covers_the_whole_duty():
+    """OPEN-4, 2026-08-12: pool = reserves on call AT THE REPORT TIME. The duty
+    may run past the end of their shift -- a reserve is called while on standby
+    and then flies the trip out.
+
+    This replaced a rule requiring the RESERVE block to cover the entire duty
+    window. Duty periods run to 13h against 10-12h shifts, so whole-duty
+    coverage made most flying uncoverable by any reserve at all (76-90% of
+    arrivals found nobody) and flattened the reserve-sizing cost curve. §5.5's
+    own worked example was always the report-time reading; only its code was
+    not. Business decision.
+    """
     engine = EligibilityEngine(mode="FULL", cfg=_test_cfg())
 
     item = OpenTimeItem(
@@ -64,16 +71,24 @@ def test_pool_requires_coverage_of_whole_duty_window():
         start=250.0, end=500.0, deadline=250.0, origin="SICK_CALL", root_event_uid=1
     )
 
-    covers_start_only = CrewMember("R001", "YUL", {"A321neoLR"}, "FO", 1)
-    covers_start_only.calendar.append(Block(0.0, 300.0, BlockType.RESERVE))  # ends inside [250, 500)
+    # On call at report (250) but their shift ends mid-duty -- now ELIGIBLE.
+    on_call_at_report = CrewMember("R001", "YUL", {"A321neoLR"}, "FO", 1)
+    on_call_at_report.calendar.append(Block(0.0, 300.0, BlockType.RESERVE))
 
     covers_whole_window = CrewMember("R002", "YUL", {"A321neoLR"}, "FO", 2)
-    covers_whole_window.calendar.append(Block(0.0, 500.0, BlockType.RESERVE))  # ends exactly at item.end
+    covers_whole_window.calendar.append(Block(0.0, 500.0, BlockType.RESERVE))
 
-    elig = engine.eligible_reserves([covers_start_only, covers_whole_window], item, now=100.0)
+    # NOT on call at report -- their shift starts after it. Still excluded:
+    # the rule is time-scoped, not "anyone who holds a reserve line".
+    on_call_later = CrewMember("R003", "YUL", {"A321neoLR"}, "FO", 3)
+    on_call_later.calendar.append(Block(400.0, 900.0, BlockType.RESERVE))
 
-    assert [r.crew_id for r in elig] == ["R002"]
-    # Pool was [R002] only (R001 was never in the pool) -- fraction is 1/1, not 1/2.
+    elig = engine.eligible_reserves(
+        [on_call_at_report, covers_whole_window, on_call_later], item, now=100.0
+    )
+
+    assert sorted(r.crew_id for r in elig) == ["R001", "R002"]
+    # Pool was the two on call at report; R003 was never in it.
     assert engine.get_distribution() == [1.0]
 
 

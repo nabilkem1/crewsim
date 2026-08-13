@@ -1,7 +1,16 @@
+from unittest import mock
+
+import joblib
+import pytest
+
 from crewsim import config
 from crewsim.engine import des
 from crewsim.engine.policy import load_policy
-from crewsim.reporting.grid import load_grid_config, run_grid
+from crewsim.reporting.grid import (
+    load_grid_config,
+    parallel_hides_scenario_progress,
+    run_grid,
+)
 
 
 def test_load_grid_config_reads_the_r_axis():
@@ -100,6 +109,123 @@ def test_run_grid_parallel_matches_sequential():
     for s, p in zip(seq, par, strict=False):
         assert s["expected_cost"] == p["expected_cost"]
         assert s["cvar95"] == p["cvar95"]
+
+
+def test_negative_jobs_actually_runs_in_parallel():
+    """joblib's convention: n_jobs=-1 means every core, -2 all but one.
+
+    The dispatch used to read `if jobs > 1`, so every negative value fell
+    through to the sequential branch -- `crewsim grid --jobs -1`, which the
+    flag's own help advertises as "joblib parallelism across policies", ran
+    single-process and said nothing. Asserted through joblib.Parallel itself
+    rather than by timing, which would be flaky on a loaded machine.
+    """
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    names = ["R4", "R6"]
+
+    seen: list[int | None] = []
+    real_parallel = joblib.Parallel
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("n_jobs"))
+        return real_parallel(*args, **kwargs)
+
+    with mock.patch.object(joblib, "Parallel", spy):
+        results = run_grid(cfg, costs, names, n_scenarios=2, master_seed="master", jobs=-1)
+
+    assert seen == [-1], "jobs=-1 must reach joblib.Parallel, not the sequential branch"
+    assert [r["policy_name"] for r in results] == names
+
+
+def test_jobs_zero_is_rejected_not_treated_as_sequential():
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    with pytest.raises(ValueError, match="not a valid parallelism setting"):
+        run_grid(cfg, costs, ["R4"], n_scenarios=1, master_seed="master", jobs=0)
+
+
+def test_run_grid_returns_per_scenario_costs_for_pairing():
+    """The paired CRN difference needs the vector, not the mean.
+
+    Two policies over the same seed must yield equal-length vectors in
+    scenario_id order -- that ordering is what makes element-wise subtraction
+    a paired comparison rather than a difference of two unrelated samples.
+    """
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    n = 3
+    results = run_grid(cfg, costs, ["R4", "R10"], n_scenarios=n, master_seed="master")
+    a, b = results
+    assert len(a["scenario_costs"]) == n
+    assert len(b["scenario_costs"]) == n
+    # And they must be the aggregate's own source, not a second measurement.
+    assert a["expected_cost"] == pytest.approx(
+        sum(a["scenario_costs"]) / n
+    )
+
+
+def test_scenario_progress_fires_per_scenario_not_per_policy():
+    """The signal a progress bar needs.
+
+    `on_progress` counts POLICIES, so a single policy over N scenarios reports
+    nothing until it is completely finished and then jumps to 100% -- which is
+    the common case and looked like a hung run. run_policy_crn has reported
+    per-scenario progress all along; _run_one_policy simply never passed a
+    callback down to it.
+    """
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    n = 3
+
+    seen: list[tuple[int, int]] = []
+    run_grid(cfg, costs, ["R6"], n_scenarios=n, master_seed="master",
+             on_scenario_progress=lambda done, total: seen.append((done, total)))
+
+    assert seen == [(1, n), (2, n), (3, n)]
+
+
+def test_scenario_progress_counts_across_the_whole_grid():
+    """Scenario 1 of the second policy is 4/6 in a 2x3 grid, not 1/3 again."""
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    n = 3
+
+    seen: list[tuple[int, int]] = []
+    run_grid(cfg, costs, ["R6", "R10"], n_scenarios=n, master_seed="master",
+             on_scenario_progress=lambda done, total: seen.append((done, total)))
+
+    assert seen == [(1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6)]
+    assert [d for d, _ in seen] == sorted(d for d, _ in seen), "must advance monotonically"
+
+
+def test_parallel_hides_scenario_progress_is_honest_about_joblib():
+    """Callbacks cannot cross joblib's process boundary, so a caller has to be
+    able to ask -- otherwise it renders a bar that never moves."""
+    assert parallel_hides_scenario_progress(1) is False
+    assert parallel_hides_scenario_progress(-1) is True
+    assert parallel_hides_scenario_progress(4) is True
+
+
+def test_run_grid_returns_per_scenario_cascading_drafts_and_uncovered_legs():
+    """The scenario distribution view (api/routers/processing.py's
+    /scenarios endpoint) needs a real per-scenario figure for each, not just
+    the grid-wide cascade_rate_mean/uncovered_legs_mean -- and those means
+    must be exactly derivable from these same per-scenario lists, not a
+    second, independently-computed source that could disagree with them."""
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    n = 3
+    results = run_grid(cfg, costs, ["R6"], n_scenarios=n, master_seed="master")
+    row = results[0]
+
+    assert len(row["scenario_cascading_drafts"]) == n
+    assert len(row["scenario_uncovered_legs"]) == n
+    assert all(isinstance(v, int) for v in row["scenario_cascading_drafts"])
+    assert all(isinstance(v, int) for v in row["scenario_uncovered_legs"])
+    assert row["uncovered_legs_mean"] == pytest.approx(
+        sum(row["scenario_uncovered_legs"]) / n
+    )
 
 
 def test_run_grid_result_shape():

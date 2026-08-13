@@ -13,6 +13,11 @@ from . import crn
 # confusion: the category is real and correctly implemented, it simply never
 # fires at this corpus scale, and the CLI reported it as an error.
 BOOKABLE_CATEGORIES: dict[str, str] = {
+    "OPEN_ITEM": (
+        "a disruption item enters the recovery pipeline (zero-dollar causal "
+        "marker, AUD-03 -- anchors the chain's origin for measurement-window "
+        "attribution and gives the Welch diagnostic its queue-length signal)"
+    ),
     "RESERVE_STAFFING": "per reserve, per covered day (structural, always present when R > 0)",
     "RESERVE_UTILIZATION": "a reserve is converted to duty",
     "DRAFT_TIER1": "a line holder is drafted off a day off",
@@ -26,6 +31,11 @@ BOOKABLE_CATEGORIES: dict[str, str] = {
     "CANCELLATION": "an open item reaches its deadline still uncovered",
     "APPR_COMPENSATION": "statutory passenger compensation on a cancellation",
     "TERMINAL_PENALTY": "an open item is still unresolved at horizon end",
+    "DELAY_AMBIENT": (
+        "per day with real calibrated ambient flight delay for this base+fleet "
+        "(structural, exogenous -- excluded from E[C]/CVaR95, see "
+        "des.EXCLUDED_FROM_OPTIMISED_COST)"
+    ),
 }
 
 

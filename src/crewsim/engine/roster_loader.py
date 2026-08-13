@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 
 import polars as pl
@@ -231,14 +232,20 @@ def load_rosters(
         
     if policy:
         # We need to apply reserves per target
-        # Map target -> max reserves
+        # Map target -> max reserves, and the SC/LC split of that peak entry.
         target_reserves: dict[tuple[str, str, str], int] = {}
+        # AUD-08: the Stage-1 vector is (R_SC, R_LC), not a headcount (§7.2)
+        # -- remember the peak entry's split so the minted lines can be
+        # relabelled to the policy's own mix rather than inheriting whatever
+        # call types the donor patterns happened to carry.
+        target_split: dict[tuple[str, str, str], tuple[int, int]] = {}
         for r in policy.stage1.reserves:
             # fleet_quals is a set, we'll just match the fleet string
             key = (r.base, r.fleet, r.position)
             daily = r.short_call + r.long_call
             if daily > target_reserves.get(key, 0):
                 target_reserves[key] = daily
+                target_split[key] = (r.short_call, r.long_call)
                 
         # Group crew by target
         # Note: A crew member can have multiple fleet_quals, but usually a primary one in D1. 
@@ -281,18 +288,28 @@ def load_rosters(
             else:
                 pattern_cycle = itertools.cycle([[]]) # fallback if none exist
                 
-            for c in res:
+            sc_n, _lc_n = target_split.get(key, (n_res, 0))
+            for i, c in enumerate(res):
                 c._is_reserve = True
                 # S1b-02 AC2: remember the line they gave up before overwriting
                 # it. Without this the flying silently ceased to exist, so a
                 # higher R carried no opportunity cost at all.
                 c._displaced_pairings = [b for b in c.calendar if b.btype == BlockType.PAIRING]
-                # list(...) copies: pattern_cycle repeats once the reserve count
-                # exceeds the number of distinct authentic patterns (18 in the
-                # current scope), and without a copy several crew would share ONE
-                # calendar object -- which copy.deepcopy preserves, so drafting
-                # one reserve mutated the others.
-                c.calendar = list(next(pattern_cycle))
+                # AUD-08: the first `short_call` minted lines are SC, the rest
+                # LC -- the policy's own Stage-1 split, which rule L8 and the
+                # per-day staffing rates both read off the blocks. The donor
+                # pattern still supplies the ROTATION (which days are on call);
+                # only the call type is the policy's to set. dataclasses.replace
+                # creates fresh Block objects, which also serves the old
+                # list(...)-copy purpose: pattern_cycle repeats once the reserve
+                # count exceeds the number of distinct authentic patterns, and
+                # shared Block lists must not be mutated across crew.
+                call_type = "SC" if i < sc_n else "LC"
+                c.calendar = [
+                    dataclasses.replace(b, reserve_call_type=call_type)
+                    if b.btype == BlockType.RESERVE else b
+                    for b in next(pattern_cycle)
+                ]
             reserve_crew_all.extend(res)
             
             for c in lin:

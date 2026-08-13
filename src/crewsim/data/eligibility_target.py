@@ -4,6 +4,7 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
+from ..engine.eligibility import is_on_call_at
 from ..engine.legality import is_legal_assignment
 from ..engine.roster_loader import load_rosters
 from ..engine.state import BlockType, OpenTimeItem
@@ -25,6 +26,16 @@ def reconstruct_eligibility(cfg, window: str) -> dict:
     period an absence actually created open time for -- a distribution,
     not a point (S0-04's own acceptance criterion), built from real
     history, not a synthetic draw.
+
+    KNOWN VALIDATION LIMIT (AUD-09): because this reconstruction applies the
+    SAME L0-L8 implementation the simulation uses, a defect in the legality
+    rules moves the historical band and the simulated rate together -- gate
+    V3 therefore validates roster/calendar realism, not legality
+    correctness, and a V3 PASS is necessary but not sufficient. An
+    independent check against D5's real call-outcome log (assigned /
+    released / no-show), which never passes through this code, is the
+    recommended V3b companion -- recorded as future work, not silently
+    assumed away.
     """
     if cfg.windows is None:
         raise ValueError("reconstruct_eligibility requires cfg.windows (fitting/holdout) to be configured")
@@ -77,16 +88,13 @@ def reconstruct_eligibility(cfg, window: str) -> dict:
                 root_event_uid=0, flight_mins=b.flight_mins,
             )
 
-            # Same pool definition as EligibilityEngine.eligible_reserves
-            # (S1c-01): reserves whose RESERVE block covers the WHOLE duty
-            # window, not just an instant.
+            # Same pool definition as EligibilityEngine.eligible_reserves --
+            # via the SAME function, so the historical side and the simulated
+            # side cannot drift apart on what "on call" means (OPEN-4 changed
+            # it from whole-duty coverage to on call at the report time).
             pool = [
                 r for r in crew_list
-                if r.crew_id != crew.crew_id
-                and any(
-                    rb.btype == BlockType.RESERVE and rb.start <= item.start and rb.end >= item.end
-                    for rb in r.blocks_in(item.start, item.end)
-                )
+                if r.crew_id != crew.crew_id and is_on_call_at(r, item.start)
             ]
             if not pool:
                 continue

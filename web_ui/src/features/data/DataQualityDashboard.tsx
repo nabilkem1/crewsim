@@ -1,4 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { apiFetch, errorMessage, isNotImplemented } from '../../api/client';
+import { ErrorPanel, Loading, NotImplementedPanel } from '../../components/StatusPanel';
+
+/**
+ * Data quality report.
+ *
+ * This component used to answer a failed fetch with a hardcoded report: an
+ * overall score of 95 and four passing checks, rendered identically to a real
+ * result. Reporting an unearned pass on data quality is about the most
+ * misleading thing this UI could do, so the fallback is gone -- and the backend
+ * no longer fabricates one either. It reports `implemented: false` until it is
+ * wired to `crewsim.data.quality`.
+ */
 
 interface QualityCheck {
   name: string;
@@ -11,48 +24,44 @@ interface QualityReport {
   checks: QualityCheck[];
 }
 
+interface QualityResponse {
+  report: QualityReport | null;
+  implemented?: boolean;
+  notice?: string;
+}
+
 export const DataQualityDashboard: React.FC = () => {
   const [report, setReport] = useState<QualityReport | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchReport = async () => {
-      try {
-        const response = await fetch('/api/data/quality-report');
-        if (response.ok) {
-          const data = await response.json();
-          setReport(data.report);
-        } else {
-          throw new Error('Failed to fetch from API, falling back to mock');
-        }
-      } catch (err) {
-        console.warn('API fetch failed, using mock data:', err);
-        // Fallback mock data in case the API is not yet running
-        setReport({
-          overall_score: 95,
-          checks: [
-            { name: 'Missing Values', status: 'passed', details: 'No missing values found across critical tables.' },
-            { name: 'Data Types', status: 'passed', details: 'All column data types match the defined schema.' },
-            { name: 'Outliers', status: 'warning', details: 'Found potential outliers in simulation historical inputs.' },
-            { name: 'Data Dependencies', status: 'passed', details: 'All dependent datasets for simulation are present and up-to-date.' }
-          ]
-        });
-      } finally {
-        setLoading(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    setReport(null);
+    try {
+      const data = await apiFetch<QualityResponse>('/data/quality-report');
+      if (isNotImplemented(data)) {
+        setNotice(data.notice);
+      } else {
+        setReport(data.report);
       }
-    };
-
-    fetchReport();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--spacing-8)' }}>
-        <div style={{ fontSize: '1.125rem', color: 'var(--color-neutral-600)' }}>Loading Data Quality Report...</div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading) return <Loading what="data quality report" />;
+  if (error) return <ErrorPanel message={error} onRetry={() => void load()} />;
+  if (notice) return <NotImplementedPanel title="The data quality report" notice={notice} />;
 
   if (!report) {
     return (

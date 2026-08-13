@@ -1,4 +1,4 @@
-import random
+import numpy as np
 
 from crewsim import config
 from crewsim.engine import roster_loader
@@ -25,8 +25,9 @@ def test_sick_calls():
     )
     current_time = earliest_pairing_start - 1.0
 
-    random.seed(42)
-    c, otis = apply_sick_call(cfg, active, current_time, 3.0, 100)
+    # AUD-26: crew selection draws from an injected Generator now, not the
+    # reseeded process-global stdlib random.
+    c, otis = apply_sick_call(cfg, active, current_time, 3.0, 100, np.random.default_rng(42))
 
     assert c is not None, (
         f"Should find a crew member about to report "

@@ -21,8 +21,6 @@ import pytest
 from crewsim import config
 from crewsim.cli import EXPECTED_DATASETS, EXPECTED_MODULES
 
-from .workstreams import is_excluded
-
 ROOT = config.repo_root()
 SRC = ROOT / "src" / "crewsim"
 
@@ -116,7 +114,7 @@ def test_no_hard_coded_paths_in_src() -> None:
     """
     offenders: list[str] = []
     for py in SRC.rglob("*.py"):
-        if py == BOOTSTRAP or is_excluded(py.relative_to(ROOT).as_posix()):
+        if py == BOOTSTRAP:
             continue
         for n, line in enumerate(py.read_text().splitlines(), 1):
             code = line.split("#", 1)[0]

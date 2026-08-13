@@ -1,201 +1,203 @@
-import React, { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { apiFetch, errorMessage } from '../../api/client';
+import { ErrorPanel, Loading } from '../../components/StatusPanel';
+import type { ComparisonsResponse, DrillsResponse, SummariesResponse } from './api';
+import { CascadeSummary } from './CascadeSummary';
+import { Callout } from './CascadeCharts';
+import { ExemplarChains } from './ExemplarChains';
+import { PolicyCascadeComparison } from './PolicyCascadeComparison';
+
+/**
+ * Cascade analytics.
+ *
+ * This view used to call three endpoints at the wrong paths, get a 404 from
+ * each, and then render hardcoded "Mock Recovery" / "Mock Policy A" rows from
+ * a catch block -- so a tab whose every request failed still looked like a
+ * working dashboard. The endpoints were then emptied rather than filled in,
+ * because the figures behind them had never come from the cascade engine.
+ *
+ * They are real now. Everything on this page is computed by
+ * `reporting/cascade_analytics.py` from actual `CostLedger` rows during a
+ * policy-grid run, and read back from that job -- no figure here is produced
+ * by this component, and none is produced on request.
+ *
+ * The page reads a COMPLETED grid job. That is not a limitation to work
+ * around: it is what keeps the cascade figures and the E[C] shown beside them
+ * drawn from the same CRN scenario set, rather than two independent samples
+ * that would disagree for reasons nobody could see.
+ */
+
+type Tab = 'summaries' | 'drills' | 'comparisons';
+
+const TABS: { id: Tab; label: string; path: string }[] = [
+  { id: 'summaries', label: 'Summary', path: '/analytics/cascade-summaries' },
+  { id: 'drills', label: 'Exemplar Chains', path: '/analytics/exemplar-drills' },
+  { id: 'comparisons', label: 'Policy Comparison', path: '/analytics/cascade-policy-comparisons' },
+];
+
+type Payload = SummariesResponse | DrillsResponse | ComparisonsResponse;
 
 export const AnalyticsDashboard: React.FC = () => {
-    const [activeTab, setActiveTab] = useState('summaries');
-    const [summaries, setSummaries] = useState<any[]>([]);
-    const [comparisons, setComparisons] = useState<any[]>([]);
-    const [drills, setDrills] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<Tab>('summaries');
+  const [payload, setPayload] = useState<Payload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [policyIndex, setPolicyIndex] = useState(0);
 
-    useEffect(() => {
-        // Fetch summaries
-        fetch('http://localhost:8000/cascade-summaries')
-            .then(res => res.json())
-            .then(data => setSummaries(data.summaries || []))
-            .catch(e => {
-                console.error("Failed to fetch cascade summaries, using mock data", e);
-                setSummaries([
-                    { id: 'casc_mock_1', name: 'Mock Recovery', status: 'completed', total_drills: 10, success_rate: 0.9, cost_impact: 10000 },
-                    { id: 'casc_mock_2', name: 'Mock Escalation', status: 'running', total_drills: 4, success_rate: 0.5, cost_impact: 4500 }
-                ]);
-            });
+  const active = TABS.find((t) => t.id === activeTab)!;
 
-        // Fetch comparisons
-        fetch('http://localhost:8000/cascade-policy-comparisons')
-            .then(res => res.json())
-            .then(data => setComparisons(data.comparisons || []))
-            .catch(e => {
-                console.error("Failed to fetch policy comparisons, using mock data", e);
-                setComparisons([
-                    { policy_name: 'Mock Policy A', avg_resolution_time: 40, cost_efficiency: 0.8, fatigue_impact: 'High' },
-                    { policy_name: 'Mock Policy B', avg_resolution_time: 60, cost_efficiency: 0.95, fatigue_impact: 'Low' }
-                ]);
-            });
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setPayload(null);
+    try {
+      setPayload(await apiFetch<Payload>(active.path));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [active.path]);
 
-        // Fetch drills
-        fetch('http://localhost:8000/exemplar-drills')
-            .then(res => res.json())
-            .then(data => setDrills(data.drills || []))
-            .catch(e => {
-                console.error("Failed to fetch exemplar drills, using mock data", e);
-                setDrills([
-                    { id: 'drill_mock_1', name: 'Mock Drill A', efficiency_score: 90, time_to_fill_mins: 15 }
-                ]);
-            });
-    }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-    return (
-        <div className="card">
-            <h2 style={{ marginBottom: '1.5rem', color: 'var(--color-neutral-900)' }}>Cascade Analytics Dashboard</h2>
-            
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '2rem', borderBottom: '1px solid var(--border-default)', paddingBottom: '1rem' }}>
-                {['summaries', 'drills', 'comparisons'].map(tab => (
-                    <button 
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Navigate to ${tab.replace('-', ' ')}`}
-                        style={{ 
-                            padding: '0.5rem 1rem', 
-                            borderRadius: 'var(--radius-md)',
-                            border: 'none',
-                            backgroundColor: activeTab === tab ? 'var(--color-primary-100)' : 'transparent',
-                            color: activeTab === tab ? 'var(--color-primary-700)' : 'var(--color-neutral-600)',
-                            cursor: 'pointer',
-                            fontWeight: 500,
-                            textTransform: 'capitalize'
-                        }}>
-                        {tab.replace('-', ' ')}
-                    </button>
-                ))}
-            </div>
+  const summaries = payload && 'summaries' in payload ? payload.summaries : null;
+  const selected = summaries?.[Math.min(policyIndex, summaries.length - 1)] ?? null;
 
-            {activeTab === 'summaries' && (
-                <div>
-                    <h3 style={{ marginBottom: '1rem', color: 'var(--color-neutral-800)' }}>Cascade Summaries & Timelines</h3>
-                    <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
-                        {summaries.map(s => (
-                            <div key={s.id} style={{ 
-                                padding: '1.5rem', 
-                                border: '1px solid var(--border-default)', 
-                                borderRadius: 'var(--radius-md)',
-                                backgroundColor: 'var(--surface-default)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '0.75rem'
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ fontWeight: 600, fontSize: '1.125rem' }}>{s.name}</div>
-                                    <div style={{ 
-                                        padding: '0.25rem 0.75rem', 
-                                        borderRadius: '1rem',
-                                        fontSize: '0.75rem',
-                                        fontWeight: 600,
-                                        backgroundColor: s.status === 'completed' ? 'var(--color-success-bg)' : 'var(--color-info-bg)',
-                                        color: s.status === 'completed' ? 'var(--color-success-text)' : 'var(--color-info-text)'
-                                    }}>
-                                        {s.status.toUpperCase()}
-                                    </div>
-                                </div>
-                                <div style={{ color: 'var(--color-neutral-500)', fontSize: '0.875rem' }}>ID: {s.id}</div>
-                                
-                                <div style={{ 
-                                    display: 'grid', 
-                                    gridTemplateColumns: '1fr 1fr', 
-                                    gap: '1rem', 
-                                    marginTop: '0.5rem',
-                                    paddingTop: '0.75rem',
-                                    borderTop: '1px solid var(--border-default)'
-                                }}>
-                                    <div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--color-neutral-500)', textTransform: 'uppercase' }}>Total Drills</div>
-                                        <div style={{ fontWeight: 500 }}>{s.total_drills}</div>
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--color-neutral-500)', textTransform: 'uppercase' }}>Success Rate</div>
-                                        <div style={{ fontWeight: 500, color: s.success_rate >= 0.8 ? 'var(--color-success-text)' : 'var(--color-warning-text)' }}>
-                                            {(s.success_rate * 100).toFixed(0)}%
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--color-neutral-500)', textTransform: 'uppercase' }}>Cost Impact</div>
-                                        <div style={{ fontWeight: 500 }}>${s.cost_impact.toLocaleString()}</div>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
+  return (
+    <div className="card">
+      <div style={{ marginBottom: 'var(--spacing-4)' }}>
+        <h2 style={{ marginBottom: '0.25rem' }}>Cascade Analytics</h2>
+        <p style={{ fontSize: '0.85rem', color: 'var(--color-neutral-600)', lineHeight: 1.55, margin: 0, maxWidth: '68ch' }}>
+          A draft does not end when it is paid for. If the crew member drafted today held a trip
+          tomorrow, that trip breaks, re-enters as open time, and has to be covered again. This page
+          prices that chain from the ledger — the difference between what a disruption costs and what a
+          draft costs.
+        </p>
+      </div>
 
-            {activeTab === 'drills' && (
-                <div>
-                    <h3 style={{ marginBottom: '1rem', color: 'var(--color-neutral-800)' }}>Exemplar Drills</h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        {drills.map(drill => (
-                            <div key={drill.id} style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                padding: '1rem 1.5rem',
-                                backgroundColor: 'var(--surface-default)',
-                                border: '1px solid var(--border-default)',
-                                borderRadius: 'var(--radius-md)'
-                            }}>
-                                <div>
-                                    <div style={{ fontWeight: 600 }}>{drill.name}</div>
-                                    <div style={{ fontSize: '0.875rem', color: 'var(--color-neutral-500)' }}>ID: {drill.id}</div>
-                                </div>
-                                <div style={{ display: 'flex', gap: '2rem', textAlign: 'right' }}>
-                                    <div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--color-neutral-500)' }}>Efficiency</div>
-                                        <div style={{ fontWeight: 600 }}>{drill.efficiency_score} / 100</div>
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--color-neutral-500)' }}>Fill Time</div>
-                                        <div style={{ fontWeight: 600 }}>{drill.time_to_fill_mins} mins</div>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {activeTab === 'comparisons' && (
-                <div>
-                    <h3 style={{ marginBottom: '1rem', color: 'var(--color-neutral-800)' }}>Cascade Policy Comparisons</h3>
-                    <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
-                            <thead>
-                                <tr style={{ borderBottom: '2px solid var(--border-default)' }}>
-                                    <th style={{ padding: '0.75rem 1rem', color: 'var(--color-neutral-600)' }}>Policy Name</th>
-                                    <th style={{ padding: '0.75rem 1rem', color: 'var(--color-neutral-600)' }}>Avg Resolution Time</th>
-                                    <th style={{ padding: '0.75rem 1rem', color: 'var(--color-neutral-600)' }}>Cost Efficiency</th>
-                                    <th style={{ padding: '0.75rem 1rem', color: 'var(--color-neutral-600)' }}>Fatigue Impact</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {comparisons.map((comp, idx) => (
-                                    <tr key={idx} style={{ borderBottom: '1px solid var(--border-default)' }}>
-                                        <td style={{ padding: '1rem', fontWeight: 500 }}>{comp.policy_name}</td>
-                                        <td style={{ padding: '1rem' }}>{comp.avg_resolution_time} mins</td>
-                                        <td style={{ padding: '1rem' }}>{(comp.cost_efficiency * 100).toFixed(0)}%</td>
-                                        <td style={{ 
-                                            padding: '1rem',
-                                            color: comp.fatigue_impact === 'High' ? 'var(--color-error-text)' : 
-                                                   comp.fatigue_impact === 'Medium' ? 'var(--color-warning-text)' : 
-                                                   'var(--color-success-text)'
-                                        }}>
-                                            {comp.fatigue_impact}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            )}
+      {payload && (
+        <div
+          style={{
+            fontSize: '0.72rem',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--color-neutral-500)',
+            marginBottom: 'var(--spacing-4)',
+          }}
+        >
+          run {payload.job_id.slice(0, 8)} · {payload.num_scenarios ?? '?'} scenarios ·{' '}
+          {payload.season ?? 'season n/a'} · {new Date(payload.created_at).toLocaleString()}
         </div>
-    );
+      )}
+
+      <div
+        role="tablist"
+        aria-label="Cascade analytics sections"
+        style={{
+          display: 'flex',
+          gap: '0.5rem',
+          marginBottom: 'var(--spacing-5)',
+          borderBottom: '1px solid var(--border-default)',
+          paddingBottom: 'var(--spacing-3)',
+          flexWrap: 'wrap',
+        }}
+      >
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            role="tab"
+            onClick={() => setActiveTab(tab.id)}
+            aria-selected={activeTab === tab.id}
+            style={{
+              padding: '0.5rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              cursor: 'pointer',
+              fontWeight: 500,
+              fontSize: '0.85rem',
+              border: activeTab === tab.id ? 'none' : '1px solid var(--border-default)',
+              backgroundColor: activeTab === tab.id ? 'var(--color-primary-600)' : 'transparent',
+              color: activeTab === tab.id ? 'white' : 'var(--color-text-base)',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {loading && <Loading what="cascade analytics" />}
+      {!loading && error && <ErrorPanel message={error} onRetry={() => void load()} />}
+
+      {!loading && !error && payload && (
+        <>
+          {'notice' in payload && payload.notice && (
+            <div style={{ marginBottom: 'var(--spacing-4)' }}>
+              <Callout tone="warn" title="Some policies carry no cascade data">
+                {payload.notice}
+              </Callout>
+            </div>
+          )}
+
+          {activeTab === 'summaries' && summaries && (
+            <>
+              {summaries.length > 1 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '0.4rem',
+                    marginBottom: 'var(--spacing-4)',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span style={{ fontSize: '0.75rem', color: 'var(--color-neutral-500)' }}>Policy:</span>
+                  {summaries.map((s, i) => (
+                    <button
+                      key={s.policy}
+                      type="button"
+                      onClick={() => setPolicyIndex(i)}
+                      aria-pressed={i === policyIndex}
+                      style={{
+                        padding: '0.25rem 0.7rem',
+                        borderRadius: 'var(--radius-full)',
+                        fontSize: '0.78rem',
+                        cursor: 'pointer',
+                        border: '1px solid var(--border-default)',
+                        backgroundColor:
+                          i === policyIndex ? 'var(--color-primary-600)' : 'transparent',
+                        color: i === policyIndex ? 'white' : 'var(--color-text-base)',
+                      }}
+                    >
+                      {s.policy}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {selected ? (
+                <CascadeSummary summary={selected} />
+              ) : (
+                <Callout tone="info" title="No policies in this run">
+                  This grid job produced no scoreboard rows.
+                </Callout>
+              )}
+            </>
+          )}
+
+          {activeTab === 'drills' && 'drills' in payload && (
+            <ExemplarChains
+              drills={payload.drills}
+              depthNote={payload.depth_note}
+              totalChains={payload.total_chains}
+              truncated={payload.truncated}
+            />
+          )}
+
+          {activeTab === 'comparisons' && 'comparisons' in payload && (
+            <PolicyCascadeComparison data={payload} />
+          )}
+        </>
+      )}
+    </div>
+  );
 };

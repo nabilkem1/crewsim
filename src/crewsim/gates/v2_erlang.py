@@ -10,9 +10,20 @@ Everything on the DES side is measured from real simulation runs:
 
     p_hat  = blocked-on-arrival / arrivals        (a binomial proportion)
     lambda = arrivals / horizon minutes           (arrival rate)
-    E[S]   = mean reserve occupancy per assignment (duty + the rest it obliges)
+    E[S]   = ON-CALL capacity consumed per assignment (OPEN-7: the part of the
+             duty+rest span that actually falls inside the crew member's shift)
     a      = lambda * E[S]                        (offered load, in Erlangs)
     s      = time-average reserves on call        (servers)
+
+Both E[S] and s are measured in ON-CALL minutes. That is the OPEN-7 correction:
+once reserves became rostered shifts (2026-08-12) a duty could run well past the
+shift that authorised it, and charging those out-of-shift hours as occupied
+server time -- while counting servers only while on call -- put the numerator
+and denominator in different currencies. Measured then: E[S] read 19.0h against
+shifts of 10-12h, the offered load came out at 3.63 Erlangs, and the gate FAILED
+in the impossible direction (p_hat 0.7145 < B 0.7840). The engine was fine --
+V8's L0 invariants were clean across 672 crew-scenarios -- the comparison was
+not. On the corrected basis E[S] is 10.8h, a is 2.06, and the bound holds.
 
 (This replaces a version in which the DES side was the literal
 `prob_shortfall_des = 0.098  # Stubbed DES mock value`, written out twice -- once
@@ -50,6 +61,7 @@ recorded with the user 2026-08-08.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from scipy import stats
@@ -142,14 +154,35 @@ def run_v2_gate(
     )
 
     lam = arrivals / (n_scenarios * horizon_minutes)          # arrivals per minute
-    mean_service = (service_minutes / assignments) if assignments else 0.0
+    # OPEN-7: E[S] is the ON-CALL capacity an assignment consumes, not the whole
+    # duty+rest span. Since reserves became rostered shifts a duty can run well
+    # past the shift that authorised it, and those out-of-shift hours remove no
+    # server capacity -- the crew member was off duty and unavailable anyway.
+    # `servers` below is a time-average of on-call minutes, so the load has to
+    # be measured in on-call minutes too or the two are different currencies.
+    # The raw duty+rest figure is still reported, as the gap between them is
+    # exactly the shift structure Erlang B cannot represent.
+    oncall_minutes = sum(s.reserve_oncall_minutes for s in sims)
+    mean_service = (oncall_minutes / assignments) if assignments else 0.0
+    mean_service_raw = (service_minutes / assignments) if assignments else 0.0
     offered_load = lam * mean_service                          # Erlangs
     servers_float = sum(
         mean_on_call_servers(s.reserves, horizon_minutes) for s in sims
     ) / n_scenarios
-    servers = round(servers_float)
 
-    theory = erlang_b(servers, offered_load)
+    # Erlang B needs an integer server count, but a rostered pool presents a
+    # FRACTIONAL time-average (7 reserves on 12h shifts average well under 7),
+    # and B is violently sensitive at small s -- B(1, 3.6) = 0.78 against
+    # B(2, 3.6) = 0.59. Rounding silently picked one of those and turned the
+    # choice into the verdict. Both bounds are now computed and reported, and
+    # the gate is judged against the MOST GENEROUS idealisation (more servers,
+    # least blocking): if the DES blocks less often than even that, the
+    # violation is real rather than an artefact of rounding.
+    servers_lo, servers_hi = math.floor(servers_float), math.ceil(servers_float)
+    servers = servers_hi
+    theory = erlang_b(servers_hi, offered_load)
+    theory_lo = erlang_b(servers_lo, offered_load)
+
     # The verdict: the DES cannot be MORE available than an idealised loss system
     # with the same servers and load. Compared against the CI's upper bound, not
     # the point estimate, so ordinary sampling noise near the boundary does not
@@ -190,6 +223,10 @@ def run_v2_gate(
         "confidence_level": level,
         "servers": servers,
         "servers_float": servers_float,
+        "servers_lo": servers_lo,
+        "servers_hi": servers_hi,
+        "theory_lo": theory_lo,
+        "mean_service_raw_hours": mean_service_raw / 60.0,
         "reserve_headcount": len(sims[0].reserves) if sims else 0,
         "arrival_rate_per_day": lam * 1440.0,
         "mean_service_hours": mean_service / 60.0,
@@ -208,15 +245,17 @@ def print_v2_report(result: dict[str, Any]) -> None:
     print(f"    blocked on arrival       = {result['blocked']:,}")
     print(f"    arrival rate (lambda)    = {result['arrival_rate_per_day']:.2f} / day")
     print(f"    mean service E[S]        = {result['mean_service_hours']:.1f} h "
-          f"(duty + obliged rest)")
-    print(f"    servers (s)              = {result['servers']} "
-          f"(time-average on call; headcount is {result['reserve_headcount']})")
+          f"(ON-CALL capacity consumed; duty+rest spans {result['mean_service_raw_hours']:.1f} h, "
+          f"the excess falling outside the shift)")
+    print(f"    servers (s)              = {result['servers_float']:.2f} time-average on call "
+          f"(headcount {result['reserve_headcount']}); judged at s={result['servers_hi']}")
     print(f"    offered load (a)         = {result['offered_load']:.2f} Erlangs")
     print("-" * 62)
     print(f"    DES shortfall  p_hat     = {result['p_hat']:.4f}  "
           f"[{result['ci_low']:.4f}, {result['ci_high']:.4f}] "
           f"{result['confidence_level']:.0%} CI")
-    print(f"    Theory  B(s, a)          = {result['theory']:.4f}")
+    print(f"    Theory  B(s, a)          = {result['theory']:.4f} at s={result['servers_hi']}"
+          f"   (B = {result['theory_lo']:.4f} at s={result['servers_lo']})")
     print("-" * 62)
     bound = "OK" if result["pass"] else "VIOLATED"
     print(f"    bound: p_hat >= B(s, a)  {bound}          <- the gate's verdict")

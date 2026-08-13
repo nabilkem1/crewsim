@@ -126,31 +126,6 @@ def _print_v3_verdict(cfg, sims, window: str = "holdout") -> bool:
     return False
 
 
-def _params_provenance(cfg) -> tuple[str, str]:
-    """(params_version, content_hash) of the frozen parameter store this run reads.
-
-    Real values off the store calibration actually emitted (calibration/
-    pipeline.py writes `params_version` and a blake2b `content_hash` receipt
-    into output/params/params_v<ver>_<season>.json), not the literal "v1"
-    placeholder this used to print with the note "param loading isn't
-    implemented yet" -- it has been implemented since S0-06/S0-07.
-
-    A missing store is reported as missing rather than defaulted: a provenance
-    chain that invents a version is worse than one that admits a gap, because
-    the entire point is regenerating this result a year from now.
-    """
-    import json
-
-    from .engine import des
-
-    params_dir = config.resolve(cfg, "params_dir")
-    path = params_dir / f"params_v{des._package_version()}_{cfg.scope.season}.json"
-    if not path.is_file():
-        return "MISSING", f"no parameter store at {path.name} -- run `crewsim calibrate --emit`"
-    store = json.loads(path.read_text())
-    return store.get("params_version", "unknown"), store.get("content_hash", "unknown")
-
-
 def _first_real_cascade(cfg, args) -> list[str] | None:
     """The first genuine pairing cascade in `args.scenario`, as trace lines.
 
@@ -195,10 +170,12 @@ def _print_provenance(cfg, policy, master_seed: str, ledger_hash: str | None = N
     metadata"), instead of it being available only from a separate command that
     exits before running anything.
     """
+    from .reporting.provenance import params_provenance
+
     data_window = (f"{cfg.windows.fitting.start} to {cfg.windows.holdout.end}"
                    if cfg.windows else "unknown")
     costs_ver = policy.costs_file.split("@")[1] if "@" in policy.costs_file else "unknown"
-    params_ver, params_hash = _params_provenance(cfg)
+    params_ver, params_hash = params_provenance(cfg)
 
     print("\nProvenance chain:")
     print(f"  data window    : {data_window}")
@@ -373,12 +350,12 @@ def _data_profile(open_after: bool) -> int:
     return 0
 
 
-def _data_quality_report() -> int:
+def _data_quality_report(allow_marginal: bool = False) -> int:
     """S0-02 manual check: `crewsim data quality-report`."""
     from .data import loaders, quality
     try:
         cfg = config.load()
-        return quality.run_quality_report(cfg)
+        return quality.run_quality_report(cfg, allow_marginal=allow_marginal)
     except (FileNotFoundError, KeyError, loaders.SchemaError) as exc:
         print(f"error: {exc}")
         return 1
@@ -485,7 +462,12 @@ def main(argv: list[str] | None = None) -> int:
         "season is already fixed by cfg.scope.season, not a per-call choice"
     )
     
-    data_sub.add_parser("quality-report", help="run the data quality gates (§6.2)")
+    quality_parser = data_sub.add_parser("quality-report", help="run the data quality gates (§6.2)")
+    quality_parser.add_argument(
+        "--allow-marginal", action="store_true",
+        help="exit 0 even when a gate is MARGINAL (below its §6.2 passing grade but above "
+             "the marginal floor) -- an explicit acceptance, never the default (AUD-13)",
+    )
     data_sub.add_parser("draft-events", help="reconstruct draft events from D6 x D7 (§6.3-1)")
     data_sub.add_parser("cascade-target", help="reconstruct the cascade rate, 7-day D6 follow-on scan (§6.3-3)")
 
@@ -867,7 +849,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.data_cmd == "profile":
             return _data_profile(args.open_after)
         if args.data_cmd == "quality-report":
-            return _data_quality_report()
+            return _data_quality_report(allow_marginal=getattr(args, "allow_marginal", False))
         if args.data_cmd == "draft-events":
             return _data_draft_events()
         if args.data_cmd == "cascade-target":
@@ -1013,8 +995,11 @@ def main(argv: list[str] | None = None) -> int:
                 print("  (no duty blocks in the template window)")
             prev_duty7 = None
             for b in duty_blocks:
-                duty7, flight7 = crew.get_rolling_counters(b.end, 7)
-                duty28, _ = crew.get_rolling_counters(b.end, 28)
+                # Same accrual rule the L3/L4 checks use (AUD-24), so this
+                # explanation cannot disagree with the verdict it explains.
+                counts_reserve = cfg.legality is None or cfg.legality.reserve_counts_as_duty
+                duty7, flight7 = crew.get_rolling_counters(b.end, 7, counts_reserve)
+                duty28, _ = crew.get_rolling_counters(b.end, 28, counts_reserve)
                 trend = ""
                 if prev_duty7 is not None:
                     trend = "  (accumulated)" if duty7 >= prev_duty7 else "  (decayed)"
@@ -1296,6 +1281,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if getattr(args, "assert_invariants", False):
             from .engine.legality import (
+                find_duty_during_rest_violations,
                 find_l0_violations,
                 find_l5_regressions,
                 find_l5_streak_spans,
@@ -1334,6 +1320,33 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"PASS: 0 overlapping duty blocks across {len(sims)} scenario(s) "
                       f"({n_crew_checked} crew-scenarios checked).")
+            print("-----------------------------------------------------------\n")
+
+            # AUD-11: the other half of L0's checked span (§5.4: "the duty
+            # PLUS the rest it obliges"). find_l0_violations deliberately
+            # excludes REST, which also made it blind to a duty inserted INTO
+            # a rest period -- exactly the violation class the pre-AUD-01
+            # blocks_in bug produced. Scanned separately so rest-over-day-off
+            # (normal) stays unflagged.
+            print("--- L0b Duty-During-Rest Invariant (realized calendars) ---")
+            rest_offenders: list[str] = []
+            for sim in sims:
+                for crew in sim.roster + sim.reserves:
+                    for duty, rest in find_duty_during_rest_violations(crew):
+                        rest_offenders.append(
+                            f"scenario {sim.scenario_id}, {crew.crew_id}: "
+                            f"{duty.btype.value} [{duty.start:.0f}, {duty.end:.0f}] sits inside "
+                            f"REST [{rest.start:.0f}, {rest.end:.0f}]"
+                        )
+            if rest_offenders:
+                print(f"FATAL: {len(rest_offenders)} duty block(s) overlap a mandatory REST block:")
+                for line in rest_offenders[:10]:
+                    print(f"  {line}")
+                if len(rest_offenders) > 10:
+                    print(f"  ... and {len(rest_offenders) - 10} more")
+                invariants_failed = True
+            else:
+                print(f"PASS: 0 duties inside mandatory rest across {len(sims)} scenario(s).")
             print("-----------------------------------------------------------\n")
 
             # Same construction as `gate v3`: flattened per-event eligibility
@@ -1434,11 +1447,9 @@ def main(argv: list[str] | None = None) -> int:
             print("error: compare requires exactly two policies")
             return 1
 
-        import numpy as np
-        from scipy import stats
-
         from .engine import des
         from .engine.policy import load_policy
+        from .reporting.paired import paired_diff
 
         n = args.scenarios
         master_seed = getattr(args, "master_seed", "master")
@@ -1456,22 +1467,12 @@ def main(argv: list[str] | None = None) -> int:
         print(file=sys.stderr)
         sims_b = des.run_policy_crn(cfg, costs, pol_b, n, master_seed, on_progress=_stderr_progress(args.policies[1]))
         print(file=sys.stderr)
-        costs_a = np.array(des.measured_window_costs(cfg, sims_a))
-        costs_b = np.array(des.measured_window_costs(cfg, sims_b))
+        costs_a = des.measured_window_costs(cfg, sims_a)
+        costs_b = des.measured_window_costs(cfg, sims_b)
 
-        diff = costs_b - costs_a
-        mean_diff = np.mean(diff)
-        std_diff = np.std(diff, ddof=1) if n > 1 else 0
-        se = std_diff / np.sqrt(n) if n > 1 else float('inf')
-
-        if n > 1:
-            t_stat, p_val = stats.ttest_rel(costs_b, costs_a)
-            ci_half = stats.t.ppf(0.975, n-1) * se
-            ci_lower = mean_diff - ci_half
-            ci_upper = mean_diff + ci_half
-        else:
-            t_stat, p_val = float('nan'), float('nan')
-            ci_lower, ci_upper = float('nan'), float('nan')
+        # Shared with the web API (reporting/paired.py) so both report the same
+        # difference for the same inputs.
+        diff_result = paired_diff(costs_a, costs_b)
 
         # S1c-05 AC3: `compare` prints a paired cost difference a planner may act
         # on directly, so it carries the same verdict as `run`. Pooled across
@@ -1481,12 +1482,12 @@ def main(argv: list[str] | None = None) -> int:
         _print_v3_verdict(cfg, sims_a + sims_b)
 
         print(f"\nComparing {args.policies[0]} vs {args.policies[1]} over {n} scenarios (CRN):")
-        print(f"Mean Difference: ${mean_diff:,.2f}")
-        if n > 1:
-            print(f"95% CI: [${ci_lower:,.2f}, ${ci_upper:,.2f}]")
-            print(f"t-statistic: {t_stat:.2f} (p={p_val:.4f})")
+        print(f"Mean Difference: ${diff_result['mean_diff']:,.2f}")
+        if diff_result["evaluated"]:
+            print(f"95% CI: [${diff_result['ci_lower']:,.2f}, ${diff_result['ci_upper']:,.2f}]")
+            print(f"t-statistic: {diff_result['t_stat']:.2f} (p={diff_result['p_value']:.4f})")
         else:
-            print("Not enough scenarios to compute CI and t-statistic.")
+            print(f"Not evaluated: {diff_result['reason']}.")
         return 0
 
     if args.cmd == "explain-legality":

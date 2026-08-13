@@ -2,6 +2,7 @@
 
 from crewsim.config import BaseConfig
 from crewsim.engine.legality import min_rest_minutes
+from crewsim.engine.sick_calls import uncovered_deadline_minutes
 from crewsim.engine.state import Block, BlockType, CrewMember, OpenTimeItem, StateDelta
 
 
@@ -62,7 +63,10 @@ def compute_draft_delta(crew: CrewMember, item: OpenTimeItem, cfg: BaseConfig, n
                     position=crew.position,
                     start=b.start,
                     end=b.end,
-                    deadline=b.start - 60.0,
+                    # AUD-20: the same config-derived cancellation lead every
+                    # other item uses -- this was a hardcoded `b.start - 60.0`,
+                    # so cascade items cancelled on their own private clock.
+                    deadline=b.start - uncovered_deadline_minutes(cfg),
                     origin="CASCADE",
                     root_event_uid=item.root_event_uid,
                     flight_mins=b.flight_mins

@@ -78,3 +78,41 @@ def book_reserve_staffing(
                 category="RESERVE_STAFFING",
                 amount=rate,
             )
+
+
+# The category is DELAY_AMBIENT, not DELAY: this prices real-world flight
+# lateness measured from historical D8 flight movements for this base+fleet
+# (calibration/delays.py::fit_delays), which happens regardless of any
+# reserve/draft decision this simulation makes -- it is NOT delay caused by
+# a drafted crew member positioning late, which nothing in the engine
+# detects or prices yet (that would be a policy-dependent DELAY category,
+# and would belong in the optimised cost; this one deliberately does not --
+# see measured_window_costs' own exclusion of this category).
+def book_flight_delays(
+    ledger: CostLedger,
+    scenario_id: int,
+    policy_id: str,
+    daily_delay_minutes: list[float],
+    delay_per_minute: float,
+) -> None:
+    """Book DELAY_AMBIENT once per day that had any delayed flights, at that
+    day's own timestamp -- same per-day stamping as book_reserve_staffing,
+    for the same reason (the warm-up filter prorates by sim_time; a lump
+    booked at t=0 would be discarded by it entirely). A day with zero
+    delayed flights is not booked at all, matching book_reserve_staffing's
+    own "nothing to book, no row" convention.
+    """
+    for day, minutes in enumerate(daily_delay_minutes):
+        if minutes <= 0:
+            continue
+        day_start = day * MINUTES_PER_DAY
+        ledger.book(
+            scenario_id=scenario_id,
+            policy_id=policy_id,
+            sim_time=day_start,
+            event_uid=0,
+            root_event_uid=0,
+            crew_id=None,
+            category="DELAY_AMBIENT",
+            amount=minutes * delay_per_minute,
+        )

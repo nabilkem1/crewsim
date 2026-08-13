@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { apiFetch, errorMessage } from '../../api/client';
+import { ErrorPanel, Loading } from '../../components/StatusPanel';
 
 interface AuditLog {
   id: string;
@@ -13,21 +15,26 @@ interface AuditLog {
 export function AuditLogViewer() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch('/platform/audit-log')
-      .then(res => res.json())
-      .then(data => {
-        setLogs(data);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error(err);
-        setLoading(false);
-      });
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setLogs(await apiFetch<AuditLog[]>('/platform/audit-log'));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (loading) return <div>Loading audit logs...</div>;
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading) return <Loading what="audit log" />;
+  if (error) return <ErrorPanel message={error} onRetry={() => void load()} />;
 
   return (
     <div className="card">

@@ -10,16 +10,9 @@ no policy YAML can select one, and never read by `run`/`compare`/`grid`.
 from typing import Any
 
 from .cascade import compute_draft_delta
-from .drafting import determine_tier
+from .drafting import determine_tier, draft_cost
 from .legality import is_legal_assignment
 from .state import CrewMember, OpenTimeItem
-
-
-def _draft_cost(costs: Any, tier: int) -> float:
-    cost = costs.draft.base_premium + costs.draft.tier.get(tier, 0.0)
-    if tier in (3, 5):
-        cost += costs.draft.train_reschedule
-    return float(cost)
 
 
 def select_myopic_total_cost(
@@ -50,7 +43,7 @@ def select_myopic_total_cost(
     def total_cost(c: CrewMember) -> float:
         tier = determine_tier(c, item, cfg)
         _, cascaded = compute_draft_delta(c, item, cfg, now if now is not None else 0.0)
-        return _draft_cost(costs, tier) + len(cascaded) * float(costs.draft.base_premium)
+        return draft_cost(costs, tier) + len(cascaded) * float(costs.draft.base_premium)
 
     legal.sort(key=lambda c: (total_cost(c), c.seniority))
     return legal[0]

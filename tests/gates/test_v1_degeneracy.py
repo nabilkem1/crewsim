@@ -74,8 +74,15 @@ def test_all_reserve_staffing_total_reconstructs_from_its_own_rows(v1_result) ->
     assert all_reserve["staffing_reserve_days"] <= (
         v1_result["headcount"] * cfg.horizon.horizon_days
     ), "more reserve-days booked than crew x horizon -- staffing is double-counting"
-    # More than one rate present, so this cannot be a flat rate applied blindly.
-    assert len(by_rate) > 1
+    # AUD-08: reserve lines now carry the POLICY'S declared call types, not
+    # whatever the donor patterns happened to hold. V1's all-reserve
+    # configuration is built all-short-call (policy_with_reserve_count sets
+    # long_call=0), so exactly one rate -- the SC guarantee -- may appear.
+    # (The old `len(by_rate) > 1` assertion was written when the split was
+    # silently ignored and mixed donor rates leaked through: the defect
+    # itself was what made that assertion pass.)
+    costs = config.load_costs(cfg)
+    assert set(by_rate) == {costs.reserve.guarantee_per_day.short_call}
 
 
 def test_zero_reserve_configuration_has_no_reserve_categories(v1_result) -> None:

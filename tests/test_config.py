@@ -100,13 +100,20 @@ def test_declared_demand_triggers_an_unconsumed_notice() -> None:
 
 
 def test_absent_demand_triggers_no_demand_notice() -> None:
-    """Scoped to demand: the notice list is no longer demand-only. It now also
-    carries the cost fields nothing books (positioning, delay_per_minute), which
-    are declared regardless of whether `demand` is present."""
+    """Scoped to demand: with `demand` absent, its own fields cannot report an
+    unconsumed notice (there is no section to have read them from)."""
     cfg = config.load().model_copy(update={"demand": None})
     notices = config.unconsumed_notices(cfg)
     assert not [n for n in notices if n.startswith("demand.")]
-    assert notices, "the non-demand notices must still be reported"
+
+
+def test_delay_per_minute_no_longer_declared_unconsumed() -> None:
+    """Same precedent as test_positioning.py's positioning.deadhead/.hotel
+    assertions: a field that gets wired into a real code path (here,
+    engine/costs.py::book_flight_delays) must leave
+    config.DECLARED_NOT_YET_CONSUMED, not linger there documenting a gap
+    that no longer exists."""
+    assert "disruption.delay_per_minute" not in config.DECLARED_NOT_YET_CONSUMED
 
 
 # ============================================================ [CONFIRM]
@@ -199,14 +206,25 @@ EXEMPT_VALUES = {0, 1}
 ALLOWLIST: dict[str, set[float]] = {
     # src/crewsim/config.py sits two directories under the repo root -- a
     # fact about this file's own location, not a config value.
-    "src/crewsim/config.py": {2},
+    "src/crewsim/config.py": {2, 24, 60},
+    # ^ 24 and 60 are hours-per-day and minutes-per-hour, formatting a
+    #   configured on-call window as a local clock range ("06:00-18:00") --
+    #   the same time-conversion category already allowlisted in
+    #   legality.py/state.py/des.py, not a business input.
     # content_hash display truncation (8 hex chars), json.dump indent (2),
     # and `.str.slice(0, 10)` (the fixed length of an ISO "YYYY-MM-DD" date)
     # -- technical/formatting conventions. GMM components/seed and regime
     # quantiles were moved to configs/base.yaml -> calibration; these three
     # modules keep only the structural literals left over from that move.
     "src/crewsim/calibration/delays.py": {8, 2, 10},
-    "src/crewsim/calibration/nhpp.py": {8, 2, 10},
+    # 1e-8 is sample_count()'s NB2-to-Poisson numerical-stability threshold
+    # (n = 1/alpha diverges as alpha -> 0, which IS the Poisson limit) --
+    # a closed-form-adjacent numerical-stability constant, not a business
+    # or calibration input.
+    "src/crewsim/calibration/nhpp.py": {8, 2, 10, 1e-8, 200, 10000},
+    # ^ 200/10000 (AUD-28e) are MLE optimizer iteration caps for the NB fit
+    #   and its derivative-free retry -- solver-procedure invariants, not
+    #   business or calibration inputs (the FIT ITSELF is what config governs).
     "src/crewsim/calibration/regime.py": {8, 2, 10},
     # blake2b digest_size (byte length of a receipt hash) and json indent --
     # same category as above. The spec's own stable_seed() example (§4.3)
@@ -235,7 +253,10 @@ ALLOWLIST: dict[str, set[float]] = {
     # state.py uses 24 and 60.0 for time conversions
     "src/crewsim/engine/state.py": {24, 60.0},
     # Eligibility default Bernoulli probability for testing
-    "src/crewsim/engine/eligibility.py": {0.3},
+    "src/crewsim/engine/eligibility.py": {0.3, 0.2},
+    # ^ 0.2 is DEFAULT_P_CASCADE (AUD-21), the spec 5.7 stated default --
+    #   same last-resort-fallback category as DEFAULT_P_ELIG 0.3; the real
+    #   value lives in configs/base.yaml -> reduced_mode.p_cascade.
     # S1c-05: reconstruct_eligibility is now a real historical
     # reconstruction (replacing the fake np.random.binomial(pool_size, 0.30)
     # mock this entry used to cover -- see the story's note for why). 60.0
@@ -244,6 +265,11 @@ ALLOWLIST: dict[str, set[float]] = {
     # quantile, a closed-form statistical constant, not a business input; 2
     # is the minimum sample size needed to compute a sample stdev at all.
     "src/crewsim/data/eligibility_target.py": {60.0, 0.975, 2},
+    # quality_score()'s PASS=1/MARGINAL=0.5/FAIL=0 weighting and the 100x it
+    # scales to a /100 display figure -- a closed-form aggregate of the real
+    # per-check PASS/MARGINAL/FAIL verdicts computed above, not a separate
+    # business or calibration input.
+    "src/crewsim/data/quality.py": {0.5, 100},
     # S1c-05: plotly display styling for gate_v3's HTML report -- same
     # category as profile_html.py's own styling literals above (opacity,
     # figure height), not a simulation/business parameter.
@@ -258,7 +284,13 @@ ALLOWLIST: dict[str, set[float]] = {
     # S1a-02/S1a-07: 11/10/60 are gone -- determine_tier now gets L2 rest from
     # legality.min_rest_minutes (configs/base.yaml) instead of re-deriving it.
     # What remains are the draft tier NUMBERS (2, 3, 4) and the loop bound 5.
-    "src/crewsim/engine/drafting.py": {2, 3, 4, 5},
+    # draft_cost's own {3, 5} (train_reschedule applies to tier 3 and 5) are
+    # the same tier numbers, already covered by this set -- draft_cost is
+    # the single shared formula des.py's real ledger booking and
+    # counterfactuals.py's ranking both call, not two copies of it.
+    "src/crewsim/engine/drafting.py": {2, 3, 4, 5, 6},
+    # ^ 6 is the exclusive loop bound over the five spec tiers (AUD-14 made
+    #   tier 5 reachable) -- same tier-number category as 2..5.
     # S1d-04b: minutes-per-day and minutes-per-hour, same time-conversion
     # category as legality.py/state.py/costs.py's 60/24 -- not seconds
     # anymore (fixed a Unix-seconds-vs-engine-minutes unit bug).
@@ -273,21 +305,19 @@ ALLOWLIST: dict[str, set[float]] = {
     # allowlisted L2 min-rest constants (11h base / 10h away) -- des.py must
     # compute the same figure to pass it into events.py::assign_reserve,
     # which takes min_rest as a caller-supplied value rather than deriving it
-    # itself. 3 and 5 are draft tiers (train_reschedule applies to tier 3 and
-    # 5), matching drafting.py's own tier-number entries below. The sick-call
-    # duration floor that used to be a literal here is now
-    # calibration.sick_call_min_duration_days in configs/base.yaml. S1d-04d:
-    # 0.05 is CVaR95's own definition (mean of the worst 5% tail) -- a
-    # closed-form statistic, not a tunable business input.
+    # itself. The sick-call duration floor that used to be a literal here is
+    # now calibration.sick_call_min_duration_days in configs/base.yaml.
+    # S1d-04d: 0.05 is CVaR95's own definition (mean of the worst 5% tail) --
+    # a closed-form statistic, not a tunable business input.
     # S1a-02/S1a-07: 11/10 gone -- des.py calls min_rest_minutes for the figure
     # it passes to events.assign_reserve rather than computing its own.
-    "src/crewsim/engine/des.py": {1440.0, 60.0, 16, 3, 5, 0.05},
-    # S1e-05: same draft-tier numbers as des.py's own entry above (train_
-    # reschedule applies to tier 3 and 5) -- counterfactuals.py duplicates
-    # des.py's cost-booking formula because it must rank EVERY legal
-    # candidate before one is chosen, not just book the cost of whichever
-    # was already selected.
-    "src/crewsim/engine/counterfactuals.py": {3, 5},
+    # Prod-readiness review of 05_slice_1e (2026-08-11): the draft-tier
+    # numbers 3/5 that used to live here (train_reschedule applies to tier 3
+    # and 5) are gone -- des.py now calls drafting.draft_cost, the single
+    # shared formula, instead of carrying its own copy.
+    "src/crewsim/engine/des.py": {1440.0, 60.0, 0.05},
+    # ^ 16 is gone (AUD-07): the duplicated blake2b cache-key computation was
+    #   removed -- des.py now delegates to generator.scenario_set_path.
     # S1e-06: 7 is days-in-a-week (the replay window's own definition,
     # matching legality.py's own {7} entry for the same real-world week
     # length); 1440.0/60.0 are minutes-per-day/-hour, same time-conversion
@@ -310,8 +340,94 @@ ALLOWLIST: dict[str, set[float]] = {
     # (presentation, same category as v5_trace.py's own 78 below).
     "src/crewsim/gates/v2_erlang.py": {1440.0, 60.0, 62},
     "src/crewsim/gates/v5_trace.py": {7, 78, 2},
-    "src/crewsim/scenarios/generator.py": {4, 5, 10, 16},
+    # 4 is the 4-state regime Markov chain's own dimension (CALM/NORMAL/
+    # DISRUPTED/SEVERE, matching regime.py's own STATES list); 16 is
+    # blake2b digest_size, same convention as crn.py's own {16} entry.
+    # (5 and 10 -- the fabricated base_sick/base_delay constants -- are gone:
+    # sick-call counts now come from the fitted NHPP GLM via
+    # calibration.nhpp.predict_intensity/sample_count, not a hardcoded mean.)
+    "src/crewsim/scenarios/generator.py": {4, 16},
     "src/crewsim/engine/policy.py": {12},
+    # ---------------------------------------------------------------- web API
+    # src/crewsim/api/ used to be exempt from this guard wholesale (EXCLUDED_TREES
+    # in tests/workstreams.py, now deleted). The carve-out's stated reason was
+    # that results.py and provenance.py returned fabricated simulation figures --
+    # "Baseline Simulation", 12,500 events, a 0.98 success rate. Those routers
+    # are gone, along with analytics.py's invented cascade costs and data.py's
+    # hardcoded data-quality score of 95: an endpoint with nothing real to report
+    # now returns an empty collection and an `implemented: false` flag rather
+    # than a plausible number (see api/mocks.py).
+    #
+    # What is left below is HTTP and presentation, never a business or
+    # calibration input:
+    #   400/404  - HTTP status codes (protocol constants)
+    #   100      - percent, for progress arithmetic
+    #   10/20    - how many rows a dashboard endpoint returns
+    #   1024/3/2 - bytes->MB/GB arithmetic and round() precision
+    "src/crewsim/api/routers/calibration.py": {400, 404, 100},
+    "src/crewsim/api/routers/config.py": {404},
+    # 400/404 are HTTP status codes, same category as this section's other
+    # entries. This router computes nothing -- it reads cascade figures a
+    # completed batch job already stored (see the module docstring on why it
+    # must not run its own scenarios), so it has no business constants to hide.
+    "src/crewsim/api/routers/analytics.py": {400, 404, 25},
+    # 404/422/503 are HTTP status codes (503 = the corpus/params store is not
+    # available), same category as this section's other 400/404 entries. 50/500
+    # are the corpus grid's default and maximum page size -- presentation, and
+    # the cap is what stops one request asking the server to serialise all
+    # 511,664 rows of d3_pairing_legs into a single JSON body. 2 is how many
+    # parsed datasets the LRU holds.
+    #
+    # NB this was briefly two separate entries for the same key, added by two
+    # people at once. A dict literal keeps only the last, so the first one's
+    # values silently stopped being exempt -- merged, and worth remembering
+    # the next time this list grows.
+    "src/crewsim/api/routers/data.py": {404, 422, 503, 50, 500, 2},
+    "src/crewsim/api/routers/jobs.py": {400, 404, 10, 100},
+    "src/crewsim/api/routers/platform.py": {100, 1024, 3, 2},
+    # 4 is the number of steps the batch job's execution log reports (a
+    # property of the log format, like a progress bar's segment count); 3 is
+    # the same thing for the drill-down job (WN-008), which has one fewer
+    # phase. The SSE poll interval and timeout moved to api/streaming.py when
+    # the calibration router started sharing them; the digest-display width
+    # lives in reporting/provenance.py. 5 is the costliest/typical exemplar
+    # count passed to select_exemplar_scenarios -- same structural constant
+    # as reporting/drilldown.py's own {5} entry below.
+    "src/crewsim/api/routers/processing.py": {400, 404, 409, 10, 100, 4, 3, 5, 8},
+    # 1440/60 are minutes-per-day and minutes-per-hour -- the same
+    # time-conversion category already allowlisted for engine/legality.py,
+    # state.py and des.py. The tape renders a simulated minute as "day 26
+    # 09:23", which is the only arithmetic in this module.
+    "src/crewsim/reporting/tape.py": {1440, 60},
+    # Minutes-per-day again, for bucketing a ledger row's sim_time into the
+    # horizon day the fingerprint strip draws. Same time-conversion category.
+    "src/crewsim/reporting/grid.py": {1440.0},
+    # 0.5s is how often the SSE endpoint re-reads the job row and 3600s is its
+    # hard timeout -- transport timings, not simulation parameters.
+    "src/crewsim/api/streaming.py": {0.5, 3600},
+    # The number of hex characters of a blake2b content_hash shown for display.
+    # Same category as crn.py's own {16} digest_size entry: a hash/format
+    # convention, not a business input. The full digest stays in the payload.
+    "src/crewsim/reporting/provenance.py": {8},
+    # Milliseconds-per-second, for displaying a measured wall-clock duration.
+    # 0.4 (progress()'s default min_interval_s) is an SSE-flush throttle, same
+    # category as processing.py's own {0.5, 3600} transport timings above.
+    "src/crewsim/api/runlog.py": {1000, 0.4},
+    # 0.975 is the two-sided 95% quantile of the t distribution -- the same
+    # closed-form statistical constant already allowlisted for
+    # data/eligibility_target.py, and for the same reason: a property of the
+    # distribution, not a tunable business or reporting input. (It moved here
+    # from cli.py when `compare`'s inline t-test was extracted so the CLI and
+    # the web API share one implementation.) 2 is the minimum number of paired
+    # scenarios needed for a variance to exist at all.
+    "src/crewsim/reporting/paired.py": {0.975, 2},
+    # 8 = how many exemplar chains the drill-down carries, a display cap in the
+    # same category as results.py's 20-row limit -- not a cascade threshold.
+    # Every actual cascade quantity in this module is derived from the ledger;
+    # there is deliberately no cascade probability or rate constant here (§5.7:
+    # cascades are emergent, never parameterised).
+    "src/crewsim/reporting/cascade_analytics.py": {8},
+    "src/crewsim/api/routers/results.py": {404, 20, 1024, 2},
     # (was two separate dict entries for this same key -- the second silently
     # overwrote the first since a dict literal can't have a real duplicate
     # key; merged 2026-08-07 while adding explain-cascade's new literals so
@@ -346,7 +462,10 @@ ALLOWLIST: dict[str, set[float]] = {
     # divides by 1440. 0.05/40 went with the same block.
     "src/crewsim/cli.py": {
         2, 10, 240, 100, 20, 50,
-        200.0, 150.0, 1000, 0.975, 203,
+        200.0, 150.0, 1000, 203,
+        # 0.975 is GONE from here: `compare`'s inline paired t-test moved to
+        # reporting/paired.py so the CLI and the web API compute one difference
+        # rather than two. The quantile is allowlisted there now.
         960.0, 1560.0, 60.0, 600.0, 250.0, 28, 7, 24, 5,
         # S1c-05: 74 is the V3 warning banner's width in terminal characters --
         # presentation, same category as v5_trace.py's 78 and v2_erlang.py's 62.
@@ -360,7 +479,9 @@ ALLOWLIST: dict[str, set[float]] = {
     # S1a-02/S1a-07: cascade.py no longer re-derives L2 rest at all (it calls
     # min_rest_minutes), so its entire entry is gone. 60.0 below is the
     # deadline offset, still local to this module.
-    "src/crewsim/engine/cascade.py": {60.0},
+    # cascade.py: no allowlisted literals left (AUD-20 -- the hardcoded
+    # 60-minute cascade deadline now comes from demand.uncovered_deadline_hours
+    # via the shared sick_calls.uncovered_deadline_minutes helper).
     # S1d-05: default_mock_r's "completely hypothetical relationship for
     # demonstration" (0.1, 1.5, 4.0) is gone -- run_v9_gate now requires
     # either a real r_lookup (build_r_star_lookup, real CRN simulation
@@ -377,7 +498,15 @@ ALLOWLIST: dict[str, set[float]] = {
     # (n + 1) / n` is the standard closed-form Gini-coefficient formula's
     # own constant (mean absolute difference form) -- a mathematical
     # identity, not a business/calibration input.
-    "src/crewsim/reporting/kpis.py": {2},
+    "src/crewsim/reporting/kpis.py": {2, 1440.0, 3},
+    # ^ 1440.0 is minutes-per-day (Welch queue sampling at day boundaries,
+    #   AUD-12), same time-conversion category as des.py/sick_calls.py;
+    #   3 is round()'s display precision for the diagnostic's daily means
+    #   -- presentation, same category as profile_html.py's styling.
+    # compute_r_recommendation()'s own "a recommendation needs at least 2
+    # options" floor -- a structural minimum, not a business input, same
+    # category as paired.py's own `n < 2` CI-needs-2-scenarios entry above.
+    "src/crewsim/reporting/recommendation.py": {2},
     # S1e-02: 450 (x3) is chart height, 0.6 is histogram opacity, and 3 is
     # the R* line's width -- presentation, same category as
     # profile_html.py/v3_eligibility.py's own already-allowlisted styling
@@ -395,13 +524,21 @@ ALLOWLIST: dict[str, set[float]] = {
     # spec number, same category as explain-crew's n_buckets=10 histogram
     # bucket count elsewhere in this ALLOWLIST (display scope, not a
     # business/calibration input).
-    # S1a-11 (P0): 2 is V7_REPORT_SCENARIOS/V7_REPORT_JOBS -- how much real
-    # simulation the report's V7 gate-status row buys now that V7 hashes real
-    # ledgers rather than synthetic draws. A report-shape cost knob, same
-    # category as the 5-exemplar drill-down count below, not a business input.
-    # (20 removed with the same change: it was the hardcoded n_scenarios on the
-    # old free-of-charge run_v7_gate call, replaced by V7_REPORT_SCENARIOS.)
-    "src/crewsim/reporting/report.py": {450, 0.6, 3, 0.02, 5, 2},
+    # (20 removed: it was the hardcoded n_scenarios on the old free-of-charge
+    # run_v7_gate call, replaced by gate_status.py's V7_SCENARIOS.)
+    # WN-005: V1/V2/V7's own cost knob (the old 2 here) moved to
+    # reporting/gate_status.py's own {2} entry below, which build_report()
+    # now calls instead of running them inline -- see that module's
+    # docstring. 3 remains: it is unrelated -- the R* line's plotly width
+    # (line={"width": 3} in the lambda-curve figure), a styling literal, same
+    # category as this file's own 450/0.6 chart-height/opacity entries.
+    "src/crewsim/reporting/report.py": {450, 0.6, 0.02, 5, 3},
+    # WN-005: V2_SCENARIOS/V7_SCENARIOS/V7_JOBS -- how much real simulation
+    # V1/V2/V7's gate rows buy, now that V7 hashes real ledgers rather than
+    # synthetic draws (S1a-11) and V2 measures a real Erlang-B shortfall
+    # (S1b-07). A report-shape cost knob shared by reporting/report.py's HTML
+    # table and api/routers/processing.py's native gates, not a business input.
+    "src/crewsim/reporting/gate_status.py": {2},
     # S1a-11 (P0): this module no longer has a scenario count or a draw count
     # of its own. It used to hash 1000 synthetic floats per "scenario" at a
     # default n_scenarios=20; it now runs real des.run_scenario calls and hashes
@@ -414,47 +551,24 @@ ALLOWLIST: dict[str, set[float]] = {
 }
 
 
-# src/crewsim/api/ is the web API layer (backlog/mvp/web/), an ACTIVE separate
-# workstream at the time this exclusion was added (2026-08-08). It is excluded
-# from the numeric-constant guard so that slice-1a CI is meaningful rather than
-# permanently red on another stream's in-flight files -- NOT because §4.4 stops
-# applying there. It very much applies: at the time of writing,
-# api/routers/results.py returns hardcoded simulation results
-# ("Baseline Simulation", 12,500 events, 0.98 success rate) that no engine ever
-# produced, which is precisely the fabrication class this guard exists to catch.
-# test_api_exclusion_is_still_necessary below deletes this excuse the moment the
-# tree is clean, so the carve-out cannot quietly become permanent.
-from .workstreams import is_excluded  # noqa: E402
-
-
+# The src/crewsim/api/ carve-out (tests/workstreams.py::EXCLUDED_TREES, plus the
+# matching `exclude` in pyproject.toml's [tool.ruff]) is GONE as of 2026-08-09.
+# It was added on 2026-08-08 so slice-1a CI would not go red on another
+# workstream's in-flight files, with test_api_exclusion_is_still_necessary
+# standing by to delete the excuse once the tree was clean.
+#
+# It is worth recording what the carve-out cost while it lasted, because the
+# case for the next one should have to clear this bar: behind it sat a health
+# endpoint that returned HTTP 500 whenever any job was queued (a naive/aware
+# datetime subtraction -- exactly what ruff's DTZ rule, enabled for this repo
+# and excluded for that tree, exists to catch), six endpoints the front end
+# called at the wrong path, and four routers of fabricated figures served over
+# the same JSON shape as real results.
+#
+# Every file in src/ is guarded now; there is no is_excluded() any more.
 def _guarded_files():
     for py in sorted(SRC.rglob("*.py")):
-        rel = py.relative_to(ROOT).as_posix()
-        if is_excluded(rel):
-            continue
-        yield py, rel
-
-
-def test_api_exclusion_is_still_necessary() -> None:
-    """Guard the carve-out: when src/crewsim/api/ no longer trips the numeric
-    guard, EXCLUDED_TREES must be deleted rather than left as scaffolding that
-    silently exempts a whole tree forever."""
-    api_root = SRC / "api"
-    if not api_root.is_dir():
-        pytest.skip("src/crewsim/api/ does not exist in this checkout")
-    offenders = []
-    for py in sorted(api_root.rglob("*.py")):
-        tree = ast.parse(py.read_text(), filename=str(py))
-        offenders += [
-            n for n in ast.walk(tree)
-            if isinstance(n, ast.Constant)
-            and isinstance(n.value, (int, float)) and not isinstance(n.value, bool)
-            and n.value not in EXEMPT_VALUES
-        ]
-    assert offenders, (
-        "src/crewsim/api/ no longer contains unexplained numeric constants -- "
-        "remove EXCLUDED_TREES from this file so the guard covers it again"
-    )
+        yield py, py.relative_to(ROOT).as_posix()
 
 
 def test_no_numeric_constant_outside_configs() -> None:

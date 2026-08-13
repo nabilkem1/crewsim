@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import Any
 
+import numpy as np
 import polars as pl
 import statsmodels.formula.api as smf
 from scipy import stats
@@ -11,15 +12,34 @@ from scipy import stats
 from .. import config
 from ..data import loaders
 
+# The categorical covariates the GLM formula in fit_sick_calls() is fit
+# against, in the order that matters only for readability -- predict_intensity
+# looks each one up by name, not position.
+_CATEGORICAL_COVARIATES = ("season", "day_of_week", "base", "fleet", "position", "regime")
 
-def fit_sick_calls(cfg: config.BaseConfig) -> dict[str, Any]:
-    """Fits the sick-call intensity GLM and absence duration distribution."""
-    
+
+def fit_sick_calls(
+    cfg: config.BaseConfig,
+    window: tuple[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Fits the sick-call intensity GLM and absence duration distribution.
+
+    `window` is an optional (start_date, end_date) pair, both inclusive:
+    AUD-05 / §6.4 -- when the pipeline says it fit on the fitting window, the
+    fit must actually be restricted to it. None fits on the full corpus
+    (explicitly, for exploratory use), and the caller owns saying so.
+    """
+
     # 1. Load Data
     d1 = loaders.load_dataset(cfg, "d1_crew_master")
     d4 = loaders.load_dataset(cfg, "d4_absences")
     d9 = loaders.load_dataset(cfg, "d9_station_days")
-    
+
+    if window is not None:
+        w_start, w_end = window
+        d4 = d4.filter((pl.col("absence_start") >= w_start) & (pl.col("absence_start") <= w_end))
+        d9 = d9.filter((pl.col("date") >= w_start) & (pl.col("date") <= w_end))
+
     # 2. Get active pilot combos (base, fleet, position)
     combos = d1.filter(
         (pl.col("crew_group") == "PILOT") & (pl.col("employment_status") == "ACTIVE")
@@ -33,7 +53,8 @@ def fit_sick_calls(cfg: config.BaseConfig) -> dict[str, Any]:
         pl.col("disruption_class").alias("regime")
     ])
     
-    # Add day of week (0=Mon, 6=Sun)
+    # Add day of week (Polars dt.weekday(): 1=Mon .. 7=Sun -- the same 1..7
+    # convention generator.py's isoweekday() uses at prediction time)
     grid = grid.with_columns(
         pl.col("date").str.to_date("%Y-%m-%d").dt.weekday().cast(pl.String).alias("day_of_week")
     )
@@ -64,13 +85,35 @@ def fit_sick_calls(cfg: config.BaseConfig) -> dict[str, Any]:
     
     # Fit Negative Binomial Model
     model = smf.negativebinomial(formula, data=pdf)
-    res = model.fit(disp=0)
-    
+    res = model.fit(disp=0, maxiter=200)
+    # AUD-28e: the default fit emits ConvergenceWarning on this corpus and the
+    # store shipped unconverged coefficients with nothing recording it. Retry
+    # from the first attempt's params with a derivative-free optimizer; if it
+    # still has not converged, persist the fact in the store rather than
+    # raising -- a visible flag beats a blocked calibration, and the report
+    # surface is where a human decides.
+    converged = bool(res.mle_retvals.get("converged", False))
+    if not converged:
+        res_retry = model.fit(disp=0, method="nm", maxiter=10000, start_params=res.params)
+        if bool(res_retry.mle_retvals.get("converged", False)):
+            res, converged = res_retry, True
+
     coefs = res.params.to_dict()
     # In statsmodels NB, alpha is the dispersion parameter
     alpha = coefs.get("alpha", 0.0)
     dispersion = 1.0 + alpha
-    
+
+    # The exact per-variable level sets patsy encoded from (`C(var)` drops the
+    # alphabetically-first level as the reference), persisted so a later
+    # process holding only the serialized `coefs` dict -- no statsmodels
+    # results object, no access to `pdf` -- can reconstruct the fit's dummy
+    # encoding exactly instead of re-deriving "alphabetically first" from
+    # whatever (possibly narrower) covariate slice it happens to be called
+    # with. See predict_intensity().
+    category_levels = {
+        col: sorted(pdf[col].astype(str).unique().tolist()) for col in _CATEGORICAL_COVARIATES
+    }
+
     # 5. Fit Absence Duration (Lognormal)
     d4_dur = d4.filter(
         pl.col("duration_days").is_not_null() & (pl.col("duration_days") > 0)
@@ -82,8 +125,10 @@ def fit_sick_calls(cfg: config.BaseConfig) -> dict[str, Any]:
     out_dict = {
         "coefficients": coefs,
         "dispersion": dispersion,
+        "category_levels": category_levels,
         "duration_lognorm_shape": shape,
-        "duration_lognorm_scale": scale
+        "duration_lognorm_scale": scale,
+        "converged": converged,
     }
     
     receipt_str = json.dumps(out_dict, sort_keys=True)
@@ -97,3 +142,59 @@ def fit_sick_calls(cfg: config.BaseConfig) -> dict[str, Any]:
         
     out_dict["_saved_path"] = str(out_path)
     return out_dict
+
+
+def predict_intensity(
+    coefficients: dict[str, float],
+    category_levels: dict[str, list[str]],
+    covariates: dict[str, str],
+) -> float:
+    """Evaluate the fitted sick-call NHPP GLM's linear predictor at explicit
+    covariate values and return the expected daily count, exp(eta).
+
+    Reconstructs the exact dummy-variable encoding patsy produced when
+    fit_sick_calls() ran `smf.negativebinomial("sick_calls ~ C(season) + ...")`:
+    for each categorical variable, the alphabetically-first *observed* level is
+    the dropped reference (contributes 0 to eta); every other level looks up
+    its own `C(<var>)[T.<level>]` coefficient. `category_levels` -- persisted
+    by fit_sick_calls() alongside `coefficients` for exactly this purpose --
+    is what lets this function reproduce that encoding without re-deriving
+    "alphabetically first" from a different, possibly narrower, covariate
+    slice at prediction time (e.g. a single-scope scenario generator calling
+    this long after fitting, in a different process, holding only the
+    serialized JSON). Correctness is checked directly against statsmodels'
+    own `res.predict()`, not just asserted, in
+    tests/calibration/test_nhpp.py::test_predict_intensity_matches_glm_predict.
+    """
+    eta = coefficients.get("Intercept", 0.0)
+    for var, value in covariates.items():
+        levels = category_levels.get(var)
+        if not levels:
+            raise KeyError(f"No fitted category levels recorded for covariate {var!r}")
+        if value == levels[0]:
+            continue  # the dropped reference level -- contributes 0 by construction
+        if value not in levels:
+            raise ValueError(
+                f"Covariate {var}={value!r} was never observed while fitting "
+                f"(known levels: {levels}) -- refusing to extrapolate silently"
+            )
+        eta += coefficients.get(f"C({var})[T.{value}]", 0.0)
+    return float(np.exp(eta))
+
+
+def sample_count(rng: np.random.Generator, mean: float, dispersion: float) -> int:
+    """Draw one count from the fitted family: Negative Binomial (NB2,
+    Var = mean + alpha*mean^2) when genuinely overdispersed, falling back to
+    Poisson as alpha -> 0 -- NB2's `n = 1/alpha` diverges numerically as alpha
+    approaches 0, and alpha == 0 *is* the Poisson limit of NB2, not a
+    different distribution to special-case away from. `dispersion` is
+    `1 + alpha`, exactly as fit_sick_calls() computes and stores it.
+    """
+    if mean <= 0.0:
+        return 0
+    alpha = dispersion - 1.0
+    if alpha <= 1e-8:
+        return int(rng.poisson(mean))
+    n = 1.0 / alpha
+    p = n / (n + mean)
+    return int(rng.negative_binomial(n, p))
