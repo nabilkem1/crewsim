@@ -34,7 +34,7 @@ export const ProcessingDashboard: React.FC = () => {
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/processing/status');
+      const res = await fetch('/api/processing/status');
       if (res.ok) setJobs(await res.json());
     } catch (e) {
       console.error(e);
@@ -54,7 +54,7 @@ export const ProcessingDashboard: React.FC = () => {
       : { config_id: 'cfg-1', scenario: 'scen-1' };
       
     try {
-      await fetch(`http://localhost:8000${endpoint}`, {
+      await fetch(`${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -67,7 +67,7 @@ export const ProcessingDashboard: React.FC = () => {
 
   const fetchLogs = async (jobId: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/processing/${jobId}/logs`);
+      const res = await fetch(`/api/processing/${jobId}/logs`);
       if (res.ok) {
         const data = await res.json();
         setLogs(prev => ({ ...prev, [jobId]: data.logs }));
@@ -79,12 +79,12 @@ export const ProcessingDashboard: React.FC = () => {
 
   const saveConfig = async () => {
     try {
-      await fetch('http://localhost:8000/api/processing/config/output', {
+      await fetch('/api/processing/config/output', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ destination_path: outputDest })
       });
-      await fetch('http://localhost:8000/api/processing/config/hardware', {
+      await fetch('/api/processing/config/hardware', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ worker_count: workers, memory_gb: memory })
@@ -97,7 +97,7 @@ export const ProcessingDashboard: React.FC = () => {
 
   const loadProfiling = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/processing/profiling');
+      const res = await fetch('/api/processing/profiling');
       if (res.ok) setProfiling(await res.json());
     } catch (e) {
       console.error(e);
@@ -106,7 +106,7 @@ export const ProcessingDashboard: React.FC = () => {
 
   const loadPrediction = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/processing/prediction');
+      const res = await fetch('/api/processing/prediction');
       if (res.ok) setPrediction(await res.json());
     } catch (e) {
       console.error(e);

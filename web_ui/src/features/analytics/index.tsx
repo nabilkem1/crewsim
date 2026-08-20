@@ -8,7 +8,7 @@ export const AnalyticsDashboard: React.FC = () => {
 
     useEffect(() => {
         // Fetch summaries
-        fetch('http://localhost:8000/cascade-summaries')
+        fetch('/cascade-summaries')
             .then(res => res.json())
             .then(data => setSummaries(data.summaries || []))
             .catch(e => {
@@ -20,7 +20,7 @@ export const AnalyticsDashboard: React.FC = () => {
             });
 
         // Fetch comparisons
-        fetch('http://localhost:8000/cascade-policy-comparisons')
+        fetch('/cascade-policy-comparisons')
             .then(res => res.json())
             .then(data => setComparisons(data.comparisons || []))
             .catch(e => {
@@ -32,7 +32,7 @@ export const AnalyticsDashboard: React.FC = () => {
             });
 
         // Fetch drills
-        fetch('http://localhost:8000/exemplar-drills')
+        fetch('/exemplar-drills')
             .then(res => res.json())
             .then(data => setDrills(data.drills || []))
             .catch(e => {

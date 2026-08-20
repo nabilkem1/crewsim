@@ -14,7 +14,7 @@ export const ConfigDashboard: React.FC = () => {
 
   useEffect(() => {
     // We assume the API is available under /api/config. Adjust prefix if needed.
-    fetch('http://localhost:8000/api/config/categories')
+    fetch('/api/config/categories')
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch categories');
         return res.json();

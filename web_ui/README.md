@@ -1,32 +1,50 @@
-# React + TypeScript + Vite
+# CrewSim Web UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This folder contains the React + Vite frontend for CrewSim.
 
-Currently, two official plugins are available:
+The frontend expects a local FastAPI backend running on port 8000.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Run locally
 
-## React Compiler
+Open two terminals from the repo root.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. Start backend API (Terminal 1)
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```powershell
+.\.venv\Scripts\uvicorn.exe crewsim.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+2. Start frontend website (Terminal 2)
+
+```powershell
+npm --prefix web_ui install
+npm --prefix web_ui run dev -- --host 127.0.0.1 --port 5173
+```
+
+3. Open the app
+
+- Web UI: http://127.0.0.1:5173
+- API docs: http://127.0.0.1:8000/docs
+- API health: http://127.0.0.1:8000/api/health
+
+## Why this works
+
+- The API app is defined in [src/crewsim/api/main.py](../src/crewsim/api/main.py).
+- Vite proxies /api to the backend in [web_ui/vite.config.ts](vite.config.ts).
+- Some frontend calls target port 8000 directly in [web_ui/src/App.tsx](src/App.tsx).
+
+## Build
+
+```powershell
+npm --prefix web_ui run build
+```
+
+## Troubleshooting
+
+- If port 8000 is in use, stop the other process and restart API.
+- If port 5173 is in use, pass a different port to Vite and update API URLs that are hard-coded.
+- If API import errors appear, install backend deps into .venv:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install fastapi uvicorn sqlalchemy
+```

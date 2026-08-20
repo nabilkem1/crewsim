@@ -112,7 +112,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/health')
+    fetch('/api/health')
       .then(res => res.json())
       .then(data => {
         setHealthStatus(`API Status: ${data.status.toUpperCase()}`)

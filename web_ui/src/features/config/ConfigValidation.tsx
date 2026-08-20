@@ -6,7 +6,7 @@ export const ConfigValidation: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/config/validate')
+    fetch('/api/config/validate')
       .then(res => {
         if (!res.ok) throw new Error('Validation failed');
         return res.json();

@@ -19,7 +19,7 @@ export const JobQueue: React.FC = () => {
 
   const fetchJobs = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/jobs');
+      const response = await fetch('/api/jobs');
       if (!response.ok) throw new Error('Failed to fetch jobs');
       const data = await response.json();
       setJobs(data);
@@ -37,7 +37,7 @@ export const JobQueue: React.FC = () => {
   const createJob = async (type: string) => {
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/jobs', {
+      const response = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type })

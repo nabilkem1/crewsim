@@ -6,7 +6,7 @@ export const CostStructure: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/config/costs')
+    fetch('/api/config/costs')
       .then(res => {
         if (!res.ok) throw new Error('Failed to load cost structure');
         return res.json();

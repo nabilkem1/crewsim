@@ -23,7 +23,7 @@ export const CalibrationLauncher: React.FC = () => {
     e.preventDefault();
     setLaunching(true);
     try {
-      const res = await fetch('http://localhost:8000/api/calibration/jobs', {
+      const res = await fetch('/api/calibration/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
