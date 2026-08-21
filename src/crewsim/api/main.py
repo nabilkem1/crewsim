@@ -23,8 +23,11 @@ from .db import init_db
 from .routers import analytics, calibration, config, data, jobs, platform, processing, results
 
 # The Vite dev server. Its proxy forwards /api to this app, so the browser's
-# origin is the dev server, not the API.
-DEV_ORIGIN = "http://localhost:5173"
+# origin is the dev server, not the API. Both spellings of the loopback host
+# are listed because they are distinct origins to the browser: opening the app
+# at 127.0.0.1:5173 sends that as Origin, and a list holding only the
+# "localhost" spelling rejects it (carried over from b1ea87f).
+DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
 @asynccontextmanager
@@ -51,7 +54,7 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["Cascade Ana
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[DEV_ORIGIN],
+    allow_origins=DEV_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
