@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..gates.v9_sensitivity import R_CANDIDATE_POLICIES, _real_r_recommender
+from ..gates.v9_sensitivity import R_CANDIDATE_POLICIES, real_r_recommender
 
 _POLICY_R_RE = re.compile(r"^R(\d+)$")
 
@@ -60,7 +60,7 @@ def compute_r_recommendation(
     if len(r_lookup) < 2:
         return None
 
-    recommend = _real_r_recommender(r_lookup)
+    recommend = real_r_recommender(r_lookup)
     curve = [
         {"lambda": lam, "recommended_r": recommend(0, terminal_penalty, lam)}
         for lam in cfg.sensitivity.lambda_risk_dial

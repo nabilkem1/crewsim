@@ -21,3 +21,24 @@ build/
 .DS_Store
 src/crewsim/.DS_Store
 src/crewsim/data/.DS_Store
+api.key
+
+# IMP-612: build and test artifacts, at every level of the tree. The Playwright
+# specs under backlog/ once had their node_modules/ (187 files) and
+# test-results/ committed; tests/test_project_structure.py now fails if any of
+# these is tracked again.
+node_modules/
+test-results/
+playwright-report/
+
+# IMP-303: REAL Air Transat extracts carry personal data (e.g. D10's
+# passenger_name). They must never be committed or shipped in the wheel --
+# only the synthetic corpus in src/crewsim/data/corpus/ is. pyproject.toml
+# excludes the same paths from the wheel explicitly, in case this file is
+# ever bypassed (hatchling also honours .gitignore).
+real_data/
+**/real_data/
+*_real_data/
+# A versioned delivery folder (real_datav2/v3/ ...) is the same data under another name.
+real_data*/
+**/real_data*/

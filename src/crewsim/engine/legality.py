@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from crewsim.engine.state import DUTY_BLOCKS as _STATE_DUTY_BLOCKS
 from crewsim.engine.state import Block, BlockType, CrewMember, OpenTimeItem
 
 
@@ -21,14 +22,8 @@ OCCUPYING_BLOCKS = {
     BlockType.ABSENCE,
 }
 
-DUTY_BLOCKS = {
-    BlockType.PAIRING,
-    BlockType.RESERVE,
-    BlockType.DRAFTED_DUTY,
-    BlockType.DEADHEAD,
-    BlockType.SIMULATOR,
-    BlockType.TRAINING,
-}
+# Re-exported: state.py owns the definition (see the note there).
+DUTY_BLOCKS = _STATE_DUTY_BLOCKS
 
 
 def _counts_reserve_as_duty(cfg: Any) -> bool:
@@ -51,7 +46,7 @@ def _counts_reserve_as_duty(cfg: Any) -> bool:
     return bool(getattr(legality, "reserve_counts_as_duty", True))
 
 
-def accrual_duty_blocks(cfg: Any = None) -> set[BlockType]:
+def accrual_duty_blocks(cfg: Any = None) -> frozenset[BlockType]:
     """DUTY_BLOCKS, minus RESERVE when on-call time does not accrue."""
     if _counts_reserve_as_duty(cfg):
         return DUTY_BLOCKS
@@ -70,6 +65,32 @@ def check_l0_single_assignment(crew: CrewMember, start: float, end: float) -> Le
             return LegalityResult(legal=False, fail_rule="ILLEGAL_L0", reason="Double assignment (L0)")
     
     return LegalityResult(legal=True, fail_rule=None)
+
+
+def check_l0_pairing_in_progress(
+    crew: CrewMember, start: float, end: float, now: float | None
+) -> LegalityResult:
+    """IMP-104, the half of L0 that needs the call time.
+
+    PAIRING is deliberately not an OCCUPYING block: a line holder can be
+    drafted off a FUTURE pairing, which then re-enters as open time
+    (cascade.compute_draft_delta). But a pairing that has already started at
+    the call -- `b.start <= now < b.end` -- is being flown. Drafting off it
+    would reopen a trip that is in the air, and the resulting cascade item
+    would be born past its own deadline. So the assignment window
+    `[start, end)` (duty plus the rest it obliges) must not overlap a pairing
+    already under way. Skipped when `now` is unknown, like L8.
+    """
+    if now is None:
+        return LegalityResult(legal=True)
+    for b in crew.blocks_in(start, end):
+        if b.btype == BlockType.PAIRING and b.start <= now < b.end:
+            return LegalityResult(
+                legal=False, fail_rule="ILLEGAL_L0",
+                reason=f"Pairing {b.pairing_id} already under way at the call (L0)",
+            )
+    return LegalityResult(legal=True)
+
 
 MINUTES_PER_HOUR = 60.0
 
@@ -161,6 +182,43 @@ def check_l7_base(crew: CrewMember, item: OpenTimeItem, is_deadhead: bool = Fals
         return LegalityResult(legal=False, fail_rule="ILLEGAL_L7", reason=f"Base mismatch ({crew.base} != {item.base})")
     return LegalityResult(legal=True)
 
+def on_call_block(crew: CrewMember, when: float) -> Block | None:
+    """The RESERVE block covering `when`, or None.
+
+    THE definition of "on call at an instant" -- the eligibility pool, the
+    remaining-window dispatch rule, the V3 historical reconstruction, the
+    trace's alternatives log and L8 all use it, so they cannot drift apart.
+    Lives here rather than in eligibility.py because eligibility imports this
+    module; eligibility re-exports it under the same name.
+    """
+    for b in crew.calendar:
+        if b.btype == BlockType.RESERVE and b.start <= when < b.end:
+            return b
+    return None
+
+
+def reserve_call_type_for(crew: CrewMember, item: OpenTimeItem, now: float) -> str | None:
+    """Which reserve notice rule ("SC" / "LC") L8 applies, or None for a line holder.
+
+    IMP-116. The call-time block wins: a reserve's SC/LC classification is the
+    on-call regime they were under when actually notified, and near a shift
+    boundary that block can differ from the one covering the report. When no
+    block covers the call -- a reserve called between shifts for a duty in
+    their next shift -- the block covering the REPORT time decides, because
+    that block is exactly what admitted them to the eligibility pool
+    (`is_on_call_at(r, item.start)`). Before IMP-116 that case returned None,
+    so a reserve picked AS a reserve was held to the line-holder notice
+    (`line_holder_draft_notice_hours`, 0 h today) instead of SC/LC notice.
+
+    Only a crew member with no RESERVE block at either instant -- a line
+    holder, or a reserve outside both windows -- gets None.
+    """
+    block = on_call_block(crew, now) or on_call_block(crew, item.start)
+    if block is None:
+        return None
+    return block.reserve_call_type or "SC"
+
+
 def check_l8_notice_time(crew: CrewMember, item: OpenTimeItem, now: float | None = None, cfg: Any = None) -> LegalityResult:
     """
     L8: Reserve notification time.
@@ -178,25 +236,26 @@ def check_l8_notice_time(crew: CrewMember, item: OpenTimeItem, now: float | None
         return LegalityResult(legal=True)
 
     notice_mins = item.start - now
-
-    # Find the active reserve block at the CALL time (`now`), not the report
-    # time -- a reserve's SC/LC classification is which on-call regime they
-    # were under when actually notified, and that block can differ from the
-    # one covering item.start if a call happens near a shift boundary.
-    reserve_type: str | None = None
-    for b in crew.calendar:
-        if b.btype == BlockType.RESERVE and b.start <= now and b.end > now:
-            reserve_type = b.reserve_call_type or "SC"
-            break
-
-    if reserve_type is None:
-        # Not on reserve when called: L8 does not apply. Drafting notice, if
-        # Air Transat has such a rule, is a [CONFIRM: Crew Planning] question
-        # -- not a default to invent here.
-        return LegalityResult(legal=True)
+    reserve_type = reserve_call_type_for(crew, item, now)
 
     if not cfg or not cfg.legality:
         raise ValueError("L8 check requires legality configuration in cfg")
+
+    if reserve_type is None:
+        # Not on reserve when called: the reserve short/long-call rule does
+        # not apply. IMP-104: the line-holder drafting notice comes from
+        # configs/base.yaml -> legality.line_holder_draft_notice_hours (a
+        # [CONFIRM: Crew Planning] value, 0.0 today -- AUD-10 removed the 2 h
+        # floor that had been invented here). Even at 0.0 the call must not
+        # come after the report: a duty that has already started cannot be
+        # drafted for.
+        req_mins = float(cfg.legality.line_holder_draft_notice_hours) * 60
+        if notice_mins < req_mins:
+            return LegalityResult(
+                legal=False, fail_rule="ILLEGAL_L8",
+                reason=f"Insufficient draft notice ({notice_mins/60:.1f}h < {req_mins/60:.1f}h for a line holder)",
+            )
+        return LegalityResult(legal=True)
 
     sc_hours = cfg.legality.short_call_notice_hours
     lc_hours = cfg.legality.long_call_notice_hours
@@ -269,56 +328,62 @@ def check_l5_duty_free_day(
     window_end = item.end + (7 * 24 * 60.0)
 
     duty_btypes = accrual_duty_blocks(cfg)
-
-    duties = []
-    for b in crew.blocks_in(window_start, window_end):
-        if b.btype in duty_btypes:
-            duties.append((b.start, b.end))
-            
+    duties = [(b.start, b.end) for b in crew.blocks_in(window_start, window_end) if b.btype in duty_btypes]
     duties.append((item.start, item.end))
-    duties.sort(key=lambda x: x[0])
-    
-    if not duties:
-        return LegalityResult(legal=True)
-        
-    merged: list[tuple[float, float]] = []
-    for d in duties:
-        if not merged:
-            merged.append(d)
-        else:
-            last = merged[-1]
-            if d[0] <= last[1]:
-                merged[-1] = (last[0], max(last[1], d[1]))
-            else:
-                merged.append(d)
-                
-    streak_start = merged[0][0]
-    for i in range(len(merged)):
-        _curr_start, curr_end = merged[i]
 
-        if (curr_end - streak_start) > 6 * 24 * 60.0:  # noqa: SIM102 - the nested check carries the comment below; collapsing orphans it
-            # Only a violation if `item` is actually part of THIS streak --
-            # the +/-7d padding window can contain an unrelated pre-existing
-            # over-length streak (real corpus data: a crew's own past
-            # multi-day trip) that has nothing to do with the candidate
-            # duty being evaluated. Rejecting item for a streak it doesn't
-            # even overlap was a real bug (found while implementing S1c-04):
-            # verified against real reserves, it over-rejected candidates
-            # near unrelated historical streaks.
-            if item.start < curr_end and item.end > streak_start:
-                return LegalityResult(
-                    legal=False,
-                    fail_rule="ILLEGAL_L5",
-                    reason=f"Work streak exceeded 144h without 24h rest ({streak_start} to {curr_end})"
-                )
-
-        if i + 1 < len(merged):
-            next_start, _next_end = merged[i+1]
-            gap = next_start - curr_end
-            if gap >= 24 * 60.0:
-                streak_start = next_start
-
+    for streak_start, streak_end in _over_limit_streaks(duties):
+        # Only a violation if `item` is actually part of THIS streak -- the
+        # +/-7d padding window can contain an unrelated pre-existing
+        # over-length streak (real corpus data: a crew's own past multi-day
+        # trip) that has nothing to do with the candidate duty being
+        # evaluated. Rejecting item for a streak it doesn't even overlap was a
+        # real bug (found while implementing S1c-04): verified against real
+        # reserves, it over-rejected candidates near unrelated historical
+        # streaks.
+        if item.start < streak_end and item.end > streak_start:
+            return LegalityResult(
+                legal=False,
+                fail_rule="ILLEGAL_L5",
+                reason=f"Work streak exceeded 144h without 24h rest ({streak_start} to {streak_end})"
+            )
     return LegalityResult(legal=True)
+
+
+_L5_MAX_STREAK_MINUTES = 6 * 24 * 60.0   # 144 h of work ...
+_L5_MIN_BREAK_MINUTES = 24 * 60.0        # ... before a 24 h duty-free break
+
+
+def _over_limit_streaks(duties: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Every maximal work streak longer than 144 h, as (start, end).
+
+    IMP-612: the one L5 merge-and-streak algorithm, shared by the
+    per-assignment check (check_l5_duty_free_day) and the whole-calendar
+    audit (find_l5_streak_spans), which used to carry a copy each.
+
+    Overlapping duties are merged first; consecutive merged blocks separated
+    by less than 24 h belong to the same streak. One entry per maximal
+    streak, emitted once the streak ends -- never once per block still inside
+    an already-over-limit streak.
+    """
+    if not duties:
+        return []
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(duties, key=lambda d: d[0]):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    spans: list[tuple[float, float]] = []
+    streak_start = merged[0][0]
+    for i, (_start, curr_end) in enumerate(merged):
+        is_last = i == len(merged) - 1
+        if is_last or merged[i + 1][0] - curr_end >= _L5_MIN_BREAK_MINUTES:
+            if curr_end - streak_start > _L5_MAX_STREAK_MINUTES:
+                spans.append((streak_start, curr_end))
+            if not is_last:
+                streak_start = merged[i + 1][0]
+    return spans
 
 def find_l0_violations(crew: CrewMember) -> list[tuple[Block, Block]]:
     """Every pair of overlapping DUTY blocks in a crew's REALIZED calendar --
@@ -396,46 +461,7 @@ def find_l5_streak_spans(crew: CrewMember) -> list[tuple[float, float]]:
     different violating streak than the other (one healed, a different one
     appeared), which a count comparison alone would miss.
     """
-    duties = [(b.start, b.end) for b in crew.calendar if b.btype in DUTY_BLOCKS]
-    duties.sort(key=lambda x: x[0])
-
-    if not duties:
-        return []
-
-    merged: list[tuple[float, float]] = []
-    for d in duties:
-        if not merged:
-            merged.append(d)
-        else:
-            last = merged[-1]
-            if d[0] <= last[1]:
-                merged[-1] = (last[0], max(last[1], d[1]))
-            else:
-                merged.append(d)
-
-    # One entry per maximal streak (a run of merged blocks connected by
-    # <24h gaps), emitted once the streak actually ends -- not once per
-    # merged block still inside an already-over-144h streak. Checking
-    # "over 144h" on every intermediate block (as check_l5_duty_free_day
-    # does, which is safe there since it short-circuit-returns on the
-    # first hit) would emit the SAME ongoing streak many times here, one
-    # per block, since curr_end keeps growing while streak_start stays
-    # fixed until a real 24h+ gap is reached.
-    spans = []
-    streak_start = merged[0][0]
-    for i in range(len(merged)):
-        _curr_start, curr_end = merged[i]
-        is_last = i == len(merged) - 1
-        gap_to_next = merged[i + 1][0] - curr_end if not is_last else None
-        streak_ends_here = is_last or (gap_to_next is not None and gap_to_next >= 24 * 60.0)
-
-        if streak_ends_here:
-            if (curr_end - streak_start) > 6 * 24 * 60.0:
-                spans.append((streak_start, curr_end))
-            if not is_last:
-                streak_start = merged[i + 1][0]
-
-    return spans
+    return _over_limit_streaks([(b.start, b.end) for b in crew.calendar if b.btype in DUTY_BLOCKS])
 
 def find_l5_calendar_violations(crew: CrewMember) -> list[LegalityResult]:
     """LegalityResult wrapper around find_l5_streak_spans, for reporting
@@ -480,6 +506,9 @@ def is_legal_assignment(crew: CrewMember, duty: OpenTimeItem, is_deadhead: bool 
 
     r0 = check_l0_single_assignment(crew, duty.start, end_with_rest)
     if not r0.legal: return r0
+
+    r0b = check_l0_pairing_in_progress(crew, duty.start, end_with_rest, now)
+    if not r0b.legal: return r0b
 
     r1 = check_l1_max_duty(duty, cfg)
     if not r1.legal: return r1

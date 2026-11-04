@@ -1,0 +1,1 @@
+invoice_line_id,invoice_id,invoice_date,service_date,cost_type,station,supplier_code,quantity,unit_price_cad,amount_cad,original_amount,currency,is_credit_note,is_group_bill,crew_id,pairing_id,aims_booking_ref

@@ -118,7 +118,7 @@ export const DataQualityDashboard: React.FC = () => {
       </div>
       
       <div style={{ marginTop: 'var(--spacing-8)', paddingTop: 'var(--spacing-4)', borderTop: '1px solid var(--border-default)', display: 'flex', justifyContent: 'flex-end' }}>
-        <button style={{ padding: 'var(--spacing-2) var(--spacing-4)', backgroundColor: 'var(--color-primary-600)', color: 'white', borderRadius: 'var(--radius-lg)', fontWeight: 500, fontSize: '0.875rem', border: 'none', cursor: 'pointer' }}>
+        <button style={{ padding: 'var(--spacing-2) var(--spacing-4)', backgroundColor: 'var(--action-bg)', color: 'var(--action-fg)', borderRadius: 'var(--radius-button)', fontWeight: 500, fontSize: '0.875rem', border: 'none', cursor: 'pointer' }}>
           Refresh Report
         </button>
       </div>

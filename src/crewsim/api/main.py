@@ -5,8 +5,8 @@ Router inventory note: `provenance.py`, `runs.py` and the chart half of
 describing a different product -- `learning_rate`/`batch_size`/`s3://` under
 provenance, a `MOCK_RUNS` list under runs, a hiring funnel under
 `/results/charts/gates`. They were deleted rather than wired up, because the
-response shapes were never designed against this system. See
-`CODE_REVIEW_API_WEBUI.md`.
+response shapes were never designed against this system. The review that
+found them is in git history: `git show 7b34d3b:CODE_REVIEW_API_WEBUI.md`.
 """
 
 from __future__ import annotations

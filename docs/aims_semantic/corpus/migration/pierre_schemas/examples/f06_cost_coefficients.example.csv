@@ -1,0 +1,3 @@
+crew_group,coefficient_key,value_cad,basis,effective_from,effective_to,owner,source_reference,comment
+PILOT,reserve.guarantee_per_day.short_call,960,CONTRACTUAL,2026-01-06,,Labour Relations,EXAMPLE,4.00 h x 240 $
+PILOT,disruption.cancellation,25000,PLANNING_RATE,2025-05-01,,Finance,EXAMPLE,

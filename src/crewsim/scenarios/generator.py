@@ -29,11 +29,10 @@ def _cache_signature(cfg: config.BaseConfig, season: str, master_seed: str, n_sc
     """
     from ..engine import roster_loader
 
-    params_dir = config.resolve(cfg, "params_dir")
-    params_path = params_dir / f"params_v{_package_version()}_{season}.json"
+    params_path = config.params_store_path(cfg, season)
     if not params_path.is_file():
         raise FileNotFoundError(f"Missing parameter store for {season}. Run calibration first.")
-    content_hash = json.loads(params_path.read_text()).get("content_hash", "missing")
+    content_hash = json.loads(params_path.read_text(encoding="utf-8")).get("content_hash", "missing")
     window_start, _ = roster_loader.select_template_window(cfg)
     scope = cfg.scope
     return "|".join(
@@ -83,32 +82,17 @@ def load_scenario_set(
     return pl.read_parquet(scenario_set_path(cfg, season, master_seed, n_scenarios))
 
 
-def _package_version() -> str:
-    import importlib.metadata
-
-    try:
-        return importlib.metadata.version("crewsim")
-    except Exception:  # noqa: BLE001 - a version lookup must not abort generation
-        return "unknown"
-
-
 def generate_scenarios(cfg: config.BaseConfig, season: str, master_seed: str, n_scenarios: int) -> str | None:
     """
     Generates scenarios directly from frozen parameters.
     Returns None if cache hit, else path to generated parquet.
     """
     params_dir = config.resolve(cfg, "params_dir")
-    import importlib.metadata
-    try:
-        version = importlib.metadata.version("crewsim")
-    except Exception:  # noqa: BLE001 - a version lookup must not abort generation
-        version = "unknown"
-        
-    params_path = params_dir / f"params_v{version}_{season}.json"
+    params_path = config.params_store_path(cfg, season)
     if not params_path.is_file():
         raise FileNotFoundError(f"Missing parameter store for {season}. Run calibration first.")
         
-    with open(params_path) as f:
+    with open(params_path, encoding="utf-8") as f:
         store = json.load(f)
         
     # Cache key: every generation input, via the single shared computation
@@ -258,6 +242,16 @@ def generate_scenarios(cfg: config.BaseConfig, season: str, master_seed: str, n_
     # issue -- whichever rename lands last still produces identical bytes.
     tmp_file = out_file.with_name(f"{out_file.name}.tmp.{os.getpid()}")
     df.write_parquet(tmp_file)
-    os.replace(tmp_file, out_file)
+    try:
+        os.replace(tmp_file, out_file)
+    except PermissionError:
+        # Windows refuses to replace a file another process has open -- here,
+        # a racing process already renamed its identical copy into place and
+        # is reading it. Same bytes by construction (see above), so the
+        # winner's file is ours too: drop the temp copy. Anything else is a
+        # real error. (IMP-403 tracks the general atomic-write helper.)
+        tmp_file.unlink(missing_ok=True)
+        if not out_file.is_file():
+            raise
 
     return str(out_file)

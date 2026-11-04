@@ -107,7 +107,7 @@ export const ConfigDashboard: React.FC = () => {
               borderRadius: 'var(--radius-md)',
               border: 'none',
               backgroundColor: activeTab === tab.id ? 'var(--color-primary-600)' : 'var(--surface-default)',
-              color: activeTab === tab.id ? 'white' : 'var(--color-neutral-700)',
+              color: activeTab === tab.id ? 'var(--color-on-primary)' : 'var(--color-neutral-700)',
               cursor: 'pointer',
               fontWeight: 500,
               transition: 'all 0.2s',

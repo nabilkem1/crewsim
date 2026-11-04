@@ -22,7 +22,6 @@ from crewsim import config
 from crewsim.engine import des
 from crewsim.engine.policy import load_policy
 from crewsim.reporting import tape as tape_mod
-from crewsim.reporting.grid import _policy_path
 
 SEED = "master"
 N_SCENARIOS = 4
@@ -59,7 +58,7 @@ def _scenario() -> int:
     if "id" in _scenario_cache:
         return _scenario_cache["id"]
     cfg, costs = _cfg()
-    policy = load_policy(_policy_path(POLICY))
+    policy = load_policy(config.policy_path(POLICY))
     best, best_n = 0, -1
     for sid in range(N_SCENARIOS):
         sim = des.run_scenario(
@@ -78,7 +77,7 @@ def _scenario() -> int:
 def _sim():
     cfg, costs = _cfg()
     return cfg, costs, des.run_scenario(
-        cfg, costs, load_policy(_policy_path(POLICY)), scenario_id=_scenario(),
+        cfg, costs, load_policy(config.policy_path(POLICY)), scenario_id=_scenario(),
         master_seed=SEED, n_scenarios=N_SCENARIOS, trace=True,
     )
 
@@ -86,7 +85,7 @@ def _sim():
 def _tape():
     cfg, costs = _cfg()
     return tape_mod.build_tape(
-        cfg, costs, load_policy(_policy_path(POLICY)), _scenario(), SEED, N_SCENARIOS
+        cfg, costs, load_policy(config.policy_path(POLICY)), _scenario(), SEED, N_SCENARIOS
     )
 
 

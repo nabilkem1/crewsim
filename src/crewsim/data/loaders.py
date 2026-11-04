@@ -32,6 +32,8 @@ ColumnKind = Literal["str", "int", "float", "date", "datetime"]
 
 # Column names that would identify a specific person. crew_id (a surrogate
 # key like "P00001") is fine; anything below is not, in any dataset.
+# Matched case-insensitively after trimming whitespace (IMP-303): "Name" or
+# " PASSENGER_NAME " is the same column to a human reader.
 BANNED_COLUMNS = frozenset(
     {
         "name",
@@ -43,8 +45,28 @@ BANNED_COLUMNS = frozenset(
         "employee_no",
         "ssn",
         "sin",
+        # IMP-303: found in a real D10 extract -- passenger names on
+        # positioning invoices.
+        "passenger_name",
+        "passenger",
+        "pax_name",
+        "email",
+        "email_address",
+        "phone",
+        "phone_number",
+        "dob",
+        "date_of_birth",
+        "birth_date",
+        "address",
+        "home_address",
     }
 )
+
+
+def banned_columns_in(columns: list[str]) -> list[str]:
+    """The header names that match BANNED_COLUMNS, case- and space-insensitive.
+    Returned as they appear in the file, so the error names the real column."""
+    return sorted(c for c in columns if c.strip().lower() in BANNED_COLUMNS)
 
 # Declared schema per dataset. Keys are the CSV's exact column names; order
 # does not matter, but the SET of columns must match the file exactly.
@@ -181,6 +203,17 @@ DATASET_SCHEMAS: dict[str, dict[str, ColumnKind]] = {
     },
 }
 
+# Columns a REAL extract carries and the code can use when present. Absent from
+# the generated mock, so a frame from the mock simply lacks them: a consumer must
+# test `col in df.columns`. Any other undeclared column is ignored (or refused,
+# `data.extra_columns`), never loaded.
+OPTIONAL_COLUMNS: dict[str, dict[str, ColumnKind]] = {
+    # 1 = the pilot travels as a passenger: duty time, but no flight hours.
+    "d3_pairing_legs": {"deadhead": "int"},
+    # How the absence's notification time was found (null time = no journal entry).
+    "d4_absences": {"notification_source": "str"},
+}
+
 DATASET_NAMES: tuple[str, ...] = tuple(sorted(DATASET_SCHEMAS))
 
 
@@ -191,29 +224,42 @@ class SchemaError(ValueError):
 def _peek_columns(path: pathlib.Path) -> list[str]:
     """Read just the header row, without pulling the whole file into memory."""
     opener = gzip.open if path.name.endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", newline="") as fh:
+    # utf-8-sig: an Excel-exported CSV starts with a BOM, which would
+    # otherwise glue itself onto the first column name.
+    with opener(path, "rt", encoding="utf-8-sig", newline="") as fh:
         header = next(csv.reader(fh))
     return header
 
 
-def _validate_columns(name: str, actual: list[str], schema: dict[str, ColumnKind]) -> None:
+def extra_columns(name: str, actual: list[str]) -> list[str]:
+    """Columns in a file that the schema neither declares nor lists as optional."""
+    known = set(DATASET_SCHEMAS.get(name, {})) | set(OPTIONAL_COLUMNS.get(name, {}))
+    return sorted(set(actual) - known)
+
+
+def _validate_columns(
+    name: str, actual: list[str], schema: dict[str, ColumnKind], extra: str = "refuse"
+) -> None:
     actual_set = set(actual)
 
-    banned = actual_set & BANNED_COLUMNS
+    # Checked BEFORE schema drift, and reported by name (IMP-303): a file
+    # carrying personal data must be refused as such, not as generic drift.
+    banned = banned_columns_in(actual)
     if banned:
         raise SchemaError(
-            f"{name}: column(s) {sorted(banned)} look like identifying fields. "
+            f"{name}: identifying column(s) {banned} refused. "
             f"crew_id must stay an opaque surrogate key (Sec 6.2, Law 25) -- "
-            f"no name or employee number may appear in any dataset."
+            f"no personal data (names, contact details, employee numbers) "
+            f"may appear in any dataset."
         )
 
     expected = set(schema)
     missing = expected - actual_set
-    extra = actual_set - expected
-    if missing or extra:
+    surplus = set(extra_columns(name, actual)) if extra == "refuse" else set()
+    if missing or surplus:
         raise SchemaError(
             f"{name}: schema drift against the declared schema. "
-            f"missing={sorted(missing)} extra={sorted(extra)}. "
+            f"missing={sorted(missing)} extra={sorted(surplus)}. "
             f"Declared columns: {sorted(expected)}"
         )
 
@@ -262,6 +308,7 @@ def _cast(name: str, df: pl.DataFrame, schema: dict[str, ColumnKind]) -> pl.Data
     in a real Air Transat extract turns into a wrong NHPP fit three stories
     downstream, with the loader itself reporting success throughout.
     """
+    # Convert each column from text to its declared type; a bad value raises SchemaError.
     out = df
     for col, kind in schema.items():
         try:
@@ -270,6 +317,7 @@ def _cast(name: str, df: pl.DataFrame, schema: dict[str, ColumnKind]) -> pl.Data
             raise SchemaError(
                 f"{name}.{col}: value(s) do not parse as {kind!r} -- {exc}"
             ) from exc
+    # Keep only the declared columns, in the declared order.
     return out.select(list(schema))
 
 
@@ -280,24 +328,33 @@ def load_dataset(cfg: config.BaseConfig, name: str) -> pl.DataFrame:
     it is not present under the configured corpus, and `SchemaError` if its
     columns do not match the declared schema exactly.
     """
+    # 1. The dataset must be declared (it has a schema) ...
     if name not in DATASET_SCHEMAS:
         raise KeyError(f"unknown dataset {name!r}. Known datasets: {list(DATASET_NAMES)}")
 
+    # ... and present in the corpus folder (as .csv or .csv.gz).
     path = config.dataset_path(cfg, name)
     if path is None:
         corpus = config.resolve(cfg, "corpus_dir")
         raise FileNotFoundError(f"{name} not found under {corpus}")
 
+    # 2. Check the header before reading the data: no personal-data columns,
+    #    and exactly the declared columns (no missing, no extra).
     schema = DATASET_SCHEMAS[name]
     columns = _peek_columns(path)
-    _validate_columns(name, columns, schema)
+    _validate_columns(name, columns, schema, cfg.data.extra_columns)
+    # Declared columns, then any optional ones the file carries; the rest is left unread.
+    schema = {**schema, **{c: k for c, k in OPTIONAL_COLUMNS.get(name, {}).items() if c in columns}}
 
+    # 3. Read every column as text (empty field -> null); types are applied in step 4.
     source = _read_source(path)
     raw = pl.read_csv(
         io.BytesIO(source) if isinstance(source, bytes) else source,
         schema_overrides=dict.fromkeys(columns, pl.Utf8),
         null_values=[""],
+        columns=list(schema),
     )
+    # 4. Convert to the declared types (dates, ints, floats), strictly.
     return _cast(name, raw, schema)
 
 
@@ -306,10 +363,26 @@ def load_agreement_rules(cfg: config.BaseConfig) -> dict[str, Any]:
     import yaml
 
     corpus = config.resolve(cfg, "corpus_dir")
-    path = corpus / "d12_agreement_rules.yaml"
+    path = cfg.paths.agreement_rules_file or corpus / "d12_agreement_rules.yaml"
     if not path.is_file():
         raise FileNotFoundError(f"D12 agreement rules not found at {path}")
-    return yaml.safe_load(path.read_text()) or {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def column_report(cfg: config.BaseConfig) -> dict[str, dict[str, list[str]]]:
+    """Per CSV dataset present: the optional columns it carries (used) and the
+    undeclared ones that are left unread. Reads headers only."""
+    out: dict[str, dict[str, list[str]]] = {}
+    for name in DATASET_NAMES:
+        path = config.dataset_path(cfg, name)
+        if path is None:
+            continue
+        columns = _peek_columns(path)
+        out[name] = {
+            "used_optional": sorted(c for c in OPTIONAL_COLUMNS.get(name, {}) if c in columns),
+            "ignored": extra_columns(name, columns),
+        }
+    return out
 
 
 def load_seasons(cfg: config.BaseConfig) -> dict[str, list[int]]:
@@ -324,5 +397,5 @@ def load_seasons(cfg: config.BaseConfig) -> dict[str, list[int]]:
     path = config.resolve(cfg, "seasons_file")
     if not path.is_file():
         raise FileNotFoundError(f"seasons file not found at {path}")
-    raw = yaml.safe_load(path.read_text()) or {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return {name: spec["months"] for name, spec in raw.get("seasons", {}).items()}

@@ -34,7 +34,7 @@ from .state import CrewMember
 def _scope_filter(df: pl.DataFrame, cfg: config.BaseConfig) -> pl.DataFrame:
     return df.filter(
         (pl.col("base") == cfg.scope.base)
-        & (pl.col("fleet") == cfg.scope.fleet)
+        & pl.col("fleet").is_in(sorted(config.fleet_members(cfg, cfg.scope.fleet)))
         & (pl.col("position") == cfg.scope.position)
     )
 
@@ -78,6 +78,16 @@ def _load_real_absences(
     """
     d4 = _scope_filter(loaders.load_dataset(cfg, "d4_absences"), cfg).filter(
         (pl.col("absence_start") >= period_start) & (pl.col("absence_start") < period_end)
+    )
+    # A real extract can lack the notification time (no journal entry). Per
+    # `data.null_notification_ts`: assume it was reported at 00:00 on the first
+    # day of the absence, or leave the absence out. Never crash on it.
+    if cfg.data.null_notification_ts == "exclude":
+        d4 = d4.filter(pl.col("notification_ts").is_not_null())
+    d4 = d4.with_columns(
+        pl.coalesce(
+            pl.col("notification_ts"), pl.col("absence_start").cast(pl.Datetime("us"))
+        ).alias("notification_ts")
     ).sort("notification_ts")
 
     anchor = datetime.datetime.combine(period_start, datetime.time.min)

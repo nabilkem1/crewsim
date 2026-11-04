@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 import polars as pl
 
 from .. import config
-from . import loaders
+from . import clean, loaders
 
 # Ordinal severity order used everywhere a disruption_class is displayed or
 # grouped -- CALM..SEVERE, never alphabetical.
@@ -261,6 +261,8 @@ def regime_gradient_stats(
 
     The whole point of Sec 5.2's severity regime is that these three streams
     move TOGETHER -- that is what this function exists to show, not derive.
+    `d9` is any station/date/disruption_class table; since F-42 it is the
+    computed HMM label table (computed_regime_labels), not the D9 file.
     """
     d9w = d9.filter(_in_window(pl.col("date"), window))
 
@@ -358,23 +360,50 @@ def compute_window_profile(
     )
 
 
+def computed_regime_labels(cfg: config.BaseConfig, windows: list[Window]) -> dict[str, pl.DataFrame]:
+    """F-42: the station-day regime labels per window, COMPUTED by the regime
+    HMM (calibration.regime) instead of read from D9.
+
+    The models are fitted on the fitting window only; every other window is
+    decoded with those fitted models, never refitted -- the holdout profile
+    must not be shaped by holdout data any more than the parameters are.
+    """
+    from ..calibration import regime
+
+    fitting = next(w for w in windows if w.name == "fitting")
+    inputs = regime.load_inputs(cfg)
+    fits = regime.fit_station_regimes(cfg, (fitting.start, fitting.end), inputs=inputs)
+    out = {}
+    for w in windows:
+        out[w.name] = (
+            regime.labels_frame(fits) if w.name == "fitting"
+            else regime.decode_window(cfg, fits, (w.start, w.end), inputs=inputs)
+        )
+    return out
+
+
 def compute_profiles(cfg: config.BaseConfig) -> dict[str, WindowProfile]:
     """One WindowProfile per declared window (Sec 6.4), each dataset loaded once."""
     seasons = loaders.load_seasons(cfg)
     windows = load_windows(cfg)
-    d4 = loaders.load_dataset(cfg, "d4_absences")
+    d4 = clean.load_absences(cfg)
     d5 = loaders.load_dataset(cfg, "d5_reserve_callouts")
-    d8 = loaders.load_dataset(cfg, "d8_flight_movements")
-    d9 = loaders.load_dataset(cfg, "d9_station_days")
-    return {w.name: compute_window_profile(w, seasons, d4, d5, d8, d9) for w in windows}
+    d8 = clean.load_flights(cfg)
+    labels = computed_regime_labels(cfg, windows)
+    return {
+        w.name: compute_window_profile(w, seasons, d4, d5, d8, labels[w.name]) for w in windows
+    }
 
 
 def write_report(cfg: config.BaseConfig) -> pathlib.Path:
-    from . import profile_html
+    from . import limitations, profile_html
 
     profiles = compute_profiles(cfg)
-    html = profile_html.render(profiles, cfg.calibration.overdispersion_threshold)
+    html = profile_html.render(
+        profiles, cfg.calibration.overdispersion_threshold,
+        [x.as_dict() for x in limitations.collect(cfg)],
+    )
     out_dir = config.ensure_dir(cfg, "reports_dir")
     path = out_dir / "data_profile.html"
-    path.write_text(html)
+    path.write_text(html, encoding="utf-8")
     return path

@@ -237,7 +237,7 @@ def test_report_is_one_self_contained_file(
     cfg = real_cfg.model_copy(update={"paths": real_cfg.paths.model_copy(update={"reports_dir": tmp_path})})
     path = profile.write_report(cfg)
     assert path == tmp_path / "data_profile.html"
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
 
     assert "<script src=" not in html, "an external script tag means it is not self-contained"
     assert "<link " not in html, "an external stylesheet link means it is not self-contained"
@@ -248,7 +248,7 @@ def test_every_chart_states_n_and_window(
     real_cfg: config.BaseConfig, tmp_path: pathlib.Path
 ) -> None:
     cfg = real_cfg.model_copy(update={"paths": real_cfg.paths.model_copy(update={"reports_dir": tmp_path})})
-    html = profile.write_report(cfg).read_text()
+    html = profile.write_report(cfg).read_text(encoding="utf-8")
     for name, p in profile.compute_profiles(real_cfg).items():
         assert name in html
         assert f"n={p.sick_calls.n_days}" in html or str(p.sick_calls.n_days) in html

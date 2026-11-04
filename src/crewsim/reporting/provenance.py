@@ -25,13 +25,10 @@ def params_provenance(cfg: config.BaseConfig) -> tuple[str, str]:
     configured season, which is a normal state, not an error: it is what a
     fresh checkout looks like before `crewsim calibrate --emit` has run.
     """
-    from ..engine import des
-
-    params_dir = config.resolve(cfg, "params_dir")
-    path = params_dir / f"params_v{des._package_version()}_{cfg.scope.season}.json"
+    path = config.params_store_path(cfg, cfg.scope.season)
     if not path.is_file():
         return "MISSING", f"no parameter store at {path.name} -- run `crewsim calibrate --emit`"
-    store = json.loads(path.read_text())
+    store = json.loads(path.read_text(encoding="utf-8"))
     return store.get("params_version", "unknown"), store.get("content_hash", "unknown")
 
 

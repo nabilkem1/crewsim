@@ -1,0 +1,3 @@
+agreement,crew_group,position,fleet_family,pay_step,rate_type,value,unit,effective_from,effective_to,source_reference
+ALPA,PILOT,FO,A321,7,BASE_HOURLY,240.00,CAD_PER_HOUR,2025-05-01,,EXAMPLE
+ALPA,PILOT,ALL,ALL,ALL,DRAFT_PREMIUM_MULTIPLIER,2.0,MULTIPLIER,2026-02-01,,EXAMPLE

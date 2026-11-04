@@ -1,4 +1,10 @@
-"""cascade — see spec §5. Implemented in a later story; shape fixed by S0-00."""
+"""cascade — what a draft does to the drafted crew member's calendar (spec §5.7).
+
+compute_draft_delta works out the DRAFTED_DUTY + REST blocks a draft adds and
+the future blocks it breaks; every broken PAIRING re-enters the recovery
+pipeline as a CASCADE open item. apply_delta applies that change to the crew
+member's calendar.
+"""
 
 from crewsim.config import BaseConfig
 from crewsim.engine.legality import min_rest_minutes
@@ -59,7 +65,7 @@ def compute_draft_delta(crew: CrewMember, item: OpenTimeItem, cfg: BaseConfig, n
                     # so mark it explicitly rather than letting None through.
                     pairing_id=b.pairing_id or "UNKNOWN",
                     base=crew.base,
-                    fleet=next(iter(crew.fleet_quals)), # simplification
+                    fleet=crew.primary_fleet,
                     position=crew.position,
                     start=b.start,
                     end=b.end,
@@ -77,7 +83,17 @@ def compute_draft_delta(crew: CrewMember, item: OpenTimeItem, cfg: BaseConfig, n
             # This structurally shrinks the reserve pool on that day.
             # No OpenTimeItem is generated because it's a loss of capacity, not an uncovered flight.
             delta.removed_blocks.append(b)
-            
+        elif b.btype in (BlockType.TRAINING, BlockType.SIMULATOR):
+            # IMP-103: a tier-3 (ground training) or tier-5 (simulator) draft
+            # takes the crew member out of that session -- which is exactly
+            # why draft_cost books the training-reschedule fee. Leaving the
+            # block on the calendar kept two overlapping DUTY blocks (both
+            # are in legality.DUTY_BLOCKS), which find_l0_violations reports
+            # and the rolling L3/L4/L5 counters counted twice. The session is
+            # rescheduled outside the model, so the whole block goes; no open
+            # item is generated (there is no flight to cover).
+            delta.removed_blocks.append(b)
+
     return delta, cascaded_items
 
 def apply_delta(crew: CrewMember, delta: StateDelta) -> None:

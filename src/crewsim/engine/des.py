@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-import importlib.metadata
 import json
 import math
 from collections.abc import Callable, Generator
@@ -40,18 +39,11 @@ from .eligibility import (
 )
 from .events import assign_reserve
 from .ledger import CostLedger, LedgerRow
-from .legality import is_legal_assignment, min_rest_minutes
+from .legality import is_legal_assignment, min_rest_minutes, reserve_call_type_for
 from .policy import Policy
 from .sick_calls import apply_named_absence, apply_sick_call, uncovered_deadline_minutes
 from .state import BlockType, CrewMember, OpenTimeItem
 from .terminal import evaluate_terminal_penalties
-
-
-def _package_version() -> str:
-    try:
-        return importlib.metadata.version("crewsim")
-    except Exception:  # noqa: BLE001 - a version-lookup failure must not crash the sim
-        return "unknown"
 
 
 def _load_sick_call_duration_params(cfg: config.BaseConfig) -> tuple[float, float]:
@@ -60,14 +52,13 @@ def _load_sick_call_duration_params(cfg: config.BaseConfig) -> tuple[float, floa
     Real calibrated data, not an invented constant -- see
     output/params/params_v*_<season>.json -> sick_call_nhpp.
     """
-    params_dir = config.resolve(cfg, "params_dir")
-    path = params_dir / f"params_v{_package_version()}_{cfg.scope.season}.json"
+    path = config.params_store_path(cfg, cfg.scope.season)
     if not path.is_file():
         raise FileNotFoundError(
             f"Missing calibrated parameter store for season {cfg.scope.season!r} at {path}. "
             "Run calibration first (S0-06/S0-07)."
         )
-    store = json.loads(path.read_text())
+    store = json.loads(path.read_text(encoding="utf-8"))
     nhpp = store["sick_call_nhpp"]
     return nhpp["duration_lognorm_shape"], nhpp["duration_lognorm_scale"]
 
@@ -86,11 +77,15 @@ def _scenario_cache_path(cfg: config.BaseConfig, season: str, master_seed: str, 
     return scenario_set_path(cfg, season, master_seed, n_scenarios)
 
 
-def _load_daily_sick_calls(
-    cfg: config.BaseConfig, season: str, master_seed: str, n_scenarios: int, scenario_id: int
-) -> list[int]:
-    """Real calibrated per-day sick-call counts for one scenario (scenarios/generator.py),
-    not an inline re-derivation -- one count per horizon day, 0 where the cache has no row."""
+def _load_daily_column(
+    cfg: config.BaseConfig, season: str, master_seed: str, n_scenarios: int,
+    scenario_id: int, column: str,
+) -> list[float]:
+    """One per-horizon-day column of one scenario from the scenario cache
+    (scenarios/generator.py), 0 where the cache has no row for a day.
+
+    IMP-612: the shared body of the two loaders below, which were copies.
+    """
     path = _scenario_cache_path(cfg, season, master_seed, n_scenarios)
     df = pl.read_parquet(path).filter(pl.col("scenario") == scenario_id).sort("day")
     horizon_days = cfg.horizon.horizon_days
@@ -104,11 +99,22 @@ def _load_daily_sick_calls(
             f"{scenario_id} but the horizon is {horizon_days} days -- stale "
             f"cache; delete it or regenerate (crewsim scenarios generate)."
         )
-    counts = [0] * horizon_days
+    values = [0.0] * horizon_days
     for row in df.iter_rows(named=True):
         if row["day"] < horizon_days:
-            counts[row["day"]] = int(row["sick_calls"])
-    return counts
+            values[row["day"]] = float(row[column])
+    return values
+
+
+def _load_daily_sick_calls(
+    cfg: config.BaseConfig, season: str, master_seed: str, n_scenarios: int, scenario_id: int
+) -> list[int]:
+    """Real calibrated per-day sick-call counts for one scenario (scenarios/generator.py),
+    not an inline re-derivation -- one count per horizon day, 0 where the cache has no row."""
+    return [
+        int(v)
+        for v in _load_daily_column(cfg, season, master_seed, n_scenarios, scenario_id, "sick_calls")
+    ]
 
 
 def _load_daily_delay_minutes(
@@ -118,20 +124,7 @@ def _load_daily_delay_minutes(
     (scenarios/generator.py's delay_minutes column) -- same cache, same
     per-day/0-where-absent convention as _load_daily_sick_calls above.
     """
-    path = _scenario_cache_path(cfg, season, master_seed, n_scenarios)
-    df = pl.read_parquet(path).filter(pl.col("scenario") == scenario_id).sort("day")
-    horizon_days = cfg.horizon.horizon_days
-    if df.height < horizon_days:
-        raise ValueError(
-            f"scenario cache {path} holds {df.height} day-rows for scenario "
-            f"{scenario_id} but the horizon is {horizon_days} days -- stale "
-            f"cache; delete it or regenerate (crewsim scenarios generate)."
-        )
-    minutes = [0.0] * horizon_days
-    for row in df.iter_rows(named=True):
-        if row["day"] < horizon_days:
-            minutes[row["day"]] = float(row["delay_minutes"])
-    return minutes
+    return _load_daily_column(cfg, season, master_seed, n_scenarios, scenario_id, "delay_minutes")
 
 
 class Simulation:
@@ -268,6 +261,12 @@ class Simulation:
         # into that numerator would inflate the offered load of a pool that
         # never served them.
         self.n_cross_base_assignments = 0
+        # IMP-117: the SC/LC call type behind every RESERVE_STAFFING and
+        # RESERVE_UTILIZATION row, keyed (crew_id, sim_time, event_uid) -- a
+        # side table rather than a ledger column, because the ledger's content
+        # hash is what gate V7 compares. Lets KPIs show whether a call type
+        # that is paid for is ever actually used.
+        self.reserve_call_types: dict[tuple[str | None, float, int], str] = {}
 
         self._book_reserve_staffing()
         # None (not []) for every caller that doesn't pass real calibrated
@@ -303,7 +302,12 @@ class Simulation:
             reserves=self.reserves,
             rates=self.costs.reserve.guarantee_per_day,
             horizon_minutes=self.horizon_minutes,
+            call_types=self.reserve_call_types,
         )
+
+    def reserve_call_type_of(self, row: Any) -> str | None:
+        """SC/LC behind a RESERVE_STAFFING / RESERVE_UTILIZATION row, else None."""
+        return self.reserve_call_types.get((row.crew_id, row.sim_time, row.event_uid))
 
     def _book_flight_delays(self, daily_delay_minutes: list[float]) -> None:
         """Delegates to engine/costs.py::book_flight_delays -- same
@@ -341,6 +345,15 @@ class Simulation:
         an arrival's draws independent of how many arrivals preceded it, so the
         stream cannot drift even if the surrounding code changes its own
         consumption.
+
+        IMP-101: a day's arrival times are all drawn first and then processed
+        in ascending time order (ties broken by index). Processing them in
+        index order skipped the timeout whenever a later index drew an earlier
+        time, so that arrival was handled at the clock time of the previous
+        one while carrying its own, earlier, timestamp: arrivals bunched late
+        in the day and ABSENCE blocks started in the past. Sorting changes only
+        the processing order -- each arrival's draws still come from its own
+        (day, i) generator, in the same order (time, then duration, then crew).
         """
         if self.scenario_stream is None:
             raise ValueError(
@@ -355,9 +368,12 @@ class Simulation:
             day_start = day * 1440.0
             if day_start > self.env.now:
                 yield self.env.timeout(day_start - self.env.now)
+            arrivals = []
             for i in range(count):
                 arrival_rng = crn.event_rng(self.scenario_stream, f"sick_call:{day}:{i}")
-                current_time = day_start + float(arrival_rng.uniform(0, 1440.0))
+                arrivals.append((day_start + float(arrival_rng.uniform(0, 1440.0)), i, arrival_rng))
+            arrivals.sort(key=lambda a: (a[0], a[1]))
+            for current_time, _i, arrival_rng in arrivals:
                 if current_time > self.env.now:
                     yield self.env.timeout(current_time - self.env.now)
                 duration_days = float(
@@ -410,7 +426,7 @@ class Simulation:
                 uid=uid,
                 pairing_id=block.pairing_id or "UNKNOWN",
                 base=crew.base,
-                fleet=next(iter(crew.fleet_quals)) if crew.fleet_quals else "UNKNOWN",
+                fleet=crew.primary_fleet,
                 position=crew.position,
                 start=block.start, end=block.end,
                 deadline=block.start - lead,
@@ -578,9 +594,14 @@ class Simulation:
         # bases rather than hardcoding keeps that one definition authoritative.
         min_rest = min_rest_minutes(self.cfg, chosen.base, item.base)
         oncall_taken = oncall_minutes_in(chosen, positioned.start, item.end + min_rest)
+        # Read BEFORE assign_reserve splits the RESERVE block: the same rule L8
+        # judged this call by (IMP-116), against the positioning report.
+        self.reserve_call_types[(chosen.crew_id, now, item.uid)] = (
+            reserve_call_type_for(chosen, positioned, now) or "SC"
+        )
         assign_reserve(
             chosen, item.start, item.end, min_rest, item.pairing_id,
-            deadhead_start=positioned.start,
+            deadhead_start=positioned.start, flight_mins=item.flight_mins,
         )
         self.n_cross_base_assignments += 1
         self.reserve_oncall_minutes += oncall_taken
@@ -670,7 +691,13 @@ class Simulation:
             min_rest = min_rest_minutes(self.cfg, chosen.base, item.base)
             # Measured BEFORE assign_reserve mutates the calendar.
             oncall_taken = oncall_minutes_in(chosen, item.start, item.end + min_rest)
-            assign_reserve(chosen, item.start, item.end, min_rest, item.pairing_id)
+            self.reserve_call_types[(chosen.crew_id, now, item.uid)] = (
+                reserve_call_type_for(chosen, item, now) or "SC"
+            )
+            assign_reserve(
+                chosen, item.start, item.end, min_rest, item.pairing_id,
+                flight_mins=item.flight_mins,
+            )
             # Occupancy this assignment costs the pool: the duty plus the rest it
             # obliges. That product with the arrival rate is the offered load `a`.
             self.n_reserve_assignments += 1

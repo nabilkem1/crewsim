@@ -1,0 +1,2 @@
+flight_no,flight_date,origin,destination,event_type,delay_minutes,cost_component,amount_cad,passengers_affected,aggregation_level
+TS000,2026-07-14,YUL,CDG,CANCELLATION,,PASSENGER_COMPENSATION_APPR,21000.00,250,FLIGHT

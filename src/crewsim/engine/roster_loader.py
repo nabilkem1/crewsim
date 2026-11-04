@@ -1,10 +1,12 @@
 import dataclasses
 import datetime
+from collections import Counter
+from typing import Any
 
 import polars as pl
 
 from .. import config
-from ..data import loaders
+from ..data import coverage, loaders
 from .policy import Policy
 from .state import Block, BlockType, CrewMember
 
@@ -26,25 +28,45 @@ def select_template_window(cfg: config.BaseConfig) -> tuple[datetime.date, datet
     season_months = set(loaders.load_seasons(cfg)[cfg.scope.season])
     horizon_days = cfg.horizon.horizon_days
 
+    # IMP-516: the roster this window stands in for must actually be recorded.
+    # D2 may stop being filled in before its last row; a template window past that
+    # point would be a calendar of nothing.
+    # (A hand-built cfg with no data section -- a test stub of the window inputs --
+    # has no corpus to ask.)
+    d2_interval = (
+        coverage.dataset_interval(cfg, "d2_rosters") if getattr(cfg, "data", None) is not None else None
+    )
+
     latest_start = holdout.end - datetime.timedelta(days=horizon_days - 1)
     start = latest_start
     while start >= holdout.start:
         days_touched = [start + datetime.timedelta(days=d) for d in range(horizon_days)]
-        if {d.month for d in days_touched} <= season_months:
+        in_season = {d.month for d in days_touched} <= season_months
+        recorded = d2_interval is None or (
+            d2_interval.contains(days_touched[0]) and d2_interval.contains(days_touched[-1])
+        )
+        if in_season and recorded:
             end = start + datetime.timedelta(days=horizon_days)
             return start, end
         start -= datetime.timedelta(days=1)
 
+    recorded_note = (
+        f" and inside the recorded span of the D2 rosters ({d2_interval.label()})"
+        if d2_interval is not None else ""
+    )
     raise ValueError(
         f"No {horizon_days}-day window inside holdout [{holdout.start}, {holdout.end}] "
         f"falls entirely within scope.season={cfg.scope.season!r} "
-        f"months={sorted(season_months)}"
+        f"months={sorted(season_months)}{recorded_note}"
     )
+
+
+DutyPeriods = dict[str, list[tuple[datetime.datetime, datetime.datetime, float]]]
 
 
 def _load_pairing_duty_periods(
     cfg: config.BaseConfig,
-) -> dict[str, list[tuple[datetime.datetime, datetime.datetime, float]]]:
+) -> tuple[DutyPeriods, set[str], set[str]]:
     """S1d-04b2: per pairing_id, the real duty periods within it (D3), each a
     single report-to-release span (~4-9h in this corpus) -- not the whole
     multi-day pairing D2 rolls it up into (48-120h, which fails legality.py's
@@ -53,25 +75,105 @@ def _load_pairing_duty_periods(
     report_local is constant across a duty period's legs; release_local
     increases per leg, so the duty's actual end is the LAST leg's
     release_local (confirmed against the raw data before writing this).
+
+    Returns (duty periods, incomplete pairings, estimated pairings).
+
+    IMP-520: a pairing with a duty period whose report or release time is
+    missing in D3 is `incomplete` and has NO entry in the duty periods -- the
+    caller falls back to D2's own span for it and counts it, instead of
+    crashing on `None + timedelta`. A leg whose block_hours is 0 or missing
+    gets the hours between its own departure and arrival; a pairing that had
+    to do so is `estimated`.
     """
     legs = loaders.load_dataset(cfg, "d3_pairing_legs")
+    supplied = pl.col("block_hours")
+    derived = (pl.col("arr_local") - pl.col("dep_local")) / pl.duration(hours=1)
+    # A deadhead leg (D3 `deadhead` = 1: the pilot travels as a passenger) is duty
+    # but not flying: no flight hours, and its zero block time is not an estimate.
+    deadhead = (
+        pl.col("deadhead").fill_null(0) == 1 if "deadhead" in legs.columns else pl.lit(False)
+    )
+    hours = (
+        pl.when(deadhead).then(0.0)
+        .when(supplied > 0).then(supplied)
+        .when(derived > 0).then(derived)
+        .otherwise(0.0)
+    )
     agg = (
         legs.group_by(["pairing_id", "duty_period"])
         .agg(
             [
                 pl.col("report_local").min().alias("duty_start"),
                 pl.col("release_local").max().alias("duty_end"),
-                pl.col("block_hours").sum().alias("flight_hours"),
+                hours.sum().alias("flight_hours"),
+                ((supplied.fill_null(0) <= 0) & ~deadhead).any().alias("estimated"),
             ]
         )
         .sort(["pairing_id", "duty_period"])
     )
-    out: dict[str, list[tuple[datetime.datetime, datetime.datetime, float]]] = {}
+    out: DutyPeriods = {}
+    incomplete: set[str] = set()
+    estimated: set[str] = set()
     for row in agg.iter_rows(named=True):
-        out.setdefault(row["pairing_id"], []).append(
+        pid = row["pairing_id"]
+        if row["duty_start"] is None or row["duty_end"] is None:
+            incomplete.add(pid)
+            continue
+        if row["estimated"]:
+            estimated.add(pid)
+        out.setdefault(pid, []).append(
             (row["duty_start"], row["duty_end"], float(row["flight_hours"]))
         )
-    return out
+    # A pairing is usable only if EVERY duty period is: half a pairing would
+    # leave the pilot looking free for the days it has no times for.
+    for pid in incomplete:
+        out.pop(pid, None)
+    return out, incomplete, estimated
+
+
+def _reconcile_overlaps(
+    calendar: list[Block], trimmable: frozenset[BlockType]
+) -> tuple[list[Block], dict[str, int]]:
+    """IMP-520: a crew calendar with no two blocks overlapping, and what it took.
+
+    A block of a trimmable type (a day off that runs into a pairing) gives way
+    to any block it overlaps (a firm block over a trimmable one wins either way round): it is cut back to the other block's edge,
+    split if the other block sits inside it, or dropped if nothing is left.
+    Two blocks that are both firm (PAIRING over PAIRING, a pairing over a
+    reserve) cannot both be right: the later one is dropped and counted, never
+    resolved silently -- the count is the data defect's size.
+    """
+    stats = {"trimmed": 0, "dropped": 0}
+    # Fast path: a calendar with nothing overlapping is returned as it came.
+    ordered = sorted(calendar, key=lambda b: b.start)
+    if all(ordered[i].start >= ordered[i - 1].end for i in range(1, len(ordered))):
+        return calendar, stats
+    kept: list[Block] = []
+    for block in sorted(calendar, key=lambda b: (b.start, b.end)):
+        pending = [block]
+        while pending:
+            b = pending.pop(0)
+            clash = next((k for k in kept if k.start < b.end and b.start < k.end), None)
+            if clash is None:
+                kept.append(b)
+                continue
+            if b.btype in trimmable:
+                # b gives way: keep the parts of b outside `clash`.
+                stats["trimmed"] += 1
+                before = dataclasses.replace(b, end=clash.start) if b.start < clash.start else None
+                after = dataclasses.replace(b, start=clash.end) if b.end > clash.end else None
+                pending[0:0] = [p for p in (before, after) if p is not None]
+            elif clash.btype in trimmable:
+                # the block already kept gives way to b.
+                stats["trimmed"] += 1
+                kept.remove(clash)
+                before = dataclasses.replace(clash, end=b.start) if clash.start < b.start else None
+                after = dataclasses.replace(clash, start=b.end) if clash.end > b.end else None
+                pending[0:0] = [b, *[p for p in (before, after) if p is not None]]
+            else:
+                stats["dropped"] += 1
+        kept.sort(key=lambda k: (k.start, k.end))
+    return kept, stats
 
 
 def load_rosters(
@@ -81,8 +183,14 @@ def load_rosters(
     position: str | None = None,
     policy: Policy | None = None,
     window: tuple[datetime.date, datetime.date] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[list[CrewMember], dict[str, int]]:
     """
+    `diagnostics`, if given, is filled with what the data cost to load (IMP-520/521):
+    D2 block types mapped by `data.block_type_map`, pairings read from D2's span
+    because D3 lacks their duty times, pairings whose flight hours were derived
+    from clock times, and overlapping blocks trimmed or dropped.
+
     Loads crew from D1 and their blocks from D2, restricted to `window`
     (default: the S1d-04b template window, see select_template_window), with
     block times converted to minutes since that window's start -- the
@@ -110,8 +218,11 @@ def load_rosters(
         d1 = d1.filter(pl.col("position") == position)
     # the dataset uses "fleet" column
     if fleet:
-        # Some rows might have fleet empty? 
-        d1 = d1.filter(pl.col("fleet").str.contains(fleet) | (pl.col("fleet") == fleet))
+        # Some rows might have fleet empty? IMP-522: a fleet group is one scope.
+        d1 = d1.filter(
+            pl.col("fleet").str.contains(fleet)
+            | pl.col("fleet").is_in(sorted(config.fleet_members(cfg, fleet)))
+        )
 
     # Determine exclusions based on employment_status
     # We count reasons
@@ -138,13 +249,15 @@ def load_rosters(
             continue
             
         crew_id = row["crew_id"]
-        # fleet_family or fleet? Let's use fleet for fleet_quals
-        fleet = row["fleet"]
-        
+        # fleet_family or fleet? Let's use fleet for fleet_quals. IMP-522: plus
+        # every fleet that shares its type rating (data.fleet_groups). Named
+        # `crew_fleet`, not `fleet`: that is this function's own filter argument.
+        crew_fleet = row["fleet"]
+
         c = CrewMember(
             crew_id=crew_id,
             base=row["base"],
-            fleet_quals={fleet},
+            fleet_quals=config.fleet_members(cfg, crew_fleet),
             position=row["position"],
             seniority=row["seniority_number"],
             calendar=[]
@@ -162,7 +275,11 @@ def load_rosters(
     def to_minutes(dt: datetime.datetime) -> float:
         return (dt - anchor).total_seconds() / 60.0
 
-    duty_periods_by_pairing = _load_pairing_duty_periods(cfg)
+    duty_periods_by_pairing, incomplete_pairings, estimated_pairings = _load_pairing_duty_periods(cfg)
+    mapped_types: Counter[str] = Counter()
+    refused_types: Counter[str] = Counter()
+    null_time_pairings: set[str] = set()
+    estimated_used: set[str] = set()
 
     for row in d2.sort("start_utc").iter_rows(named=True):
         c_id = row["crew_id"]
@@ -171,12 +288,6 @@ def load_rosters(
 
         c = crew_dict[c_id]
 
-        try:
-            btype = BlockType(row["block_type"])
-        except ValueError:
-            # Fallback or skip if unknown block type? Spec says we should handle basic ones
-            continue
-
         start_dt = parse_dt(row["start_utc"])
         end_dt = parse_dt(row["end_utc"])
 
@@ -184,15 +295,40 @@ def load_rosters(
         if end_dt <= anchor or start_dt >= window_end_dt:
             continue
 
+        # IMP-521: a block type the engine has no name for is either mapped on
+        # purpose (data.block_type_map) or refused -- never skipped. Skipping
+        # made a sick or office-bound pilot look free to be drafted.
+        raw_type = row["block_type"]
+        try:
+            btype = BlockType(raw_type)
+        except ValueError:
+            stand_in = cfg.data.block_type_map.get(raw_type)
+            if stand_in is None:
+                refused_types[raw_type] += 1
+                continue
+            btype = BlockType(stand_in)
+            mapped_types[raw_type] += 1
+
         pairing_id = row["pairing_id"] if row["pairing_id"] else None
         r_type = row["reserve_call_type"] if row["reserve_call_type"] else None
 
-        if btype == BlockType.PAIRING and pairing_id in duty_periods_by_pairing:
+        if pairing_id in incomplete_pairings and btype == BlockType.PAIRING:
+            # IMP-520: D3 has no duty times for this pairing, so D2's own span
+            # stands in. Coarser, but the pilot is correctly busy.
+            null_time_pairings.add(pairing_id)
+
+        if (
+            btype == BlockType.PAIRING
+            and pairing_id in duty_periods_by_pairing
+            and row["start_local"] is not None
+        ):
             # Replace the flat multi-day span with D3's real duty periods.
             # D3 only has "_local" times; D2 has both "_utc" and "_local" for
             # this same row, so derive this row's own UTC offset from its own
             # pair rather than hardcoding a base's timezone (bases differ,
             # hardcoding invites a DST bug).
+            if pairing_id in estimated_pairings:
+                estimated_used.add(pairing_id)
             utc_offset = start_dt - parse_dt(row["start_local"])
             for duty_start_local, duty_end_local, flight_hours in duty_periods_by_pairing[pairing_id]:
                 duty_start = duty_start_local + utc_offset
@@ -212,10 +348,28 @@ def load_rosters(
             pairing_id=pairing_id, reserve_call_type=r_type,
         )
         c.calendar.append(b)
-        
-    # Validate calendars (L0 - non overlapping, sorted).
+
+    if refused_types:
+        raise ValueError(
+            f"D2 carries block type(s) the engine has no name for: {dict(refused_types)} in "
+            f"{window_start}..{window_end}. Map each to an engine block type in "
+            f"configs/base.yaml -> data.block_type_map (SICK: ABSENCE makes the pilot "
+            f"unavailable), or ask the data owner what it means. They are refused, not "
+            f"skipped: a skipped block leaves the pilot looking free."
+        )
+
+    # Validate calendars (L0 - non overlapping, sorted). IMP-520: real rosters
+    # overlap (a day off that runs into a pairing, two pairings stamped over
+    # the same days). data.overlap_policy decides: refuse, or reconcile and count.
+    trimmable = frozenset(BlockType(t) for t in cfg.data.trimmable_block_types)
+    overlap_stats = {"trimmed": 0, "dropped": 0, "crews": 0}
     for c in crew_dict.values():
         c.calendar.sort(key=lambda b: b.start)
+        if cfg.data.overlap_policy == "reconcile":
+            c.calendar, per_crew = _reconcile_overlaps(c.calendar, trimmable)
+            overlap_stats["trimmed"] += per_crew["trimmed"]
+            overlap_stats["dropped"] += per_crew["dropped"]
+            overlap_stats["crews"] += 1 if (per_crew["trimmed"] or per_crew["dropped"]) else 0
         for i in range(1, len(c.calendar)):
             prev = c.calendar[i - 1]
             curr = c.calendar[i]
@@ -225,11 +379,21 @@ def load_rosters(
                     f"blocks {prev} and {curr}. See S1d-04b2 (blocked): D3-derived "
                     f"PAIRING duty-period ends routinely spill past D2's own "
                     f"pairing-end boundary into the next D2-scheduled block -- "
-                    f"this is not yet reconciled."
+                    f"this is not yet reconciled. Set data.overlap_policy: reconcile "
+                    f"to trim and count them instead."
                 )
-
         active_crew.append(c)
-        
+
+    if diagnostics is not None:
+        diagnostics.update({
+            "block_types_mapped": dict(mapped_types),
+            "pairings_without_duty_times": len(null_time_pairings),
+            "pairings_block_hours_estimated": len(estimated_used),
+            "overlaps_trimmed": overlap_stats["trimmed"],
+            "overlaps_dropped": overlap_stats["dropped"],
+            "crews_with_overlaps": overlap_stats["crews"],
+        })
+
     if policy:
         # We need to apply reserves per target
         # Map target -> max reserves, and the SC/LC split of that peak entry.
@@ -252,10 +416,18 @@ def load_rosters(
         # In D1, we mapped `fleet` to `fleet_quals={fleet}`. We can just use that single fleet for grouping.
         from collections import defaultdict
         groups = defaultdict(list)
+        # IMP-522: a crew member belongs to the policy's own name for their fleet
+        # when they qualify for one (a group member qualifies for the group's
+        # scope fleet), else to their primary fleet -- never to whichever
+        # element a set happens to iterate first.
+        target_fleets = {k[1] for k in target_reserves}
         for c in active_crew:
-            f = next(iter(c.fleet_quals)) if c.fleet_quals else ""
+            matching = sorted(c.fleet_quals & target_fleets)
+            f = matching[0] if matching else c.primary_fleet
             groups[(c.base, f, c.position)].append(c)
             
+        _check_reserve_shortfall(policy.policy_id, target_reserves, groups, base, fleet, position)
+
         reserve_crew_all = []
         line_crew_all = []
         
@@ -270,11 +442,11 @@ def load_rosters(
                     clean_cal = [b for b in c.calendar if b.btype != BlockType.PAIRING]
                     authentic_reserve_calendars.append(clean_cal)
                     
-            # S1b-02 AC3: who ends up on reserve, from configs/base.yaml ->
-            # population.reserve_bid_rule rather than hardcoded. junior_first
-            # (the default, and the previous hardcoded behaviour) matches how a
-            # seniority bid resolves: senior crew bid lines, reserve is what is
-            # left over.
+            # S1b-02 AC3 / IMP-118: who ends up on reserve, from
+            # configs/base.yaml -> population.reserve_bid_rule (senior_first
+            # today; see the decision note there). Lower seniority number =
+            # more senior, so senior_first sorts ascending, junior_first
+            # descending.
             junior_first = cfg.population.reserve_bid_rule == "junior_first"
             crew_list.sort(key=lambda c: c.seniority, reverse=junior_first)
             
@@ -321,6 +493,43 @@ def load_rosters(
         active_crew.sort(key=lambda c: c.crew_id)
 
     return active_crew, exclusion_counts
+
+
+class ReserveShortfallError(ValueError):
+    """A policy asks for more reserves than a (base, fleet, position) group has active crew."""
+
+
+def _check_reserve_shortfall(
+    policy_id: str,
+    target_reserves: dict[tuple[str, str, str], int],
+    groups: dict[tuple[str, str, str], list[CrewMember]],
+    base: str | None,
+    fleet: str | None,
+    position: str | None,
+) -> None:
+    """IMP-119: refuse to carve fewer reserves than the policy asks for.
+
+    `crew_list[:n_res]` silently returns everyone when a group is smaller than
+    the target, and since the SC/LC split takes the first `short_call`
+    reserves as SC, the whole shortfall used to come out of long-call -- so a
+    policy labelled R14 could run with fewer reserves and nothing said so.
+    Only groups inside this call's own filter are checked: a policy entry for
+    another base is not this load's to satisfy.
+    """
+    shortfalls = []
+    for key, wanted in sorted(target_reserves.items()):
+        k_base, k_fleet, k_position = key
+        if (base and k_base != base) or (fleet and k_fleet != fleet) or (position and k_position != position):
+            continue
+        available = len(groups.get(key, []))
+        if wanted > available:
+            shortfalls.append(f"{'/'.join(key)}: {wanted} requested, {available} active crew available")
+    if shortfalls:
+        raise ReserveShortfallError(
+            f"policy {policy_id!r} asks for more reserves than the roster can supply -- "
+            + "; ".join(shortfalls)
+            + ". Lower the policy's short_call/long_call, or widen the roster."
+        )
 
 
 def load_cross_base_reserves(

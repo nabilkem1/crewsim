@@ -105,7 +105,11 @@ def test_missing_column_raises_schemaerror(tmp_path: pathlib.Path) -> None:
         loaders.load_dataset(_tmp_cfg(tmp_path), "d9_station_days")
 
 
-def test_extra_column_raises_schemaerror(tmp_path: pathlib.Path) -> None:
+def _with_data(cfg: config.BaseConfig, **update: object) -> config.BaseConfig:
+    return cfg.model_copy(update={"data": cfg.data.model_copy(update=update)})
+
+
+def test_extra_column_raises_schemaerror_when_configured_to_refuse(tmp_path: pathlib.Path) -> None:
     schema = loaders.DATASET_SCHEMAS["d9_station_days"]
     header = [*schema, "unexpected_column"]
     _write_csv(
@@ -113,8 +117,52 @@ def test_extra_column_raises_schemaerror(tmp_path: pathlib.Path) -> None:
         header,
         [["YUL", "2023-08-01", "CALM", "winter_sun", "0.5", "surprise"]],
     )
+    cfg = _with_data(_tmp_cfg(tmp_path), extra_columns="refuse")
     with pytest.raises(loaders.SchemaError, match="extra"):
+        loaders.load_dataset(cfg, "d9_station_days")
+
+
+def test_extra_column_is_ignored_by_default_and_not_loaded(tmp_path: pathlib.Path) -> None:
+    schema = loaders.DATASET_SCHEMAS["d9_station_days"]
+    _write_csv(
+        tmp_path / "d9_station_days.csv",
+        [*schema, "unexpected_column"],
+        [["YUL", "2023-08-01", "CALM", "winter_sun", "0.5", "surprise"]],
+    )
+    df = loaders.load_dataset(_tmp_cfg(tmp_path), "d9_station_days")
+    assert df.columns == list(schema)
+    assert df.height == 1
+    report = loaders.column_report(_tmp_cfg(tmp_path))
+    assert report["d9_station_days"]["ignored"] == ["unexpected_column"]
+
+
+def test_a_missing_column_is_still_refused_when_extras_are_ignored(tmp_path: pathlib.Path) -> None:
+    schema = loaders.DATASET_SCHEMAS["d9_station_days"]
+    header = [c for c in schema if c != "season"] + ["unexpected_column"]
+    _write_csv(tmp_path / "d9_station_days.csv", header, [["YUL", "2023-08-01", "CALM", "0.5", "x"]])
+    with pytest.raises(loaders.SchemaError, match="missing"):
         loaders.load_dataset(_tmp_cfg(tmp_path), "d9_station_days")
+
+
+def test_optional_columns_are_loaded_when_present_and_absent_otherwise(tmp_path: pathlib.Path) -> None:
+    legs = loaders.DATASET_SCHEMAS["d3_pairing_legs"]
+    row = ["P1", "1", "1", "TS1", "YUL", "YYZ", "2024-05-01T10:00", "2024-05-01T11:00",
+           "2024-05-01T12:00", "2024-05-01T12:30", "1.0"]
+    _write_csv(tmp_path / "d3_pairing_legs.csv", [*legs, "deadhead", "other_extra"], [[*row, "1", "z"]])
+    df = loaders.load_dataset(_tmp_cfg(tmp_path), "d3_pairing_legs")
+    assert "deadhead" in df.columns and df.schema["deadhead"] == pl.Int64
+    assert "other_extra" not in df.columns
+    _write_csv(tmp_path / "d3_pairing_legs.csv", list(legs), [row])
+    assert "deadhead" not in loaders.load_dataset(_tmp_cfg(tmp_path), "d3_pairing_legs").columns
+
+
+def test_d12_can_come_from_a_named_file_when_the_corpus_has_none(tmp_path: pathlib.Path) -> None:
+    cfg = _tmp_cfg(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        loaders.load_agreement_rules(cfg)
+    named = cfg.paths.model_copy(update={"agreement_rules_file": CORPUS / "d12_agreement_rules.yaml"})
+    rules = loaders.load_agreement_rules(cfg.model_copy(update={"paths": named}))
+    assert rules["pilots"]["agreement"] == "ALPA"
 
 
 @pytest.mark.parametrize("banned", sorted(loaders.BANNED_COLUMNS))
@@ -129,6 +177,27 @@ def test_a_name_shaped_column_is_refused_not_silently_loaded(
     _write_csv(tmp_path / "d1_crew_master.csv", header, [row])
     with pytest.raises(loaders.SchemaError, match="Law 25"):
         loaders.load_dataset(_tmp_cfg(tmp_path), "d1_crew_master")
+
+
+@pytest.mark.parametrize("header_name", ["passenger_name", "Passenger_Name", " EMAIL "])
+def test_banned_column_matching_ignores_case_and_names_the_column(
+    tmp_path: pathlib.Path, header_name: str
+) -> None:
+    """IMP-303: banned columns match case-insensitively and are reported by name,
+    not as generic schema drift -- even though they are also undeclared."""
+    schema = dict(loaders.DATASET_SCHEMAS["d1_crew_master"])
+    header = [*schema, header_name]
+    _write_csv(tmp_path / "d1_crew_master.csv", header, [["x"] * len(header)])
+    with pytest.raises(loaders.SchemaError, match="identifying column") as exc:
+        loaders.load_dataset(_tmp_cfg(tmp_path), "d1_crew_master")
+    assert header_name in str(exc.value)
+    assert "schema drift" not in str(exc.value)
+
+
+def test_no_declared_schema_column_is_banned() -> None:
+    """Guard the guard: extending BANNED_COLUMNS must not ban a real column."""
+    declared = [c for schema in loaders.DATASET_SCHEMAS.values() for c in schema]
+    assert loaders.banned_columns_in(declared) == []
 
 
 def test_reads_gzipped_csv_identically_to_plain(tmp_path: pathlib.Path) -> None:

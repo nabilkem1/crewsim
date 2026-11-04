@@ -81,6 +81,6 @@ class Policy(_Model):
 
 def load_policy(path: str | Path) -> Policy:
     """Load and validate a policy from a YAML file."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return Policy(**data)

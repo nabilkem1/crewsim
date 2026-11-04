@@ -10,7 +10,8 @@ from crewsim.data import quality
 
 def _dummy_load_dataset_valid(cfg: dict[str, Any], name: str) -> pl.DataFrame:
     if name == "d1_crew_master":
-        return pl.DataFrame({"crew_id": ["C1", "C2"], "employment_status": ["ACTIVE", "TERMINATED"]})
+        return pl.DataFrame({"crew_id": ["C1", "C2"], "employment_status": ["ACTIVE", "TERMINATED"],
+                             "base": ["YUL", "YUL"], "crew_group": ["PILOT", "PILOT"]})
     elif name == "d2_rosters":
         return pl.DataFrame({
             "crew_id": ["C1", "C2"], "pairing_id": ["P1", None],
@@ -32,8 +33,9 @@ def _dummy_load_dataset_valid(cfg: dict[str, Any], name: str) -> pl.DataFrame:
         return pl.DataFrame({
             "crew_id": ["C1"], "linked_pairing_id": ["P1"], "pay_code": ["DRAFT_PREM"]
         })
-    elif name == "d9_station_days":
-        return pl.DataFrame({"station": ["YUL", "YUL"], "date": ["2023-01-01", "2023-01-02"]})
+    elif name == "d8_flight_movements":
+        # F-42: D8 departures every day at the crew base (replaces the D9 gate).
+        return pl.DataFrame({"origin": ["YUL", "YUL", "YYZ"], "date": ["2023-01-01", "2023-01-02", "2023-01-01"]})
     elif name == "d10_positioning_invoices":
         return pl.DataFrame({"crew_id": ["C1"], "pairing_id": ["P1"]})
     elif name == "d11_training_sessions":
@@ -81,7 +83,8 @@ def test_quality_score_empty_is_zero() -> None:
 def test_quality_report_fails(monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]) -> None:
     def dummy_load_dataset_fail(cfg: dict[str, Any], name: str) -> pl.DataFrame:
         if name == "d1_crew_master":
-            return pl.DataFrame({"crew_id": ["C1"], "employment_status": ["INVALID_STATUS"]})
+            return pl.DataFrame({"crew_id": ["C1"], "employment_status": ["INVALID_STATUS"],
+                                 "base": ["YUL"], "crew_group": ["PILOT"]})
         elif name == "d2_rosters":
             return pl.DataFrame({
                 "crew_id": ["C_INVALID"], "pairing_id": ["P_INVALID"],
@@ -105,8 +108,9 @@ def test_quality_report_fails(monkeypatch: MonkeyPatch, capsys: CaptureFixture[s
             return pl.DataFrame({
                 "crew_id": ["C1"], "linked_pairing_id": ["P2"], "pay_code": ["DRAFT_PREM"]
             })
-        elif name == "d9_station_days":
-            return pl.DataFrame({"station": ["YUL"], "date": ["2023-01-01"]})
+        elif name == "d8_flight_movements":
+            # 2 of 4 days in YUL's own span have departures -> 50% coverage
+            return pl.DataFrame({"origin": ["YUL", "YUL"], "date": ["2023-01-01", "2023-01-04"]})
         elif name == "d10_positioning_invoices":
             return pl.DataFrame({"crew_id": ["C1"], "pairing_id": ["P1"]})
         elif name == "d11_training_sessions":
@@ -123,5 +127,6 @@ def test_quality_report_fails(monkeypatch: MonkeyPatch, capsys: CaptureFixture[s
     assert "D6/D7 Join Recovery (draft events backed by payroll receipts): 0.0% recovered (threshold 80%) [FAIL]" in out
     assert "D2 pairing_id referential integrity: 100.00% orphaned (1 of 1 rows) [FAIL]" in out
     assert "D2 crew_id referential integrity: 100.00% orphaned (1 of 1 rows) [FAIL]" in out
+    assert "D8 Station-day coverage (daily departures at every crew base, regime HMM input): 50.0% of base-days covered (threshold 98%) [FAIL]" in out
     assert "invalid values" in out
     assert "Overall score:" in out

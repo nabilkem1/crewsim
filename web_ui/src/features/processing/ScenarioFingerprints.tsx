@@ -171,7 +171,7 @@ const Balloon: React.FC<{ anchor: DOMRect; children: React.ReactNode }> = ({ anc
         // Chrome, not the neutral ramp: this chip is always dark, in both
         // themes -- see the --chrome-* token comment in index.css.
         background: 'var(--chrome-bg)',
-        color: 'white',
+        color: 'var(--chrome-text-strong)',
         padding: '0.35rem 0.6rem',
         borderRadius: 'var(--radius-md)',
         fontSize: '0.72rem',
@@ -337,7 +337,7 @@ export const ScenarioFingerprints: React.FC<{ jobId: string }> = ({ jobId }) => 
         cursor: 'pointer',
         border: '1px solid var(--border-default)',
         background: sortKey === key ? 'var(--color-primary-600)' : 'transparent',
-        color: sortKey === key ? 'white' : 'var(--color-text-base)',
+        color: sortKey === key ? 'var(--color-on-primary)' : 'var(--color-text-base)',
       }}
     >
       {label}
@@ -500,7 +500,7 @@ export const ScenarioFingerprints: React.FC<{ jobId: string }> = ({ jobId }) => 
                     background:
                       openScenario === s.scenario ? 'var(--color-primary-600)' : 'transparent',
                     color:
-                      openScenario === s.scenario ? 'white' : 'var(--color-neutral-500)',
+                      openScenario === s.scenario ? 'var(--color-on-primary)' : 'var(--color-neutral-500)',
                     fontSize: '0.7rem',
                     lineHeight: 1,
                     fontWeight: 700,

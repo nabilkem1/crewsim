@@ -227,44 +227,51 @@ def test_welch_accepts_a_warmup_that_settled_before_the_boundary():
     assert result["ok"] is True
 
 
-def test_a_state_with_no_outgoing_transition_backs_off_to_the_marginal_not_identity(monkeypatch):
+def test_a_rarely_seen_state_never_becomes_absorbing(monkeypatch, tmp_path):
     """REVIEW-2: an identity fallback row makes the state ABSORBING -- any
     scenario entering it stays there for the whole horizon, inflating
-    E[C]/CVaR95 with a pure modelling artifact. The AUD-18 rewrite (one
-    station, season+window filtered) makes such sparse states reachable."""
+    E[C]/CVaR95 with a pure modelling artifact. F-42: the regime is now a
+    hidden Markov model; its Dirichlet pseudo-count on transitions means no
+    row can be empty or identity, however sparse a state is -- here the only
+    disrupted day is the LAST one, so it has no observed successor at all."""
+    import datetime
+
     import polars as pl
 
     from crewsim.calibration import regime
 
-    days = [f"2024-01-{i:02d}" for i in range(1, 11)]
-    # SEVERE appears only on the LAST day, so it has no successor at all.
-    classes = ["CALM"] * 9 + ["SEVERE"]
+    cfg = _cfg()
+    hmm_cfg = cfg.calibration.regime_hmm.model_copy(
+        update={"sick_call_exposure": "constant", "n_restarts": 2, "candidate_n_states": []}
+    )
+    cfg = cfg.model_copy(update={"calibration": cfg.calibration.model_copy(update={"regime_hmm": hmm_cfg})})
+    days = [datetime.date(2024, 1, i) for i in range(1, 11)]
+    delayed = [0] * 9 + [20]                      # one bad day, at the very end
 
-    def fake_load(cfg, name):
-        if name == "d9_station_days":
-            return pl.DataFrame({
-                "station": ["YUL"] * 10, "date": days,
-                "disruption_class": classes, "season": ["winter_sun"] * 10,
-            })
+    def fake_load(cfg_, name):
+        if name == "d1_crew_master":
+            return pl.DataFrame({"crew_id": ["P1"], "base": ["YUL"], "crew_group": ["PILOT"],
+                                 "employment_status": ["ACTIVE"]})
         if name == "d4_absences":
             return pl.DataFrame({"absence_start": days, "base": ["YUL"] * 10})
         if name == "d8_flight_movements":
+            rows = [(d, 60 if i < n else 0) for d, n in zip(days, delayed, strict=True) for i in range(30)]
             return pl.DataFrame({
-                "date": days, "delay_minutes": [0] * 10,
-                "cancelled": [0] * 10, "origin": ["YUL"] * 10,
+                "date": [r[0] for r in rows], "delay_minutes": [r[1] for r in rows],
+                "cancelled": [0] * len(rows), "origin": ["YUL"] * len(rows),
             })
-        return pl.DataFrame()
+        raise AssertionError(f"unexpected dataset {name}")
 
     monkeypatch.setattr(regime.loaders, "load_dataset", fake_load)
-    monkeypatch.setattr(regime.config, "ensure_dir", lambda cfg, key: __import__("pathlib").Path("/tmp"))
+    # pytest's tmp_path, not a literal "/tmp": that does not exist on Windows.
+    monkeypatch.setattr(regime.config, "ensure_dir", lambda cfg, key: tmp_path)
 
-    res = regime.fit_regime(_cfg(), "winter_sun")
+    res = regime.fit_regime(cfg, "winter_sun")
 
-    assert "SEVERE" in res["transition_rows_backed_off"], "the sparse row must be recorded, not silent"
-    assert res["matrix"]["SEVERE"]["SEVERE"] != 1.0, "identity row = absorbing state"
-    assert res["matrix"]["SEVERE"] == res["pi0"]
-    for row in res["matrix"].values():
+    for state, row in res["matrix"].items():
         assert abs(sum(row.values()) - 1.0) < 1e-9
+        assert row[state] < 1.0, f"{state} is absorbing"
+        assert all(p > 0 for p in row.values()), "smoothing keeps every transition possible"
 
 
 def test_recall_is_undefined_not_zero_when_the_window_holds_no_ground_truth(tmp_path):
@@ -290,12 +297,13 @@ def test_recall_is_undefined_not_zero_when_the_window_holds_no_ground_truth(tmp_
     assert scored["recall"] == 0.0 and scored["gate_pass"] is False
 
 
-def test_d9_completeness_charges_each_station_only_for_its_own_reporting_span():
+def test_station_day_completeness_charges_each_station_only_for_its_own_reporting_span():
     """REVIEW-6: a seasonal outstation reporting 3 of 10 days is complete,
-    not 30% -- but an interior gap in a station's own span is still caught."""
+    not 30% -- but an interior gap in a station's own span is still caught.
+    (F-42: the same rule now gates D8 coverage at crew bases, not D9.)"""
     import polars as pl
 
-    from crewsim.data.quality import d9_completeness
+    from crewsim.data.quality import station_day_completeness as d9_completeness
 
     full = [f"2024-01-{i:02d}" for i in range(1, 11)]
     seasonal = [f"2024-01-{i:02d}" for i in range(1, 4)]
@@ -324,11 +332,6 @@ def test_an_unfittable_delay_mixture_names_the_scope_instead_of_raising_from_skl
     cfg = _cfg()
 
     def fake_load(cfg_, name):
-        if name == "d9_station_days":
-            return pl.DataFrame({
-                "date": ["2024-01-01"], "station": [cfg.scope.base],
-                "disruption_class": ["NORMAL"], "season": ["winter_sun"],
-            })
         if name == "d8_flight_movements":
             return pl.DataFrame({
                 "date": ["2024-01-01"], "origin": [cfg.scope.base],
@@ -336,6 +339,11 @@ def test_an_unfittable_delay_mixture_names_the_scope_instead_of_raising_from_skl
             })
         return pl.DataFrame()
 
+    # F-42: the day's regime comes from the computed HMM label table.
+    regime_days = pl.DataFrame({
+        "date": ["2024-01-01"], "station": [cfg.scope.base],
+        "disruption_class": ["NORMAL"], "season": ["winter_sun"],
+    })
     monkeypatch.setattr(delays.loaders, "load_dataset", fake_load)
     with pytest.raises(ValueError, match="delay-duration mixture needs at least"):
-        delays.fit_delays(cfg, "winter_sun")
+        delays.fit_delays(cfg, "winter_sun", regime_days=regime_days)

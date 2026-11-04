@@ -56,6 +56,54 @@ def test_duty_end_and_rest_end_splits_reserve():
     for i in range(1, len(crew.calendar)):
         assert crew.calendar[i-1].end <= crew.calendar[i].start
 
+def test_reserve_duty_records_flight_mins():
+    """IMP-102: a reserve's covered trip counts toward their L3 flight limit.
+
+    assign_reserve used to build the DRAFTED_DUTY block without flight_mins,
+    so get_rolling_counters saw the duty hours but zero flight hours for every
+    trip a reserve flew. The draft path (cascade.py) always carried it.
+    """
+    crew = CrewMember(
+        crew_id="R001", base="YUL", fleet_quals={"A321"}, position="FO", seniority=100,
+        calendar=[Block(start=0, end=4000, btype=BlockType.RESERVE, reserve_call_type="SC")],
+    )
+    assign_reserve(crew, 1000, 1600, 600, "PAIR1", flight_mins=420.0)
+
+    duty = next(b for b in crew.calendar if b.btype == BlockType.DRAFTED_DUTY)
+    assert duty.flight_mins == 420.0
+    _, flight = crew.get_rolling_counters(end_time=5000, days=7)
+    assert flight == pytest.approx(420.0)
+
+
+def test_reserve_near_flight_limit_becomes_ineligible_after_one_trip():
+    """IMP-102 AC3: the recorded flight time actually binds L3.
+
+    A reserve who has just flown 34 h is one 2 h trip away from the 35 h 7-day
+    limit in configs/base.yaml. Before the fix the covered trip recorded 0
+    flight minutes and the next trip was approved.
+    """
+    from crewsim.engine.legality import check_l3_rolling_7d
+    from crewsim.engine.state import OpenTimeItem
+    from tests.engine.conftest import legality_cfg
+
+    cfg = legality_cfg()
+    limit_mins = cfg.legality.rolling_7d_flight_limit_hours * 60
+    crew = CrewMember(
+        crew_id="R001", base="YUL", fleet_quals={"A321"}, position="FO", seniority=100,
+        calendar=[Block(start=0, end=20000, btype=BlockType.RESERVE, reserve_call_type="SC")],
+    )
+    # One covered trip carrying all but 60 min of the 7-day flight allowance
+    # (a long duty so L3's DUTY limit is not what binds).
+    assign_reserve(crew, 1000, 1800, 600, "PAIR1", flight_mins=limit_mins - 60)
+    next_trip = OpenTimeItem(
+        uid=2, pairing_id="PAIR2", base="YUL", fleet="A321", position="FO",
+        start=3000, end=3200, deadline=3000, origin="SICK_CALL", root_event_uid=2,
+        flight_mins=120,
+    )
+    verdict = check_l3_rolling_7d(crew, next_trip, cfg)
+    assert not verdict.legal and "flight" in verdict.reason
+
+
 def test_open_time_item_deadline_is_report_time_minus_the_configured_lead():
     """The deadline ARITHMETIC only -- renamed, because the previous name
     ("...held") promised something this test never checked: it drives no
@@ -73,6 +121,7 @@ def test_open_time_item_deadline_is_report_time_minus_the_configured_lead():
         PathsConfig,
         PopulationConfig,
         QualityGateThresholds,
+        RegimeHmmConfig,
         RegimeQuantiles,
         ScopeConfig,
     )
@@ -88,8 +137,18 @@ def test_open_time_item_deadline_is_report_time_minus_the_configured_lead():
         horizon=HorizonConfig(warmup_days=7, measurement_days=28, cooldown_days=7),
         population=PopulationConfig(roster_size=120, displaced_flying="absorb",
                                      reserve_bid_rule="junior_first"),
-        quality_gates=QualityGateThresholds(d4_link_pass=0.9, d4_link_marginal=0.8, d6_d7_join_pass=0.9, d9_completeness_pass=0.9),
-        calibration=CalibrationConfig(delay_gmm_components=2, delay_gmm_random_state=42, regime_quantiles=RegimeQuantiles(p_calm=0.5, p_normal=0.8, p_disrupted=0.9), overdispersion_threshold=1.5, sick_call_min_duration_days=0.5),
+        quality_gates=QualityGateThresholds(d4_link_pass=0.9, d4_link_marginal=0.8, d6_d7_join_pass=0.9, station_day_coverage_pass=0.9),
+        calibration=CalibrationConfig(
+            delay_gmm_components=2, delay_gmm_random_state=42,
+            regime_quantiles=RegimeQuantiles(p_calm=0.5, p_normal=0.8, p_disrupted=0.9),
+            regime_hmm=RegimeHmmConfig(
+                n_restarts=2, max_iter=50, tol=1e-4, seed=1, init_self_transition=0.7,
+                transition_pseudocount=0.5, min_probability=1e-6, candidate_n_states=[4],
+                delay_threshold_minutes=15, sick_call_exposure="constant",
+                restart_agreement_tol=1e-4, min_state_share=0.01,
+            ),
+            overdispersion_threshold=1.5, sick_call_min_duration_days=0.5,
+        ),
         draft_reconstruction=DraftReconstructionConfig(premium_pay_codes=[], short_notice_reason_codes=[], initiator_filter=[]),
         cascade_reconstruction=CascadeReconstructionConfig(window_days=7, cascade_reason_codes=[], confidence_level=0.95),
         mode="FULL",

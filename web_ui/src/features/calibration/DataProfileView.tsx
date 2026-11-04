@@ -37,10 +37,10 @@ export const DataProfileView: React.FC = () => {
           disabled={loading}
           style={{
             padding: 'var(--spacing-2) var(--spacing-4)',
-            backgroundColor: 'var(--color-primary-600)',
-            color: 'white',
+            backgroundColor: 'var(--action-bg)',
+            color: 'var(--action-fg)',
             border: 'none',
-            borderRadius: 'var(--radius-md)',
+            borderRadius: 'var(--radius-button)',
             fontWeight: 500,
             cursor: loading ? 'not-allowed' : 'pointer'
           }}

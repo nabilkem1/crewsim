@@ -94,6 +94,52 @@ def test_build_r_star_lookup_and_real_recommender():
     # not an interpolated or invented value.
     assert recommended <= {4, 10}
 
+def test_roster_size_is_not_exercised_on_the_real_path():
+    """IMP-213: the engine never reads roster_size, so on the real path V9
+    must not sweep it and count the identical results as stability. The axis
+    collapses to the configured value and is reported NOT_EXERCISED."""
+    from crewsim.gates.v9_sensitivity import NOT_EXERCISED
+
+    cfg = types.SimpleNamespace(
+        sensitivity=types.SimpleNamespace(
+            roster_size=[100, 120, 140], terminal_penalty=[1.5], lambda_risk_dial=[0.0, 1.0],
+            instability_threshold=2,
+        ),
+        population=types.SimpleNamespace(roster_size=120),
+    )
+    lookup = {(4, 1.5): (100.0, 150.0), (10, 1.5): (110.0, 120.0)}
+    result = run_v9_gate(cfg, r_lookup=lookup)
+
+    assert result["parameters"]["roster_size"] == NOT_EXERCISED
+    assert "roster_size" in result["not_exercised"]
+    assert {row["roster_size"] for row in result["surface"]} == {120}
+    assert result["parameters"]["lambda"] == "EXERCISED"
+
+
+def test_print_v9_report_lists_not_exercised_parameters(capsys):
+    cfg = types.SimpleNamespace(
+        sensitivity=types.SimpleNamespace(
+            roster_size=[100, 140], terminal_penalty=[1.5], lambda_risk_dial=[0.0],
+            instability_threshold=2,
+        ),
+        population=types.SimpleNamespace(roster_size=120),
+    )
+    from crewsim.gates.v9_sensitivity import print_v9_report
+
+    print_v9_report(run_v9_gate(cfg, r_lookup={(4, 1.5): (1.0, 2.0)}))
+    out = capsys.readouterr().out
+    assert "[NOT_EXERCISED] roster_size" in out
+    assert "Sweeping terminal_penalty, lambda..." in out
+
+
+def test_unconsumed_notice_is_built_once_per_key():
+    """IMP-213: each declared-but-unconsumed key yields exactly one notice."""
+    cfg = config.load()
+    notices = config.unconsumed_notices(cfg)
+    assert len(notices) == len(set(notices))
+    assert sum("pairings_per_bid_period" in n for n in notices) == 1
+
+
 def test_terminal_penalty_override_reaches_the_real_cost_model():
     """The terminal_penalty sweep axis must genuinely change what the
     simulation charges, not just relabel the same cached run -- proved

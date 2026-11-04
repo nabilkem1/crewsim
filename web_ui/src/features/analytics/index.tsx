@@ -118,7 +118,7 @@ export const AnalyticsDashboard: React.FC = () => {
               fontSize: '0.85rem',
               border: activeTab === tab.id ? 'none' : '1px solid var(--border-default)',
               backgroundColor: activeTab === tab.id ? 'var(--color-primary-600)' : 'transparent',
-              color: activeTab === tab.id ? 'white' : 'var(--color-text-base)',
+              color: activeTab === tab.id ? 'var(--color-on-primary)' : 'var(--color-text-base)',
             }}
           >
             {tab.label}
@@ -166,7 +166,7 @@ export const AnalyticsDashboard: React.FC = () => {
                         border: '1px solid var(--border-default)',
                         backgroundColor:
                           i === policyIndex ? 'var(--color-primary-600)' : 'transparent',
-                        color: i === policyIndex ? 'white' : 'var(--color-text-base)',
+                        color: i === policyIndex ? 'var(--color-on-primary)' : 'var(--color-text-base)',
                       }}
                     >
                       {s.policy}

@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from crewsim.api.db import Job, SessionLocal, get_db
+from crewsim.api.db import Job, SessionLocal, get_db, get_job_or_404, record_job_failure
 from crewsim.api.runlog import RunLog
 from crewsim.api.streaming import stream_job
 
@@ -331,6 +331,10 @@ def run_processing_job(
                 "reserve_dispatches_mean": r.get("reserve_dispatches_mean"),
                 "reserve_staffing_days_mean": r.get("reserve_staffing_days_mean"),
                 "utilization_rate": r.get("utilization_rate"),
+                # IMP-117: SC/LC reserve-days paid vs assignments used, so a
+                # call type that is paid for and never used is visible.
+                "reserve_by_call_type": r.get("reserve_by_call_type"),
+                "unused_paid_call_types": r.get("unused_paid_call_types"),
                 # WN-004: None until configs/base.yaml's service_level is a
                 # real (non-[CONFIRM]) figure -- kpis.py already refuses to
                 # fabricate a verdict when cfg.service_level is unset.
@@ -398,7 +402,7 @@ def run_processing_job(
 
         representative_policy_name = config_ids[0]
         representative_policy = load_policy(
-            config.repo_root() / "configs" / "policies" / f"{representative_policy_name}.yaml"
+            config.policy_path(representative_policy_name)
         )
         gates = compute_core_gates(cfg, costs, representative_policy, _MASTER_SEED)
         gates.append({
@@ -471,27 +475,9 @@ def run_processing_job(
             job.log = entries
             db.commit()
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller via the job row
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = "failed"
-            job.error_message = str(exc)
-            # Record the failure in the log too, so the stream shows where it
-            # stopped rather than just going quiet.
-            entries = list(job.log or [])
-            if entries and entries[-1].get("status") == "running":
-                entries[-1] = {**entries[-1], "status": "failed"}
-            entries.append(
-                {
-                    "step": None,
-                    "total": _TOTAL_STEPS,
-                    "message": str(exc),
-                    "detail": None,
-                    "status": "error",
-                    "duration_ms": None,
-                }
-            )
-            job.log = entries
-            db.commit()
+        # Records the failure in the log too, so the stream shows where it
+        # stopped rather than just going quiet.
+        record_job_failure(db, job_id, exc, total_steps=_TOTAL_STEPS)
     finally:
         db.close()
 
@@ -543,7 +529,7 @@ def run_drilldown_job(
         cfg = config.load()
         cfg = cfg.model_copy(update={"scope": cfg.scope.model_copy(update={"season": season})})
         costs = config.load_costs(cfg)
-        policy = load_policy(config.repo_root() / "configs" / "policies" / f"{policy_name}.yaml")
+        policy = load_policy(config.policy_path(policy_name))
         runlog.done(f"policy {policy.policy_id}, season {season}")
 
         runlog.start(f"tracing {num_scenarios} scenario(s)")
@@ -579,11 +565,7 @@ def run_drilldown_job(
         job.progress = _PERCENT
         db.commit()
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller via the job row
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = "failed"
-            job.error_message = str(exc)
-            db.commit()
+        record_job_failure(db, job_id, exc)
     finally:
         db.close()
 
@@ -650,13 +632,13 @@ def _validate_policy_seasons(policy_names: list[str], season: str) -> None:
 
     Checked at the request so the mismatch is never queued at all.
     """
+    from crewsim import config
     from crewsim.engine.policy import load_policy
-    from crewsim.reporting.grid import _policy_path
 
     mismatched = []
     for name in policy_names:
         try:
-            policy = load_policy(_policy_path(name))
+            policy = load_policy(config.policy_path(name))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Cannot load policy {name!r}: {exc}") from exc
         if policy.season != season:
@@ -766,13 +748,6 @@ def get_live_status(db: Session = Depends(get_db)) -> list[Job]:
     )
 
 
-def _get_job_or_404(job_id: str, db: Session) -> Job:
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-
 # One parsed tape per (scenario, policy, run parameters). A miss costs one
 # re-run of a single scenario -- ~1.5s -- so a planner stepping between
 # policies on the same scenario waits once, not every time. Small maxsize
@@ -790,12 +765,11 @@ def _cached_tape(
     can never disagree with a fresh run."""
     from crewsim import config as cfgmod
     from crewsim.engine.policy import load_policy
-    from crewsim.reporting.grid import _policy_path
     from crewsim.reporting.tape import build_tape
 
     cfg = cfgmod.load()
     cfg = cfg.model_copy(update={"scope": cfg.scope.model_copy(update={"season": season})})
-    policy = load_policy(_policy_path(policy_name))
+    policy = load_policy(cfgmod.policy_path(policy_name))
     return build_tape(cfg, cfgmod.load_costs(cfg), policy, scenario_id, master_seed, n_scenarios)
 
 
@@ -810,7 +784,7 @@ def get_scenario_events(
     (season, master_seed, n_scenarios, policy, scenario_id). Re-running one
     scenario costs ~1.5s and keeps the job row small.
     """
-    job = _get_job_or_404(job_id, db)
+    job = get_job_or_404(job_id, db)
     results = job.results or {}
     scoreboard = results.get("scoreboard") or []
     if not scoreboard:
@@ -860,7 +834,7 @@ def cancel_processing_job(job_id: str, db: Session = Depends(get_db)) -> dict[st
     Under joblib (`jobs != 1`) the callback fires only between policies, so a
     cancel lands at the end of the policy in flight.
     """
-    job = _get_job_or_404(job_id, db)
+    job = get_job_or_404(job_id, db)
     if job.status not in ("queued", "running"):
         raise HTTPException(
             status_code=409,
@@ -892,7 +866,7 @@ def get_scenario_fingerprints(job_id: str, db: Session = Depends(get_db)) -> dic
     days is 2,100 cells, and `{"regime": "...", "sick_calls": n}` per cell
     would spend most of the payload on repeated key names.
     """
-    job = _get_job_or_404(job_id, db)
+    job = get_job_or_404(job_id, db)
     results = job.results or {}
     if not results:
         raise HTTPException(
@@ -1006,7 +980,7 @@ def get_logs(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     The non-streaming counterpart to `/stream` below -- for a job that has
     already finished, or a client that cannot hold a connection open.
     """
-    job = _get_job_or_404(job_id, db)
+    job = get_job_or_404(job_id, db)
     return {
         "job_id": job_id,
         "status": job.status,
@@ -1028,7 +1002,7 @@ async def stream_progress(job_id: str) -> StreamingResponse:
 
 @router.delete("/{job_id}")
 def delete_job(job_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
-    job = _get_job_or_404(job_id, db)
+    job = get_job_or_404(job_id, db)
     db.delete(job)
     db.commit()
     return {"status": "success", "message": "Job deleted"}

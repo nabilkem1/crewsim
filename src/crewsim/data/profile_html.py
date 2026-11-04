@@ -23,6 +23,7 @@ import plotly.offline
 from plotly.subplots import make_subplots
 
 from . import profile
+from .limitations import limitations_html
 
 # ---------------------------------------------------------------- palette
 # Validated categorical pair (dataviz skill, references/palette.md): passes
@@ -497,7 +498,11 @@ def _stats_table(profiles: dict[str, profile.WindowProfile]) -> str:
     return f'<table class="stats">{head}{body}</table>'
 
 
-def render(profiles: dict[str, profile.WindowProfile], overdispersion_threshold: float) -> str:
+def render(
+    profiles: dict[str, profile.WindowProfile],
+    overdispersion_threshold: float,
+    limitations: list[dict[str, str]] | None = None,
+) -> str:
     """The full self-contained HTML page. plotly.js is embedded exactly once."""
     figures = [
         ("Sick calls per day", sick_call_figure(profiles),
@@ -530,6 +535,7 @@ def render(profiles: dict[str, profile.WindowProfile], overdispersion_threshold:
 <div class="subtitle">Generated {now} &middot; crewsim S0-02b &middot;
 distributions computed separately per window (spec &sect;6.4) before any
 calibration story fits one.</div>
+{limitations_html(limitations or [])}
 {_stats_table(profiles)}
 {sections}
 </body></html>"""

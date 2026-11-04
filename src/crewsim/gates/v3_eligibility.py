@@ -75,5 +75,5 @@ def write_v3_report(cfg, result, sim_distribution, window: str) -> pathlib.Path:
 
     out_dir = config.ensure_dir(cfg, "reports_dir")
     path = out_dir / f"gate_v3_{window}.html"
-    path.write_text(fig.to_html(full_html=True, include_plotlyjs="inline"))
+    path.write_text(fig.to_html(full_html=True, include_plotlyjs="inline"), encoding="utf-8")
     return path

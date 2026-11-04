@@ -169,7 +169,7 @@ def test_real_corpus_cascade_rate_is_computed_not_the_ground_truth_shortcut() ->
     """
     cfg = config.load()
     result = cascades.cascade_target(cfg)
-    truth = json.loads((cfg.paths.corpus_dir / "_ground_truth.json").read_text())
+    truth = json.loads((cfg.paths.corpus_dir / "_ground_truth.json").read_text(encoding="utf-8"))
 
     # Asserted as a PROPERTY, not a pinned constant. The exact figure is a
     # function of the corpus, and pinning it (it was `approx(0.269)`) turned

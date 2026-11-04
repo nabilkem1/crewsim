@@ -37,6 +37,10 @@ scope:
   base:       YUL            # Montréal–Trudeau
   fleet:      A321neoLR      # no type-rating overlap with A330 (§4.5.1)
   position:   FO
+  # Use this fleet string INSTEAD when D1 has more ACTIVE pilots for it at this
+  # base/position (a real extract that says `A321` where the scope says
+  # `A321neoLR`). null = never substitute. See config.resolve_scope_fleet.
+  fleet_fallback: null
   crew_group: pilots         # ALPA. Cabin crew (CUPE) is Phase 2, own cost file.
   season:     winter_sun     # one season per run (§4.5.2)
   bid_period: 2027-01        # the specific bid period being modelled
@@ -54,6 +58,12 @@ population:
   # including how many of those lines were reserve lines — that single figure
   # answers the total-vs-line-holder question and gives the historical R to
   # compare recommendations against (§1.5).
+  #
+  # IMP-213: what this value does TODAY -- it is the establishment figure the
+  # CLI reports the rostered crew against (`crewsim roster summary`, `doctor`).
+  # The simulation does NOT read it: the roster is the corpus's active crew
+  # (112 in the current scope), whatever this says. Gate V9 therefore reports
+  # it as NOT_EXERCISED instead of sweeping sensitivity.roster_size below.
   roster_size: 120           # [CONFIRM: Crew Planning]
 
   # S1b-02 AC2. A reserve bidder stops flying their line; that flying does not
@@ -65,10 +75,13 @@ population:
   # the user 2026-08-08.
   displaced_flying: open_time         # open_time | absorb
 
-  # S1b-02 AC3. Which crew end up on reserve. Junior-first matches how a
-  # seniority bid actually resolves (senior crew bid lines; reserve is what is
-  # left), and is what the engine hardcoded before this key existed.
-  reserve_bid_rule: junior_first      # [CONFIRM: Crew Planning] junior_first | senior_first
+  # S1b-02 AC3. Which crew end up on reserve: senior_first carves reserves
+  # from the TOP of the seniority list (lowest seniority number), junior_first
+  # from the bottom. IMP-118: senior_first, confirmed by the business owner on
+  # 2026-10-20. It replaced junior_first, the engine's original hardcoded
+  # behaviour. Changing this moves which pairings are displaced, so it moves
+  # E[C] and CVaR95 (+41-78% vs junior_first at 20 scenarios; R* unchanged).
+  reserve_bid_rule: senior_first      # CONFIRMED 2026-10-20 -- junior_first | senior_first
 
 demand:
   # roster_size is meaningless on its own: it is only meaningful against how
@@ -85,7 +98,7 @@ demand:
 sensitivity:
   # Swept by gate V9 (§9.2). If the recommended reserve level is stable across
   # a range, the imprecision in that parameter does not block the next slice.
-  roster_size:      [100, 120, 140]
+  roster_size:      [100, 120, 140]   # IMP-213: NOT_EXERCISED on the real V9 path (see population.roster_size)
   terminal_penalty: [1.0, 1.25, 1.5, 2.0, 3.0]   # × cancel_cost
   lambda_risk_dial: [0.0, 0.25, 0.5, 0.75, 1.0]
   instability_threshold: 2   # R* swing (units) across a swept parameter that counts as "unstable" (S1d-05)
@@ -130,7 +143,63 @@ quality_gates:                       # §6.2 data quality gates
   d4_link_pass:        0.95          # §6.2 "The Sick Call Link Test"
   d4_link_marginal:     0.90         # [CONFIRM: Data Science] -- not spec-cited
   d6_d7_join_pass:      0.80         # §6.2 "The Payroll Link Test"
-  d9_completeness_pass: 0.98         # [CONFIRM: Data Science] -- not spec-cited
+  # F-42: replaces d9_completeness_pass. D9 (station-day disruption labels) is
+  # no longer an input -- the regime is inferred by an HMM from D8/D4/D2 -- so
+  # what must be complete is D8 flight data, every day, at every crew base.
+  station_day_coverage_pass: 0.98    # [CONFIRM: Data Science] -- not spec-cited
+  # IMP-523/524: gates for defects a real extract showed and the mock never has.
+  # None is spec-cited: they are implementation judgments, flagged as such.
+  d3_leg_complete_pass:      0.98    # [CONFIRM: Data Science] legs with block time > 0 and both clock times
+  d3_known_fleet_pass:       0.98    # [CONFIRM: Data Science] pairings whose fleet is not "UNKNOWN"
+  duplicate_rate_max:        0.01    # [CONFIRM: Data Science] exact duplicate rows, share of a dataset
+  overlap_rate_max:          0.001   # [CONFIRM: Data Science] D2 blocks overlapping another of the same crew
+  constant_column_min_rows:  50      # a one-value column is only reported on datasets at least this big
+  null_key_rate_max:         0.05    # [CONFIRM: Data Science] D10 invoice rows without a crew_id
+
+# IMP-512..IMP-528: how a REAL extract is read. Every value here only matters on
+# data the generated mock never produces, so the mock corpus reads as before.
+data:
+  # D8 `date` vs the local calendar day of the scheduled departure (D2/D4 use the
+  # latter). "date" trusts the column; "sched_dep_local" derives the day.
+  flight_day: date                   # date | sched_dep_local
+  # Last day with recorded movements; null = the last day with an actual departure.
+  cutoff: null
+  # A non-cancelled flight with no actual departure is scheduled-only, not on time.
+  require_actuals: true
+  coverage:                          # IMP-516: each dataset's valid interval
+    min_share: 0.25                  # [CONFIRM: Data Science] a day is covered above this share of the busy level
+    reference_quantile: 0.9          # the busy level = this quantile of the smoothed daily counts
+    smooth_days: 7                   # centred moving average over the daily row counts
+    # explicit: {d2_rosters: {start: 2026-04-01, end: 2026-06-12}}   # overrides detection
+  overlap_policy: reconcile          # reconcile | raise (D2 blocks of one crew that overlap)
+  trimmable_block_types: [DAY_OFF, REST]   # a day off that runs into a pairing gives way to it
+  # D2 block types outside the engine's BlockType -> the engine type they stand in for.
+  # All three make the pilot unavailable and accrue no duty. [CONFIRM: Air Transat
+  # Crew Planning] what SICK / OFFICE / OTHER mean exactly (ABSENCE is the
+  # conservative reading: the pilot cannot be called). The mock has none of them.
+  block_type_map: {SICK: ABSENCE, OFFICE: ABSENCE, OTHER: ABSENCE}
+  # Same type rating, different fleet string. Empty = a fleet only qualifies itself.
+  fleet_groups: {}
+  # Spellings of a dated pairing id, canonical first. The mock's ids carry no date
+  # (YULA321-000001); a real extract's do (G0025_20260601).
+  pairing_id_forms:
+    - {separator: "_", date_format: "%Y%m%d"}
+    - {separator: "@", date_format: "%Y-%m-%d"}
+  allow_resolved_ids: false          # accept code+date resolved ids in the linkage gates
+  # What each D7 pay code is (IMP-525); a code missing here is reported, never guessed.
+  pay_codes:
+    DRAFT_PREM:   {meaning: "draft premium",              comparable_to: DRAFT}
+    RESERVE_GTE:  {meaning: "reserve guarantee",          comparable_to: RESERVE_STAFFING}
+    RESERVE_UTIL: {meaning: "reserve utilisation",        comparable_to: RESERVE_UTILIZATION}
+  d9_source: generator_truth         # generator_truth | derived_rule | unknown (IMP-528)
+  # A column in a file that no schema declares: ignore it (listed by `data readiness`)
+  # or refuse the file. A MISSING declared column or a personal-data column is always refused.
+  extra_columns: ignore              # ignore | refuse
+  # D4 rows with no notification_ts: at_absence_start (assume reported 00:00 on the
+  # absence's first day; every sick call kept) | exclude (leave them out of replay and V3).
+  null_notification_ts: at_absence_start
+  # D8 rows whose origin == destination are not flights; drop them before any count.
+  drop_self_loop_flights: false
 
 calibration:                         # S0-06/S0-07/S0-07b fitting choices
   delay_gmm_components:   2          # short-delay / long-delay mixture (S0-07b)
@@ -138,14 +207,42 @@ calibration:                         # S0-06/S0-07/S0-07b fitting choices
                                       # stream (§4.3) -- this is an offline sklearn
                                       # fit at calibration time, not scenario RNG.
                                       # Flagged as tech debt, not fixed, by S1a-02.
-  regime_quantiles:                  # chaos-count cut points -> CALM/NORMAL/DISRUPTED/SEVERE
-    p_calm:      0.5
-    p_normal:    0.8
-    p_disrupted: 0.95
+  regime_quantiles:                  # F-42: seeds ONE EM restart of the regime HMM
+    p_calm:      0.5                 # (days bucketed by severity-index quantile).
+    p_normal:    0.8                 # They no longer DEFINE the regime -- the HMM
+    p_disrupted: 0.95                # below infers it from the data.
+  regime_hmm:                        # F-42 Option B: hidden Markov model of the daily regime
+    n_restarts: 8                    # EM starts per (base, season); best log-likelihood kept
+    max_iter: 300                    # EM iteration cap per start
+    tol: 1.0e-4                      # EM convergence: log-likelihood gain below this
+    seed: 20261023                   # NOTE: offline calibration seed, mixed into crn.stable_seed
+    init_self_transition: 0.7        # sticky starting P: regimes persist for days
+    transition_pseudocount: 0.5      # Dirichlet smoothing: no transition row is ever empty/absorbing
+    min_probability: 1.0e-6          # numerical floor on emission probabilities / rates
+    candidate_n_states: [1, 2, 3, 4, 5]  # BIC report only -- the simulation uses 4 named states
+    delay_threshold_minutes: 15      # [CONFIRM: Data Science] departure "delayed" at >= 15 min (industry OTP)
+    sick_call_exposure: crew_on_duty # crew_on_duty (D2 PAIRING/RESERVE crew per day) | constant
+    restart_agreement_tol: 1.0e-4    # relative log-lik gap counted as "reached the same optimum"
+    min_state_share: 0.01            # [CONFIRM: Data Science] flag a state holding < 1% of days
+    min_days: 14                     # [CONFIRM: Data Science] refuse a regime fit on fewer informative days (IMP-527)
+    min_restart_share: 0.25          # [CONFIRM: Data Science] warn when fewer EM restarts than this share agree
   overdispersion_threshold: 1.5      # var/mean bar for "clearly overdispersed" (§5.2)
   sick_call_min_duration_days: 0.5   # S1d-04c: floor on the S0-07 lognormal draw --
                                       # its support runs down near 0, and a sick call
                                       # shorter than this isn't a distinct modelled case.
+
+# What the data-load and calibration reports bother to state as a limitation
+# (data/limitations.py). Thresholds for wording, never a pass/fail verdict.
+limitations:
+  long_absence_days:       60        # a "sick" absence longer than this is a leave recorded as one
+  min_base_cancellations:  100       # fewer cancellations at the crew bases and the regime model's cancellation stream is flat
+  artefact_min_flights:    20        # a D8 day with this many flights ...
+  artefact_cancel_share:   0.5       # ... of which more than this share are cancelled is an extraction artefact
+  min_season_episodes:     2         # complete seasons a window needs to tell the season from the year
+  null_notification_share: 0.05     # share of D4 rows with no notification_ts worth reporting
+  min_roster_link_share:   0.5       # D4 pairings found in the sick pilot's own D2 roster, below which V3's target is unbuildable
+  holdout_gain_min:        0.5       # holdout log-likelihood per day the regime HMM must gain over one state
+  poisson_dispersion_max:  1.05      # a fitted dispersion below this is effectively Poisson
 
 draft_reconstruction:                 # S0-03, §6.3-1 -- the D6 x D7 join, spelled out as data
   # No `was_drafted` column exists anywhere in Air Transat's systems (§6.3-1):
@@ -158,6 +255,10 @@ draft_reconstruction:                 # S0-03, §6.3-1 -- the D6 x D7 join, spel
   initiator_filter:          [IOC]                 # D6 initiator values accepted -- a NULL initiator
                                                     # always passes regardless of this list (older
                                                     # records; must not be silently dropped, §6.3-1)
+  # IMP-514: a D6 change is a draft only if made at most this many hours before the
+  # pairing started. null = rule off. A real extract showed ~70% of short-notice-coded
+  # changes were made weeks ahead, so the answer matters. [CONFIRM: Crew Planning]
+  max_notice_hours: null
 
 cascade_reconstruction:               # S0-05, §6.3-3 -- the 7-day follow-on scan
   window_days: 7                      # spec §6.3-3: "scan that exact pilot's schedule for the next 7 days"
@@ -197,7 +298,14 @@ legality:                             # Rules configuration
   min_rest_hours_home:   11.0         # [CONFIRM: Crew Planning] S1a-07 L2 min rest at home base
   min_rest_hours_away:   10.0         # [CONFIRM: Crew Planning] S1a-07 L2 min rest away from base
   short_call_notice_hours: 2.0        # [CONFIRM: Crew Planning] S1c-02 L8 short call limit
-  long_call_notice_hours: 12.0        # [CONFIRM: Crew Planning] S1c-02 L8 long call limit
+  # IMP-117: this file is the single source for the long-call notice; the
+  # engine reads only this value. It deliberately differs from the corpus's
+  # D12 agreement extract (d12_agreement_rules.yaml: 12 h), which the engine
+  # does not read -- decision recorded with the user, October 2026. Longer
+  # than every standby shift below, so an LC reserve can only cover items
+  # known this far ahead; the KPI "reserve usage by call type" shows whether
+  # that ever happens.
+  long_call_notice_hours: 14.0        # [CONFIRM: Crew Planning] S1c-02 L8 long call limit
   rolling_7d_duty_limit_hours: 60.0   # [CONFIRM: Crew Planning] S1c-03 L3 duty limit
   rolling_7d_flight_limit_hours: 35.0 # [CONFIRM: Crew Planning] S1c-03 L3 flight limit
   rolling_28d_duty_limit_hours: 190.0 # [CONFIRM: Crew Planning] S1c-03 L4 duty limit
@@ -211,6 +319,14 @@ legality:                             # Rules configuration
   # Even at the corrected 12h window this binds: 6 consecutive standby days
   # is 72h, over L3's 60h limit.
   reserve_counts_as_duty: true        # [CONFIRM: Labour Relations]
+
+  # IMP-104: minimum notice (call -> report) for DRAFTING a crew member who is
+  # not on reserve at the call. L8's short/long-call figures apply only to
+  # reserves; whether Air Transat has a separate floor for drafting a line
+  # holder is unconfirmed, so 0.0 = no floor beyond "the call precedes the
+  # report". Independently of this value, a crew member can never be drafted
+  # off a pairing that is already under way at the call.
+  line_holder_draft_notice_hours: 0.0 # [CONFIRM: Crew Planning] IMP-104 line-holder draft notice
 
 positioning:                          # S1c-07 — cross-base reserve dispatch, §5.3's XB -> DH branch
   # The PRICES are in costs_pilots.yaml (`positioning.deadhead` / `.hotel`,

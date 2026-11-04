@@ -18,6 +18,7 @@ dependencies = [
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0",
     "sqlalchemy>=2.0.30",
+    "hmmlearn>=0.3.3",
 ]
 
 [project.scripts]
@@ -49,6 +50,15 @@ build-backend = "hatchling.build"
 # The whole package directory ships, non-Python files included — that is what
 # carries src/crewsim/data/corpus/ (the D1–D12 datasets) into the wheel.
 packages = ["src/crewsim"]
+# IMP-303: real extracts (personal data) and editor/OS debris never ship.
+# Explicit, not left to .gitignore alone: a wheel built from a tree where
+# the ignore file was bypassed must still not carry passenger names.
+exclude = [
+    "**/real_data/**",
+    "**/real_data*/**",
+    "**/.DS_Store",
+    "**/__pycache__/**",
+]
 
 [tool.ruff]
 line-length = 100

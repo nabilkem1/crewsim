@@ -1,5 +1,6 @@
 """Test for NHPP sick-calls calibration (S0-07)."""
 
+import datetime
 from typing import Any
 
 import numpy as np
@@ -8,13 +9,14 @@ import polars as pl
 import pytest
 import statsmodels.formula.api as smf
 
+from crewsim import config
 from crewsim.calibration import nhpp
 
 
-def test_nhpp_fit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nhpp_fit(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     def mock_ensure_dir(cfg: dict[str, Any], key: str) -> Any:
-        import pathlib
-        return pathlib.Path("/tmp")
+        # pytest's tmp_path, not a literal "/tmp": that does not exist on Windows.
+        return tmp_path
         
     def mock_load_dataset(cfg: dict[str, Any], name: str) -> pl.DataFrame:
         import numpy as np
@@ -27,7 +29,8 @@ def test_nhpp_fit(monkeypatch: pytest.MonkeyPatch) -> None:
                         grid.append({"crew_group": "PILOT", "employment_status": "ACTIVE", "base": b, "fleet": f, "position": p})
             return pl.DataFrame(grid)
         elif name == "d4_absences":
-            dates = [f"2023-01-{i:02d}T08:00:00" for i in range(1, 30)] * 5
+            # Real dates: fit_sick_calls reads D4's recorded span (IMP-516) off the column.
+            dates = [datetime.date(2023, 1, i) for i in range(1, 30)] * 5
             return pl.DataFrame({
                 "absence_start": dates,
                 "base": np.random.choice(["YUL", "YYZ"], len(dates)),
@@ -35,19 +38,21 @@ def test_nhpp_fit(monkeypatch: pytest.MonkeyPatch) -> None:
                 "position": np.random.choice(["CP", "FO"], len(dates)),
                 "duration_days": np.random.randint(1, 5, len(dates))
             })
-        elif name == "d9_station_days":
-            dates = [f"2023-01-{i:02d}" for i in range(1, 30)]
-            grid = []
-            for d in dates:
-                for b in ["YUL", "YYZ"]:
-                    grid.append({"season": "winter_sun", "date": d, "station": b, "disruption_class": np.random.choice(["NORMAL", "CALM", "SEVERE"])})
-            return pl.DataFrame(grid)
-        return pl.DataFrame()
-        
+        raise AssertionError(f"fit_sick_calls must not load {name} (F-42: no D9)")
+
+    # F-42: the regime of each station-day is the computed HMM label table
+    # (calibration.regime.labels_frame), passed in by the pipeline.
+    rng = np.random.default_rng(42)
+    regime_days = pl.DataFrame([
+        {"season": "winter_sun", "date": f"2023-01-{i:02d}", "station": b,
+         "disruption_class": str(rng.choice(["NORMAL", "CALM", "SEVERE"]))}
+        for i in range(1, 30) for b in ["YUL", "YYZ"]
+    ])
+
     monkeypatch.setattr(nhpp.config, "ensure_dir", mock_ensure_dir)
     monkeypatch.setattr(nhpp.loaders, "load_dataset", mock_load_dataset)
-    
-    res = nhpp.fit_sick_calls({})
+
+    res = nhpp.fit_sick_calls(config.load(quiet=True), regime_days=regime_days)
 
     assert "coefficients" in res
     assert "dispersion" in res

@@ -24,6 +24,31 @@ def test_run_scenario_resolves_every_item():
     assert sim.open_items == {}, "No item should still be open after env.run() completes"
 
 
+def test_no_item_reopens_flying_already_under_way(monkeypatch):
+    """IMP-104 / IMP-105 invariant: no sick-call or cascade item is created for
+    flying that has already started.
+
+    A sick call used to reopen a pairing in progress at the call, and a draft
+    could take a line holder off a trip they were flying; both produced items
+    whose report time had passed, born late and cancelled. Recorded at the
+    moment each item enters the recovery pipeline.
+    """
+    seen = []
+    real_pipeline = des.Simulation.recovery_pipeline
+
+    def recording_pipeline(self, item):
+        seen.append((item.origin, item.uid, item.start, self.env.now))
+        return real_pipeline(self, item)
+
+    monkeypatch.setattr(des.Simulation, "recovery_pipeline", recording_pipeline)
+    _run()
+
+    created = [s for s in seen if s[0] in ("SICK_CALL", "CASCADE")]
+    assert created, "scenario produced no items; this test proves nothing"
+    late = [s for s in created if s[2] < s[3]]
+    assert not late, f"items created after their own report time: {late[:5]}"
+
+
 def test_run_scenario_produces_mixed_outcomes():
     """A degenerate pipeline (everything hits the same outcome) means a wiring
     bug upstream, not a real recovery process -- see S1d-04b2's history: before

@@ -73,7 +73,13 @@ def test_build_report_self_contained_and_honest(tmp_path):
 
     assert isinstance(path, pathlib.Path)
     assert path.is_file()
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
+
+    # IMP-410: a real document that declares its encoding, so a browser opening
+    # it from disk on Windows does not guess cp1252 and show mojibake.
+    assert html.startswith("<!doctype html>")
+    assert '<meta charset="utf-8">' in html
+    assert html.rstrip().endswith("</body></html>")
 
     # Self-contained: no tag that would make the browser fetch an external
     # resource. (The bundled plotly.js library itself contains literal
@@ -119,7 +125,7 @@ def test_build_report_with_drilldown():
         cfg, costs, policy_names=["R6"], n_scenarios=3, master_seed="master",
         drilldown_policy="R6", drilldown_mode="costliest",
     )
-    html = path.read_text()
+    html = path.read_text(encoding="utf-8")
 
     assert 'href="#drilldown"' in html
     assert 'id="drilldown"' in html

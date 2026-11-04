@@ -32,8 +32,14 @@ def book_reserve_staffing(
     reserves: list[CrewMember],
     rates: Any,
     horizon_minutes: float,
+    call_types: dict[tuple[str | None, float, int], str] | None = None,
 ) -> None:
     """Book RESERVE_STAFFING once per reserve per covered day, at that day's own rate.
+
+    `call_types`, if given, receives the SC/LC type each booked row was paid
+    at, keyed like `des.Simulation.reserve_call_types` -- (crew_id, sim_time,
+    event_uid) -- so KPIs can split reserve-days by call type (IMP-117)
+    without adding a column to the ledger (whose content hash gate V7 pins).
 
     Fixes D1: one row per (reserve, day) stamped with THAT day's timestamp, so
     the warm-up filter prorates staffing exactly as it prorates every other
@@ -68,6 +74,8 @@ def book_reserve_staffing(
             block = at_start[0] if at_start else covering[0]
             call_type = block.reserve_call_type or "SC"
             rate = rates.short_call if call_type == "SC" else rates.long_call
+            if call_types is not None:
+                call_types[(reserve.crew_id, day_start, 0)] = call_type
             ledger.book(
                 scenario_id=scenario_id,
                 policy_id=policy_id,

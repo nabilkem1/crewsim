@@ -10,8 +10,9 @@ import { ScenarioFingerprints } from './ScenarioFingerprints';
  * A read-only "scenario tables" preview used to live on this page, rendering
  * five hardcoded rows (CALM 0.8 / 4 calls, SEVERE 2.2 / 12 calls) under the
  * caption "sample snapshot of generated scenario variables". No generator ever
- * produced them. Removed rather than relabelled -- see CODE_REVIEW_API_WEBUI.md
- * on why a plausible number on screen outlives any caption above it.
+ * produced them. Removed rather than relabelled: a plausible number on screen
+ * outlives any caption above it (API/web-UI review, in git history as
+ * `git show 7b34d3b:CODE_REVIEW_API_WEBUI.md`).
  */
 
 interface Job {
@@ -193,9 +194,9 @@ export const ProcessingDashboard: React.FC = () => {
 
   const btn: React.CSSProperties = {
     padding: 'var(--spacing-2) var(--spacing-4)',
-    color: 'white',
+    color: 'var(--action-fg)',
     border: 'none',
-    borderRadius: 'var(--radius-md)',
+    borderRadius: 'var(--radius-button)',
     cursor: 'pointer',
     fontSize: '0.875rem',
   };
@@ -352,7 +353,7 @@ export const ProcessingDashboard: React.FC = () => {
               disabled={selectedPolicies.length === 0}
               style={{
                 ...btn,
-                backgroundColor: 'var(--color-primary-600)',
+                backgroundColor: 'var(--action-bg)',
                 opacity: selectedPolicies.length === 0 ? 0.5 : 1,
               }}
             >
@@ -363,12 +364,12 @@ export const ProcessingDashboard: React.FC = () => {
               disabled={selectedPolicies.length === 0}
               style={{
                 ...btn,
-                // Chrome, not the neutral ramp: `btn` fixes this button's text
-                // to white, and --color-neutral-800 inverts to a near-white
-                // fill in dark mode -- white-on-near-white. --chrome-bg is a
-                // solid dark fill in both themes (and reuses the same navy the
-                // sidebar/primary dark surfaces already use).
-                backgroundColor: 'var(--chrome-bg)',
+                // The lower-emphasis control beside the action: a solid navy
+                // fill in light, an outlined pill in the Ops Console dark
+                // theme (--secondary-* tokens, index.css).
+                backgroundColor: 'var(--secondary-bg)',
+                color: 'var(--secondary-fg)',
+                boxShadow: 'inset 0 0 0 1px var(--secondary-border)',
                 opacity: selectedPolicies.length === 0 ? 0.5 : 1,
               }}
             >

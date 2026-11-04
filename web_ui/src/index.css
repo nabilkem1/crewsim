@@ -2,11 +2,13 @@
 
 /*
  * Theming. Two states, switched explicitly (`data-theme` on <html>), not
- * three -- there is no "system" option here, the user picks Light or
- * "GitHub Dark" and the choice is persisted (see App.tsx). `:root` below is
- * the complete LIGHT set; `:root[data-theme="dark"]` redefines every color
- * token, and only color tokens -- spacing/radius/type are theme-independent
- * and defined once.
+ * three -- there is no "system" option here, the user picks Light or the
+ * "Ops Console" dark theme (DESIGN_dark.md) and the choice is persisted (see
+ * App.tsx). `:root` below is the complete LIGHT set; `:root[data-theme="dark"]`
+ * redefines every color token plus the few shape/type tokens the dark design
+ * changes (radii, shadows, font stack). Spacing is theme-independent. Dark-only
+ * component treatments (pill buttons, rail, badges) are grouped at the end of
+ * this file under "Ops Console dark: components".
  *
  * Every component in this app reads colors through these custom properties
  * (a handful of deliberately theme-INVARIANT surfaces -- the terminal-style
@@ -99,8 +101,29 @@
   --cascade-fg: #9a6700;
   --uncovered-fg: #cf222e;
 
+  /*
+   * Role tokens for filled controls. Components used to hard-code `white` as
+   * the text on a --color-primary-600 fill; that only works while the fill is
+   * dark. The Ops Console dark theme fills with LIGHT accents (Horizon Blue
+   * for the active tab, Review Amber for actions) that need dark text, so the
+   * "text on a fill" color is a token too. Light values reproduce the light
+   * theme exactly as it was.
+   *   --color-on-primary  text on a --color-primary-500/600 fill (active tab,
+   *                       selected chip, sort key)
+   *   --action-*          the filled call-to-action (Run, Refresh, Search...)
+   *   --secondary-*       the second, lower-emphasis control next to it
+   */
+  --color-on-primary: #ffffff;
+  --action-bg: var(--color-primary-600);
+  --action-fg: #ffffff;
+  --secondary-bg: var(--chrome-bg);
+  --secondary-fg: #ffffff;
+  --secondary-border: transparent;
+  --radius-button: var(--radius-md);
+
   /* Typography */
   --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: var(--font-sans);
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* Spacing -- theme-independent */
@@ -132,69 +155,134 @@
 }
 
 /*
- * "GitHub Dark" -- anchored on Primer's actual dark palette (canvas #0d1117,
- * panel #161b22, border #30363d, fg.default #c9d1d9, accent #58a6ff /
- * #1f6feb) rather than a generic dark-mode inversion, so it reads as the
- * named theme rather than "the app, but darker." The neutral ramp keeps its
- * light-theme ROLE at each rung (50 = barely-there wash, 900 = strongest
- * text) while the literal shade inverts, per rung -- see the file header.
+ * "Ops Console" dark -- DESIGN_dark.md (repo root). A near-black slate
+ * console: Ops Night canvas, Console Slate panels and side rail, Raised
+ * Graphite inner cards, Metric Black recessed tiles; Signal White type; one
+ * cool accent (Horizon Blue: links, the active tab) and one warm accent
+ * (Review Amber: compact filled ACTION pills only, always with Ops Night
+ * text). Depth comes from tonal steps and sparse 1px Grid Line edges, never
+ * from shadows or gradients.
+ *
+ * The design's named colors are declared once as --color-<name>; the app's
+ * role tokens below are mapped onto them. The neutral ramp keeps its
+ * light-theme ROLE per rung (50 = recessed wash, 900 = strongest text) while
+ * the literal shade inverts -- see the file header.
  */
 :root[data-theme="dark"] {
-  --color-primary-50: #112d4e;
-  --color-primary-100: #1c3f66;
-  --color-primary-500: #1f6feb;
-  --color-primary-600: #1158c7;
-  --color-primary-700: #58a6ff;
+  /* -- Palette (DESIGN_dark.md, "Tokens -- Colors") -- */
+  --color-ops-night: #11181c;
+  --color-console-slate: #1b252a;
+  --color-raised-graphite: #233034;
+  --color-metric-black: #0b1215;
+  --color-grid-line: #2f3b42;
+  --color-control-charcoal: #2a353b;
+  --color-signal-white: #f4f6f8;
+  --color-fog-gray: #8b949c;
+  --color-muted-steel: #5d6871;
+  --color-horizon-blue: #7cb8e8;
+  --color-review-amber: #f8b878;
+  --color-alert-coral: #ef7a85;
+  --color-violation-rose: #f6d3dd;
+  --color-violation-ink: #b4233c;
+  --color-clear-mint: #6fd3a5;
+  --color-caution-cream: #fff6d6;
+  --color-success-green: #2ea37a;
+  --color-warning-gold: #f5c04a;
+  --color-optimizer-lavender: #9096c8;
+  --color-map-black: #050807;
 
-  --color-neutral-50: #0d1117;
-  --color-neutral-100: #161b22;
-  --color-neutral-200: #21262d;
-  --color-neutral-300: #30363d;
-  --color-neutral-400: #484f58;
-  --color-neutral-500: #6e7681;
-  --color-neutral-600: #8b949e;
-  --color-neutral-700: #adbac7;
-  --color-neutral-800: #c9d1d9;
-  --color-neutral-900: #e6edf3;
+  /* -- Accent: Horizon Blue. 50/100 are blue-tinted washes for selected
+   *    rows/chips (the 700 text on them stays above 5:1). -- */
+  --color-primary-50: #172a36;
+  --color-primary-100: #1f3a4d;
+  --color-primary-500: var(--color-horizon-blue);
+  --color-primary-600: var(--color-horizon-blue);
+  --color-primary-700: var(--color-horizon-blue);
 
-  --color-success-bg: #0f2b1a;
-  --color-success-text: #3fb950;
-  --color-success-50: #0f2b1a;
-  --color-success-500: #2ea043;
-  --color-success-700: #3fb950;
-  --color-warning-bg: #2b2111;
-  --color-warning-text: #d29922;
-  --color-warning-50: #2b2111;
-  --color-warning-500: #bb8009;
-  --color-warning-700: #d29922;
-  --color-error-bg: #2d1214;
-  --color-error-text: #f85149;
-  --color-info-bg: #112d4e;
-  --color-info-text: #58a6ff;
+  /* -- Neutral ramp: surfaces at the low rungs, Fog Gray at 500 (the
+   *    secondary-text rung, 5:1 on Console Slate), Signal White at 900. -- */
+  --color-neutral-50: var(--color-metric-black);
+  --color-neutral-100: var(--color-raised-graphite);
+  --color-neutral-200: var(--color-grid-line);
+  --color-neutral-300: var(--color-muted-steel);
+  --color-neutral-400: #6b7680;
+  --color-neutral-500: var(--color-fog-gray);
+  --color-neutral-600: #a3abb2;
+  --color-neutral-700: #c4cad0;
+  --color-neutral-800: #dde1e5;
+  --color-neutral-900: var(--color-signal-white);
 
-  --surface-default: #161b22;
-  --surface-muted: #0d1117;
-  --border-default: #30363d;
-  --border-subtle: #21262d;
-  --color-bg-base: #0d1117;
-  --color-bg-subtle: #0d1117;
-  --color-text-base: #c9d1d9;
+  /* -- Status. -text tokens are used as plain TEXT on panels, so they are
+   *    the bright glyph colors (Clear Mint, Warning Gold, Alert Coral);
+   *    -bg tokens are quiet tints of the same hue for inline alerts. The
+   *    pastel FILLED badges of the design live on .status-badge below. -- */
+  --color-success-bg: #133229;
+  --color-success-text: var(--color-clear-mint);
+  --color-success-50: #133229;
+  --color-success-500: var(--color-success-green);
+  --color-success-700: var(--color-clear-mint);
+  --color-warning-bg: #332b17;
+  --color-warning-text: var(--color-warning-gold);
+  --color-warning-50: #332b17;
+  --color-warning-500: var(--color-warning-gold);
+  --color-warning-700: var(--color-warning-gold);
+  --color-error-bg: #3a1f26;
+  --color-error-text: var(--color-alert-coral);
+  --color-info-bg: #172a36;
+  --color-info-text: var(--color-horizon-blue);
+
+  /* -- Surfaces (DESIGN_dark.md, "Surfaces"): canvas = Ops Night, panels =
+   *    Console Slate, recessed = Metric Black. -- */
+  --surface-default: var(--color-console-slate);
+  --surface-muted: var(--color-ops-night);
+  --border-default: var(--color-grid-line);
+  --border-subtle: var(--color-control-charcoal);
+  --color-bg-base: var(--color-metric-black);
+  --color-bg-subtle: var(--color-metric-black);
+  --color-text-base: var(--color-signal-white);
   --text-default: var(--color-text-base);
 
-  /* The sidebar rail goes a step DARKER than the page canvas (#0d1117),
-   * not the same value -- in the light theme the navy rail already reads
-   * as a distinct, darker plane than the white content; matching that same
-   * relationship here needs actual separation, not just "also dark." */
-  --chrome-bg: #010409;
-  --chrome-bg-strong: #161b22;
-  --chrome-text: #c9d1d9;
-  --chrome-text-strong: #e2e8f0;
-  --chrome-text-muted: #94a3b8;
+  /* -- Chrome (always-dark surfaces: terminal log/tape panels, tooltips):
+   *    Metric Black, recessed below the panels they sit in. The side rail
+   *    itself is Console Slate (overridden on .app-sidebar below). -- */
+  --chrome-bg: var(--color-metric-black);
+  --chrome-bg-strong: var(--color-raised-graphite);
+  --chrome-text: #c4cad0;
+  --chrome-text-strong: var(--color-signal-white);
+  --chrome-text-muted: var(--color-fog-gray);
 
-  /* Same hue as light, lifted for a dark ground: 6.9:1 and 5.2:1 on the
-     panel surface, where the light theme's darker pair would disappear. */
-  --cascade-fg: #d29922;
-  --uncovered-fg: #f85149;
+  /* Cascade semantics keep their hue (amber = cascaded, red = uncovered),
+     lifted to the palette's glyph colors for a dark ground. */
+  --cascade-fg: var(--color-warning-gold);
+  --uncovered-fg: var(--color-alert-coral);
+
+  /* -- Filled controls: active tab = Horizon Blue + Ops Night text; action
+   *    = Review Amber pill + Ops Night text; secondary = outlined pill
+   *    (transparent, Signal White, 1px Muted Steel). -- */
+  --color-on-primary: var(--color-ops-night);
+  --action-bg: var(--color-review-amber);
+  --action-fg: var(--color-ops-night);
+  --secondary-bg: transparent;
+  --secondary-fg: var(--color-signal-white);
+  --secondary-border: var(--color-muted-steel);
+  --radius-button: 9999px;
+
+  /* -- Shape: 28px cards and media frames, 10px small boxes (the design's
+   *    "links" radius), pills for buttons. -- */
+  --radius-sm: 4px;
+  --radius-md: 10px;
+  --radius-lg: 28px;
+  --radius-full: 9999px;
+
+  /* -- No cast shadows: elevation is tonal. The design's only "shadow" is a
+   *    1px outline ring. -- */
+  --shadow-sm: none;
+  --shadow-md: rgb(42, 53, 59) 0px 0px 0px 1px;
+
+  /* -- Type: SF Pro where installed, Inter (the documented substitute,
+   *    already loaded) otherwise. -- */
+  --font-sans: 'SF Pro Text', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'SF Pro Display', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
 
   color-scheme: dark;
 }
@@ -503,5 +591,196 @@ body {
 
   .card {
     padding: var(--spacing-4);
+  }
+}
+
+/* ==================================================================
+ * Ops Console dark: components (DESIGN_dark.md, "Components").
+ * Only what tokens alone cannot express -- per-element surface choices,
+ * pill geometry, tracking. Light theme is untouched by everything below.
+ * ================================================================== */
+
+/* Body copy: SF Pro Text's tight tracking (-0.224px at 14px, -0.374px at
+   17px, i.e. about -0.016 to -0.022em). */
+:root[data-theme="dark"] body {
+  letter-spacing: -0.016em;
+}
+
+/* Headings in the Display face: +0.23px at 19-21px, tightening as they grow. */
+:root[data-theme="dark"] h1,
+:root[data-theme="dark"] h2,
+:root[data-theme="dark"] h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--color-signal-white);
+}
+
+:root[data-theme="dark"] h2,
+:root[data-theme="dark"] h3 {
+  letter-spacing: 0.011em;
+}
+
+:root[data-theme="dark"] h1 {
+  letter-spacing: -0.015em;
+}
+
+:root[data-theme="dark"] a {
+  color: var(--color-horizon-blue);
+}
+
+:root[data-theme="dark"] ::selection {
+  background-color: rgba(124, 184, 232, 0.35);
+  color: var(--color-signal-white);
+}
+
+:root[data-theme="dark"] * {
+  scrollbar-color: var(--color-muted-steel) transparent;
+}
+
+:root[data-theme="dark"] :focus-visible {
+  outline: 2px solid var(--color-horizon-blue);
+  outline-offset: 2px;
+}
+
+/* Native controls: 1px Muted Steel outline, Fog Gray placeholder. The
+   inline styles of individual inputs still set their own fill/border from
+   the tokens; this covers those that set none. */
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+  color: var(--color-fog-gray);
+}
+
+:root[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  background-color: var(--color-ops-night);
+  color: var(--color-signal-white);
+  border-color: var(--color-muted-steel);
+}
+
+:root[data-theme="dark"] input[type="checkbox"],
+:root[data-theme="dark"] input[type="radio"],
+:root[data-theme="dark"] input[type="range"] {
+  accent-color: var(--color-horizon-blue);
+}
+
+/* Side rail: Console Slate band, 1px Grid Line edge against the canvas. */
+:root[data-theme="dark"] .app-sidebar {
+  background-color: var(--color-console-slate);
+  color: var(--color-signal-white);
+  border-right: 1px solid var(--color-grid-line);
+}
+
+:root[data-theme="dark"] .app-sidebar-header {
+  border-bottom-color: var(--color-grid-line);
+  font-family: var(--font-display);
+  font-size: 19px;
+  letter-spacing: 0.228px;
+}
+
+:root[data-theme="dark"] .app-sidebar-toggle {
+  border-color: var(--color-muted-steel);
+  color: var(--color-fog-gray);
+  border-radius: 9999px;
+}
+
+:root[data-theme="dark"] .app-sidebar-toggle:hover {
+  background-color: var(--color-raised-graphite);
+  color: var(--color-signal-white);
+}
+
+/* Nav items: unboxed rgba(244,246,248,0.85) labels, Raised Graphite on
+   hover, and the single active item filled Horizon Blue with Ops Night
+   text (Global Store Navigation). 20px = the design's navigation radius. */
+:root[data-theme="dark"] .app-nav-item {
+  color: rgba(244, 246, 248, 0.85);
+  border-radius: 20px;
+}
+
+:root[data-theme="dark"] .app-nav-item:hover {
+  background-color: var(--color-raised-graphite);
+  color: var(--color-signal-white);
+}
+
+:root[data-theme="dark"] .app-nav-item.is-active,
+:root[data-theme="dark"] .app-nav-item.is-active:hover {
+  background-color: var(--color-horizon-blue);
+  color: var(--color-ops-night);
+  font-weight: 600;
+}
+
+/* Local bar: Ops Night, Grid Line hairline, title in Display 19px/600. */
+:root[data-theme="dark"] .app-header {
+  background-color: var(--color-ops-night);
+  border-bottom-color: var(--color-grid-line);
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0.228px;
+  color: var(--color-signal-white);
+}
+
+/* Brand mark keeps its white plate (no reversed variant exists -- see
+   .app-logo-plate above); only its corner follows the 10px small radius. */
+:root[data-theme="dark"] .app-logo-plate {
+  border-color: var(--color-grid-line);
+  border-radius: 10px;
+}
+
+/* Theme toggle: Outlined Explore Pill (transparent, Signal White, 1px Muted
+   Steel, 12px). */
+:root[data-theme="dark"] .app-theme-toggle {
+  background: transparent;
+  border-color: var(--color-muted-steel);
+  color: var(--color-signal-white);
+  border-radius: 9999px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  padding: 0.35rem 0.85rem;
+}
+
+:root[data-theme="dark"] .app-theme-toggle:hover {
+  background-color: var(--color-raised-graphite);
+  color: var(--color-signal-white);
+}
+
+/* Cards: Console Slate panel on the Ops Night canvas, 28px radius, 28px
+   padding, borderless and shadowless -- the tonal step is the edge. A card
+   nested in a card steps UP to Raised Graphite (lighter = higher). */
+:root[data-theme="dark"] .card {
+  background-color: var(--color-console-slate);
+  border-color: transparent;
+  border-radius: 28px;
+  box-shadow: none;
+  padding: 28px;
+  margin-bottom: 20px;
+}
+
+:root[data-theme="dark"] .card .card {
+  background-color: var(--color-raised-graphite);
+}
+
+/* Tables: 1px Grid Line row dividers, Fog Gray headers. */
+:root[data-theme="dark"] th {
+  color: var(--color-fog-gray);
+  border-color: var(--color-grid-line);
+}
+
+:root[data-theme="dark"] td {
+  border-color: var(--color-grid-line);
+}
+
+@media (max-width: 768px) {
+  :root[data-theme="dark"] .card {
+    padding: var(--spacing-4);
+    border-radius: 20px;
+  }
+
+  :root[data-theme="dark"] .app-sidebar {
+    border-right: none;
+    border-top: 1px solid var(--color-grid-line);
   }
 }

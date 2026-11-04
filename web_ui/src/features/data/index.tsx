@@ -62,7 +62,7 @@ export const DataDashboard: React.FC = () => {
       style={{
         padding: 'var(--spacing-2) var(--spacing-4)',
         backgroundColor: tab === id ? 'var(--color-primary-600)' : 'transparent',
-        color: tab === id ? 'white' : 'var(--color-text-base)',
+        color: tab === id ? 'var(--color-on-primary)' : 'var(--color-text-base)',
         border: tab === id ? 'none' : '1px solid var(--border-default)',
         borderRadius: 'var(--radius-md)',
         fontWeight: 500,

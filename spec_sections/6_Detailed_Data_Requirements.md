@@ -30,7 +30,7 @@ what is convenient — three seasonal cycles is the floor for anything with a se
 | **D6** | Schedule-change / reassignment log | change event | `crew_id`, change timestamp, old block, new block, reason code, initiator (system / planner / IOC) | **The Domino Effect:** Reconstructing history to see how past drafts broke future schedules, so we can prove our simulation isn't cheating. | 24–36 mo |
 | **D7** | Pay register / premium codes | pay item | `crew_id`, pay period, pay code, hours or amount, linked duty date | **The Receipts:** Reading real payroll receipts to prove exactly how much a draft costs in real life, rather than guessing. | 24 mo |
 | **D8** | OTP / flight movement | flight leg | flight, date, scheduled vs. actual times, IATA delay codes, cancellation flag & reason | **Delay Physics:** Teaching the AI the physics of delays (e.g., how often flights cancel and how delays cascade). | 36 mo |
-| **D9** | Weather / IROPS day labels | station-day | station, date, disruption class (or derivable from D8 delay-code density) | **Streaks of Bad Luck:** Teaching the AI that bad weather comes in streaks (a blizzard lasts 3 days, it's not just one random bad day). | 36 mo |
+| **D9** | ~~Weather / IROPS day labels~~ — **no longer required (F-42)** | station-day | *Optional cross-check only.* The daily regime is now **computed** by a hidden Markov model from D8 + D4 + D2 (§6.3-4); Air Transat does not have to supply or define a `disruption_class`. If an operational IROPS/weather log exists, it may be supplied to cross-check the computed labels. | **Streaks of Bad Luck** is now learned from D8/D4/D2 directly — see §6.3-4. | — (optional) |
 | **D10** | Hotel / deadhead invoices | booking | date, station, cost, linked crew/pairing | **Pricing:** Figuring out the exact dollar cost of a hotel night or a deadhead passenger ticket. | 12–24 mo |
 | **D11** | Training & simulator schedule | session | `crew_id`, session type, start/end, requalification deadline | **The Danger Zone:** Knowing exactly when to charge a massive penalty for accidentally pulling a pilot out of their mandatory simulator training. | 12–24 mo |
 | **D12** | Collective agreement *(document)* | — | Draft premium %, reserve guarantees, minimum-day rules, **the drafting order**, cap on drafts | **Union Rules:** Getting the official union laws that dictate how much things cost and the legal order we must call people in. | current agreements |
@@ -74,12 +74,13 @@ Aviation happens across timezones, and the Canadian legal rest rules (CARs) are 
 *   **The Rule:** If the database only saves pure UTC time, the simulation's legal math will break. The data extraction must save the UTC time **plus** the local station time.
 
 ### 3. Minimum Passing Grades for Data (The Phase 0 Gates)
-Before we are even allowed to start building the simulation, the raw historical data must pass two strict completeness tests:
+Before we are even allowed to start building the simulation, the raw historical data must pass these completeness tests:
 
 | The Test | Minimum Passing Grade | Clear Explanation (Why this matters) |
 |---|---|---|
 | **The Sick Call Link Test** | **95%** | At least 95% of historical sick calls (D4) must successfully link to a real pilot's schedule (D2). **Example:** If 20% of sick calls are just floating in the database attached to nobody, the AI can't learn how sick calls actually break schedules. |
 | **The Payroll Link Test (Critical Path)** | **80%** | We must be able to join the schedule-change database (D6) with the payroll receipts (D7) to mathematically prove a draft actually happened 80% of the time. **Example:** If someone's schedule changed, but we can't find the receipt proving they got paid draft premium, we are just guessing. If this fails, the entire project is blocked. |
+| **The Station-Day Coverage Test** *(F-42, replaces "D9 completeness")* | **98%** `[CONFIRM: Data Science]` | Every day, at every crew base, D8 must record that day's departures. The regime model (§6.3-4) reads one day of D8 per base; a missing day is uninformative to it, a run of missing days blinds it. Configured as `quality_gates.station_day_coverage_pass`. |
 
 ### 4. The "No Black Boxes" Rule (Versioned Storage)
 If an executive asks, *"Why did the AI recommend 15 reserves last Tuesday, but 12 reserves today?"*, an engineer must be able to answer exactly why. 
@@ -123,11 +124,51 @@ To prove a draft happened, the code has to look for a specific recipe:
 **The Reconstruction:** For every draft we found in step 6.3-1, the code must scan that exact pilot's schedule for the next 7 days to see if drawing them caused a future flight to break. 
 **Example:** If we draft Pilot A on Monday, did they legally time-out and miss their scheduled flight on Thursday? We must prove this happens roughly 20% of the time, just like real life.
 
-### 6.3-4 Daily Severity Labels (Bad Weather Streaks)
+### 6.3-4 Daily Severity Labels (Bad Weather Streaks) — computed by a hidden Markov model
 
-**The Problem:** We need to teach the AI that bad days come in streaks.
-**The Reconstruction:** The code groups historical days into four categories (e.g., Normal, Bad, Severe, Nightmare) based on how many flights cancelled and how many people called in sick. It must calculate this **per season**. 
-**Example:** A `SEVERE` day in the July Atlantic programme (mostly long delays) behaves completely differently than a `SEVERE` day in the January Sun programme (blizzards causing mass cancellations). You cannot mix them together.
+**The Problem:** We need to teach the AI that bad days come in streaks. Nobody records "today was a
+SEVERE day" — the severity of a day is a **hidden (latent) state**. It used to be read from D9's
+`disruption_class`, a label Air Transat would have had to produce with a rule nobody had specified.
+Since **F-42** it is **computed**, and D9 is no longer an input.
+
+**The Reconstruction (Option B — hidden Markov model, `calibration/regime.py` + `calibration/hmm.py`):**
+
+1. **One row of observations per day, per crew base**, built from data Air Transat already extracts:
+
+   | Observation | Source | Meaning |
+   |---|---|---|
+   | `n_flights` | D8 | departures from the base that day |
+   | `n_delayed` | D8 | of those, not cancelled and delayed ≥ `delay_threshold_minutes` (15 min) |
+   | `n_cancelled` | D8 | of those, cancelled |
+   | `sick_calls` | D4 | absences starting that day at the base |
+   | `exposure` | D2 | crew on a PAIRING/RESERVE block at the base that day |
+
+   A day with no data stays in the sequence as *uninformative* (likelihood 1 in every state) — it is
+   not treated as a calm day. Each run of in-season days (e.g. each winter) is one sequence.
+
+2. **The model.** Four hidden states CALM < NORMAL < DISRUPTED < SEVERE follow a Markov chain `P`.
+   Given today's state `k`, the day's observations are drawn independently:
+   `(on-time, delayed, cancelled) ~ Multinomial(n_flights; 1−q_k−r_k, q_k, r_k)` and
+   `sick_calls ~ Poisson(exposure × λ_k)`. Because all three streams share the state, they rise and
+   fall **together** — the correlation that sizes tail risk.
+
+3. **The fit.** Maximum likelihood by Baum–Welch EM (`hmmlearn`), **per base and per season**, on the
+   fitting window only; several restarts (one seeded by severity-index quantiles, the others random),
+   best log-likelihood kept; a small Dirichlet pseudo-count on transitions so no row is ever empty or
+   absorbing. States are then ordered by severity and named.
+
+4. **The labels.** The most likely state path (Viterbi) labels every station-day — this table is the
+   computed replacement for D9 and is what the sick-call GLM (`C(regime)`) and the delay model are fitted
+   on. Holdout days are labelled with the fitted model, never refitted.
+
+5. **Evidence it works.** The store records the log-likelihood, BIC for 1–5 states, restart agreement,
+   and the holdout log-likelihood per day against a no-regime model. On the mock corpus (whose generator
+   hides a true regime), the computed labels match the truth on **~82%** of YUL winter days, versus 25.8%
+   for the old quantile labelling; BIC selects 4 states.
+
+**Example:** A `SEVERE` day in the July Atlantic programme (mostly long delays) behaves completely
+differently than a `SEVERE` day in the January Sun programme (blizzards causing mass cancellations).
+You cannot mix them together — hence one model **per season**, and per base.
 
 ---
 

@@ -38,7 +38,7 @@ def test_expected_package_directories_exist() -> None:
 
 
 def test_entry_point_is_declared() -> None:
-    pyproject = (ROOT / "pyproject.toml").read_text()
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'crewsim = "crewsim.cli:main"' in pyproject, (
         "pyproject.toml must declare the crewsim entry point, or `crewsim doctor` "
         "will not exist after `uv sync`"
@@ -63,7 +63,7 @@ def test_corpus_is_not_git_ignored() -> None:
     """The corpus is committed. Nothing in .gitignore may quietly exclude it."""
     patterns = [
         line.strip()
-        for line in (ROOT / ".gitignore").read_text().splitlines()
+        for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     offenders = [
@@ -84,11 +84,93 @@ def test_corpus_ships_in_the_wheel() -> None:
     hatchling includes every file under the packaged directory, so the corpus
     ships as long as src/crewsim is the wheel package root.
     """
-    pyproject = (ROOT / "pyproject.toml").read_text()
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'packages = ["src/crewsim"]' in pyproject, (
         "the wheel must package src/crewsim as a whole, or the corpus under "
         "src/crewsim/data/corpus/ is silently dropped from the distribution"
     )
+
+
+def test_no_real_data_in_wheel() -> None:
+    """IMP-303: real extracts (personal data) are excluded from git AND the wheel.
+
+    Checked from the configuration rather than by building a wheel (slow): the
+    wheel exclude list must name real_data/, and .gitignore must ignore it so a
+    `git add .` cannot commit it.
+    """
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"**/real_data/**"' in pyproject, (
+        "pyproject.toml [tool.hatch.build.targets.wheel] must exclude **/real_data/**"
+    )
+    # A versioned delivery folder (real_datav2/v3/) is the same data under another name.
+    assert '"**/real_data*/**"' in pyproject, (
+        "pyproject.toml [tool.hatch.build.targets.wheel] must exclude **/real_data*/**"
+    )
+    ignore = [
+        line.strip() for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    ]
+    assert "real_data*/" in ignore or "**/real_data*/" in ignore, (
+        ".gitignore must ignore real_data*/ -- delivery folders such as real_datav2/"
+    )
+    assert "real_data/" in ignore or "**/real_data/" in ignore, (
+        ".gitignore must ignore real_data/ -- it holds real crew and passenger data"
+    )
+
+
+def test_no_tracked_file_under_src_has_an_identifying_column() -> None:
+    """IMP-303: no CSV under src/ may carry a banned (identifying) header."""
+    from crewsim.data import loaders
+
+    offenders = []
+    for csv_path in SRC.rglob("*.csv"):
+        if any(part.startswith("real_data") for part in csv_path.parts):
+            continue  # ignored and excluded from the wheel; asserted above
+        with csv_path.open(encoding="utf-8-sig") as fh:
+            header = fh.readline().strip().split(",")
+        if banned := loaders.banned_columns_in(header):
+            offenders.append(f"{csv_path.relative_to(ROOT)}: {banned}")
+    assert not offenders, "identifying columns in packaged CSVs:\n  " + "\n  ".join(offenders)
+
+
+def test_all_text_io_declares_utf8() -> None:
+    """IMP-410: every text-mode open/read_text/write_text in src/ names its encoding.
+
+    Without it Python uses the locale encoding -- cp1252 on Windows -- so the
+    HTML reports crashed with UnicodeEncodeError on plotly.js and config YAML
+    read as mojibake. Ruff's PLW1514 would catch this but is preview-only, so
+    the rule is enforced here with an AST scan instead.
+    """
+    import ast
+
+    skip_receivers = {"webbrowser", "gzip"}  # not file text I/O / handled explicitly
+    offenders: list[str] = []
+    for py in SRC.rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                name = func.attr
+                if isinstance(func.value, ast.Name) and func.value.id in skip_receivers:
+                    continue
+                mode_arg = node.args[0] if node.args else None  # Path.open(mode)
+            elif isinstance(func, ast.Name):
+                name = func.id
+                mode_arg = node.args[1] if len(node.args) > 1 else None  # open(path, mode)
+            else:
+                continue
+            if name not in {"open", "read_text", "write_text"}:
+                continue
+            mode = mode_arg.value if isinstance(mode_arg, ast.Constant) else ""
+            for kw in node.keywords:
+                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                    mode = kw.value.value
+            if "b" in str(mode):
+                continue
+            if "encoding" not in {kw.arg for kw in node.keywords}:
+                offenders.append(f"{py.relative_to(ROOT)}:{node.lineno}: {ast.unparse(node)[:80]}")
+    assert not offenders, "text I/O without encoding=:\n  " + "\n  ".join(offenders)
 
 
 # ------------------------------------------------ rule 2: no hard-coded paths
@@ -116,7 +198,7 @@ def test_no_hard_coded_paths_in_src() -> None:
     for py in SRC.rglob("*.py"):
         if py == BOOTSTRAP:
             continue
-        for n, line in enumerate(py.read_text().splitlines(), 1):
+        for n, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
             code = line.split("#", 1)[0]
             if FORBIDDEN.search(code):
                 offenders.append(f"{py.relative_to(ROOT)}:{n}: {line.strip()}")
@@ -130,7 +212,7 @@ def test_no_hard_coded_paths_in_src() -> None:
 
 def test_bootstrap_literal_is_the_only_exception() -> None:
     """Guard the guard: if config.py stops being the bootstrap, this test tells us."""
-    assert '_CONFIG_RELPATH = "configs/base.yaml"' in BOOTSTRAP.read_text()
+    assert '_CONFIG_RELPATH = "configs/base.yaml"' in BOOTSTRAP.read_text(encoding="utf-8")
 
 
 def test_dataset_suffixes_have_one_authority() -> None:
@@ -146,7 +228,7 @@ def test_dataset_suffixes_have_one_authority() -> None:
     offenders = [
         str(py.relative_to(ROOT))
         for py in SRC.rglob("*.py")
-        if py != BOOTSTRAP and suffix_literal.search(py.read_text())
+        if py != BOOTSTRAP and suffix_literal.search(py.read_text(encoding="utf-8"))
     ]
     assert not offenders, (
         f"dataset suffixes hard-coded outside config.py: {offenders}. "
@@ -197,7 +279,7 @@ def test_all_twelve_datasets_are_present() -> None:
 
 def test_output_root_is_git_ignored() -> None:
     """output/ holds run output only — params and reports, never inputs."""
-    ignore = (ROOT / ".gitignore").read_text().splitlines()
+    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert any(line.strip().rstrip("/") == "output" for line in ignore), (
         ".gitignore must exclude output/ — calibration output and HTML reports "
         "are rebuilt on every run and must not reach the repository"
@@ -212,3 +294,56 @@ def test_output_paths_share_the_ignored_root() -> None:
         assert rel.startswith("output/"), (
             f"paths.{key} resolves to {rel}, outside the git-ignored output/ root"
         )
+
+
+# --------------------------------------------- IMP-612: no committed artifacts
+_ARTIFACT_PARTS = {"node_modules", "test-results", "playwright-report", "__pycache__", ".DS_Store"}
+
+
+def test_no_build_or_test_artifacts_are_tracked() -> None:
+    """node_modules/ (187 files), test-results/ and .DS_Store were once
+    committed. They are machine-local output: they bloat every clone and go
+    stale silently. .gitignore covers them; this catches a forced add."""
+    import shutil
+    import subprocess
+
+    if shutil.which("git") is None or not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split("\0")
+    offenders = [p for p in tracked if p and _ARTIFACT_PARTS & set(pathlib.PurePosixPath(p).parts)]
+    assert not offenders, f"build/test artifacts are tracked: {offenders[:10]}"
+
+
+# ------------------------------------------------- IMP-412: one package version
+def test_version_matches_pyproject() -> None:
+    """`crewsim.__version__` is the fallback when the package is not installed,
+    so it must equal pyproject.toml's version or the two run modes disagree on
+    the parameter-store file name."""
+    import tomllib
+
+    import crewsim
+
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert crewsim.__version__ == pyproject["project"]["version"]
+
+
+def test_version_without_installed_metadata_is_never_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A source run (PYTHONPATH=src, no install) must look for the same
+    params_v<version>_<season>.json that an installed run writes."""
+    import importlib.metadata
+
+    import crewsim
+
+    def not_installed(_name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError("crewsim")
+
+    cfg = config.load()
+    installed_path = config.params_store_path(cfg, cfg.scope.season)
+    monkeypatch.setattr(importlib.metadata, "version", not_installed)
+
+    assert crewsim.package_version() == crewsim.__version__
+    source_path = config.params_store_path(cfg, cfg.scope.season)
+    assert "unknown" not in source_path.name
+    assert source_path == installed_path

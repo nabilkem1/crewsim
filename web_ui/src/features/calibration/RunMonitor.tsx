@@ -140,10 +140,10 @@ export const RunMonitor: React.FC = () => {
               onClick={handleCompare}
               style={{
                 padding: 'var(--spacing-1) var(--spacing-3)',
-                backgroundColor: 'var(--color-primary-600)',
-                color: 'white',
+                backgroundColor: 'var(--action-bg)',
+                color: 'var(--action-fg)',
                 border: 'none',
-                borderRadius: 'var(--radius-md)',
+                borderRadius: 'var(--radius-button)',
                 cursor: 'pointer',
                 fontSize: '0.875rem'
               }}

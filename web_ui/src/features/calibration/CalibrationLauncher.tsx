@@ -56,8 +56,9 @@ export const CalibrationLauncher: React.FC = () => {
   const availableModels = [
     {
       id: 'transition_matrix',
-      label: 'Transition Matrix (Markov States)',
-      purpose: 'Makes disruption cluster into bad weeks instead of scattered bad days.',
+      label: 'Regime Hidden Markov Model',
+      purpose:
+        'Infers each day\'s regime from delays, cancellations and sick calls, and makes disruption cluster into bad weeks instead of scattered bad days.',
     },
     {
       id: 'intensity_multipliers',
@@ -190,10 +191,10 @@ export const CalibrationLauncher: React.FC = () => {
           style={{
             alignSelf: 'flex-start',
             padding: 'var(--spacing-2) var(--spacing-4)',
-            backgroundColor: 'var(--color-primary-600)',
-            color: 'white',
+            backgroundColor: 'var(--action-bg)',
+            color: 'var(--action-fg)',
             border: 'none',
-            borderRadius: 'var(--radius-md)',
+            borderRadius: 'var(--radius-button)',
             fontWeight: 500,
             cursor: launching ? 'not-allowed' : 'pointer',
             opacity: launching ? 0.7 : 1

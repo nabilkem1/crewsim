@@ -7,13 +7,17 @@ import polars as pl
 from sklearn.mixture import GaussianMixture
 
 from .. import config
-from ..data import loaders
+from ..data import clean, loaders  # noqa: F401 -- tests patch delays.loaders.load_dataset`r
 
 STATES = ["CALM", "NORMAL", "DISRUPTED", "SEVERE"]
 
 
 def fit_delays(
-    cfg: config.BaseConfig, season: str, window: tuple[Any, Any] | None = None
+    cfg: config.BaseConfig,
+    season: str,
+    window: tuple[Any, Any] | None = None,
+    *,
+    regime_days: pl.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Fits the per-regime ambient delay probability, per-regime mean
     flights/day, and the pooled short-delay/long-delay duration mixture.
@@ -30,9 +34,23 @@ def fit_delays(
     decision this simulation makes -- see engine/costs.py::book_flight_delays
     for how that distinction is priced (as its own DELAY_AMBIENT category,
     excluded from the optimised E[C]/CVaR95 the R* recommendation reads).
+
+    `regime_days` (F-42): the computed station-day regime table from
+    calibration.regime (the HMM's Viterbi labels, which replaced D9). When
+    absent it is computed here for this base and season.
     """
-    d8 = loaders.load_dataset(cfg, "d8_flight_movements")
-    d9 = loaders.load_dataset(cfg, "d9_station_days")
+    # Load D8 flights (delay minutes) and the regime of each day, then keep
+    # only the fitting window.
+    # IMP-515/519: operated flights, on the configured flight day -- a
+    # scheduled-only flight is not an on-time one.
+    d8 = clean.load_flights(cfg)
+    if regime_days is None:
+        from . import regime
+
+        regime_days = regime.label_station_days(
+            cfg, window, stations=[cfg.scope.base], seasons=[season]
+        )
+    d9 = regime_days
 
     if window is not None:
         w_start, w_end = window
@@ -41,10 +59,12 @@ def fit_delays(
 
     base = cfg.scope.base
     fleet = cfg.scope.fleet
+    # IMP-522: a fleet group (A321-200 + A321neoLR) is one scope for delays too.
+    fleets = sorted(config.fleet_members(cfg, fleet))
 
-    # Regime-labelled days at THIS base only -- d9_station_days is already
-    # per-station (S0-06's own regime fit), the same station-level severity
-    # label the roster/scenario machinery uses everywhere else.
+    # Regime-labelled days at THIS base only -- the computed regime table is
+    # per-station (the HMM is fitted per base and season), the same labels
+    # the sick-call GLM conditions on.
     grid = d9.filter(
         (pl.col("season") == season) & (pl.col("station") == base)
     ).select([
@@ -55,7 +75,7 @@ def fit_delays(
 
     # Flights at this base+fleet only, joined onto their regime day.
     df = (
-        d8.filter(pl.col("fleet") == fleet)
+        d8.filter(pl.col("fleet").is_in(fleets))
         .with_columns(pl.col("date").cast(pl.String).str.slice(0, 10).alias("date"))
         .join(grid, on=["date", "origin"], how="inner")
     )
@@ -78,6 +98,7 @@ def fit_delays(
         .join(regime_days, on="regime", how="left")
     )
 
+    # Per regime: P(delayed) = delayed flights / flights, and mean flights per day.
     delay_by_regime: dict[str, dict[str, float]] = {}
     for row in regime_stats.iter_rows(named=True):
         n_flights = row["n_flights"] or 0
@@ -118,12 +139,15 @@ def fit_delays(
             + f" has {durations.shape[0]}. Widen the fitting window, widen the scope, or "
             f"lower calibration.delay_gmm_components."
         )
+    # Fit the mixture: each component = one Gaussian (weight, mean, variance) over
+    # delay minutes; fixed random_state so the fit is reproducible.
     gmm = GaussianMixture(
         n_components=n_components,
         random_state=cfg.calibration.delay_gmm_random_state,
     )
     gmm.fit(durations)
 
+    # Read the fitted components out of the model (std dev = sqrt of the variance).
     weights = gmm.weights_
     means = gmm.means_.flatten()
     std_devs = np.sqrt(gmm.covariances_.flatten())
@@ -139,6 +163,7 @@ def fit_delays(
             "std_dev": float(std_devs[i])
         })
 
+    # Package the result, add a short content hash, and write delay_mixture_<season>.json.
     out_dict = {
         "season": season,
         # Kept for the calibration UI's existing "P(delayed | NORMAL-regime
@@ -156,7 +181,7 @@ def fit_delays(
     params_dir = config.ensure_dir(cfg, "params_dir")
     out_path = params_dir / f"delay_mixture_{season}.json"
 
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out_dict, f, indent=2)
 
     out_dict["_saved_path"] = str(out_path)
@@ -172,6 +197,7 @@ def sample_delay_minutes(rng: np.random.Generator, components: list[dict[str, fl
     not a fabricated minimum. Without the floor, the short-delay component's
     own Gaussian tail can draw a non-positive duration.
     """
+    # Pick a component by its weight, then draw minutes from that component's Gaussian.
     weights = [c["weight"] for c in components]
     idx = rng.choice(len(components), p=weights)
     comp = components[idx]

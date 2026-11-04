@@ -116,6 +116,55 @@ def welch_warmup_diagnostic(cfg: Any, sims: list[Any]) -> dict[str, Any] | None:
     }
 
 
+RESERVE_CALL_TYPES = ("SC", "LC")
+
+
+def reserve_usage_by_call_type(cfg: Any, sims: list[Any]) -> dict[str, dict[str, float]]:
+    """IMP-117: reserve-days PAID and reserve assignments USED, per call type.
+
+    Measurement-window rows only (same rule as every other KPI), averaged over
+    all scenarios. A call type with staffing_days_mean > 0 and
+    assignments_mean == 0 is being paid for and never used -- see
+    `unused_paid_call_types`. The call type comes from the Simulation's side
+    table (des.Simulation.reserve_call_types), not from the row's amount.
+    """
+    n = len(sims)
+    totals = {t: {"staffing_days": 0, "assignments": 0, "staffing_dollars": 0.0} for t in RESERVE_CALL_TYPES}
+    for sim in sims:
+        # A sim built without the side table (a test double, or a replay that
+        # predates it) contributes nothing rather than a guessed type.
+        lookup = getattr(sim, "reserve_call_type_of", None)
+        if lookup is None:
+            continue
+        for row in des.rows_in_measurement_window(cfg, sim):
+            if row.category not in ("RESERVE_STAFFING", "RESERVE_UTILIZATION"):
+                continue
+            call_type = lookup(row)
+            if call_type not in totals:
+                continue
+            if row.category == "RESERVE_STAFFING":
+                totals[call_type]["staffing_days"] += 1
+                totals[call_type]["staffing_dollars"] += row.amount
+            else:
+                totals[call_type]["assignments"] += 1
+    return {
+        t: {
+            "staffing_days_mean": v["staffing_days"] / n if n else 0.0,
+            "staffing_dollars_mean": v["staffing_dollars"] / n if n else 0.0,
+            "assignments_mean": v["assignments"] / n if n else 0.0,
+        }
+        for t, v in totals.items()
+    }
+
+
+def unused_paid_call_types(usage: dict[str, dict[str, float]]) -> list[str]:
+    """Call types that were paid for (staffing days > 0) but never assigned."""
+    return [
+        t for t, v in usage.items()
+        if v["staffing_days_mean"] > 0 and v["assignments_mean"] == 0
+    ]
+
+
 DRAFT_GINI_CAVEAT = (
     "Read as the distribution of premium earnings (drafting is premium-paid, allocated "
     "senior-first), not an imposed burden -- a high Gini is the expected result of "
@@ -216,6 +265,8 @@ def compute_kpis(cfg: Any, sims: list[Any]) -> dict[str, Any]:
             "service_level_met": p_exceeds <= cfg.service_level.epsilon,
         }
 
+    reserve_by_call_type = reserve_usage_by_call_type(cfg, sims)
+
     return {
         "n_scenarios": len(sims),
         "warmup_welch": welch_warmup_diagnostic(cfg, sims),
@@ -231,6 +282,8 @@ def compute_kpis(cfg: Any, sims: list[Any]) -> dict[str, Any]:
         "reserve_staffing_days_mean": reserve_staffing_days_mean,
         "utilization_rate": utilization_rate,
         "reserve_dollars_mean": float(np.mean(reserve_dollars)) if reserve_dollars else 0.0,
+        "reserve_by_call_type": reserve_by_call_type,
+        "unused_paid_call_types": unused_paid_call_types(reserve_by_call_type),
         "eligibility_mean": float(np.mean(eligibility_samples)) if eligibility_samples else None,
         "eligibility_n_samples": len(eligibility_samples),
         "cascade_rate_mean": float(np.mean(cascade_rates)) if cascade_rates else None,
@@ -258,6 +311,17 @@ def print_kpi_report(cfg: Any, result: dict[str, Any]) -> None:
         f"  Reserve utilisation           = {result['reserve_dispatches_mean']:.2f} dispatches/scenario "
         f"(${result['reserve_dollars_mean']:,.2f})"
     )
+    for call_type, usage in result.get("reserve_by_call_type", {}).items():
+        print(
+            f"    {call_type}: {usage['staffing_days_mean']:.2f} reserve-days paid "
+            f"(${usage['staffing_dollars_mean']:,.2f}), "
+            f"{usage['assignments_mean']:.2f} assignments/scenario"
+        )
+    for call_type in result.get("unused_paid_call_types", []):
+        print(
+            f"  [WARN] {call_type} reserves are paid for but were never assigned in any "
+            f"measured scenario -- see configs/base.yaml -> legality / reserve_lines (IMP-117)"
+        )
     if result["eligibility_mean"] is not None:
         print(
             f"  Eligibility (mean fraction)    = {result['eligibility_mean']:.3f} "

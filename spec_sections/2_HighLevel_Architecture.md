@@ -35,7 +35,7 @@ Six layers, strictly one-directional. Data flows down; nothing flows back up.
 │                 STATISTICAL CALIBRATION LAYER                    │
 │  • Sick-call arrival model (NHPP; covariates: season, DOW,       │
 │    base, fleet, category)                                        │
-│  • Disruption-severity regime model (latent daily state)         │
+│  • Disruption-severity regime model (latent daily state, HMM)    │
 │  • Delay / IROPS event models                                    │
 │  • Crew-status distributions (for validation targets)            │
 │  • Cost parameter calibration (pay rules → CAD coefficients)     │
@@ -127,8 +127,11 @@ Phase 3, once per data refresh before that).
   "data_window": ["2023-08-01", "2026-07-31"],
   "season": "winter_sun",
   "sick_call_nhpp": {"family": "NegBin", "coefficients": {"...": "..."}, "dispersion": 1.84},
-  "severity_regime": {"states": ["CALM","NORMAL","DISRUPTED","SEVERE"],
-                      "transition_matrix": [[...]], "intensity_multipliers": [0.5,1.0,2.0,3.5]},
+  "severity_regime": {"method": "hidden_markov_model",
+                      "states": ["CALM","NORMAL","DISRUPTED","SEVERE"],
+                      "transition_matrix": [[...]], "intensity_multipliers": [0.5,1.0,2.0,3.5],
+                      "emissions": {"SEVERE": {"delay_probability": 0.40, "...": "..."}},
+                      "fit": {"log_likelihood": -1853.2, "bic": 3860.6, "...": "..."}},
   "validation_targets": {"eligibility_rate": {"mean": 0.31, "ci": [0.27, 0.35]},
                          "cascade_rate":     {"mean": 0.19, "ci": [0.15, 0.24]}},
   "content_hash": "blake2b:9f2c..."
@@ -433,11 +436,13 @@ Here is the exact sequence of how raw CSV data is turned into mathematical param
 |  The Calibrator   |  (Offline Data Science Script)
 +--------+----------+
          |
-         +--> [1] Day Clustering  -----> Transition Matrix (P)
+         +--> [1] Regime HMM (hidden Markov model, per base x season)
+         |         -----> Transition Matrix (P), pi0, per-state emissions,
+         |                Intensity Multipliers, a regime LABEL for every historical day
          |
-         +--> [2] Measuring Chaos -----> Intensity Multipliers for `Sick Calls` and `Flight Delays`
+         +--> [2] Baseline Rhythm (Sick Calls, conditioned on [1]'s labels) -----> NHPP Covariates
          |
-         +--> [3] Baseline Rhythm (Sick Calls) -----> NHPP Covariates
+         +--> [3] Delay probability per regime (conditioned on [1]'s labels)
          |
          +--> [4] Flight Delays   -----> Mixture Dist Params
          |
@@ -452,12 +457,12 @@ Here is the exact sequence of how raw CSV data is turned into mathematical param
 | Step | Component | How it works (with example) |
 |---|---|---|
 | **1. Historical Ingestion** | **Raw Data** | The calibrator reads 3 years of actual Air Transat crew rosters, sick logs, and flight delay CSVs. |
-| **2. Day Clustering** | **The Transition Matrix ($P$)** | The Calibrator script totals up the historical "chaos" (total sick calls + flight delays) for every day in the corpus. It then cuts these days into mathematical quantiles to define the strict condition for each state:<br>• **CALM:** Bottom 50% of days *(e.g., 0 to 3 total disruptions)*<br>• **NORMAL:** 50th–80th percentile *(e.g., 4 to 7 total disruptions)*<br>• **DISRUPTED:** 80th–95th percentile *(e.g., 8 to 12 total disruptions)*<br>• **SEVERE:** Top 5% of worst historical days *(e.g., 13+ disruptions, like a massive blizzard)*<br><br>It then counts how often one state follows another to build the Markov Transition Matrix. It also calculates the overall historical average ($\pi_0$) to use for Day 1.<br><br>👉 *Example:* By looking at historical winters, the matrix learns that if today is a `SEVERE` ice storm (Top 5%), there is a **60% chance** tomorrow will also be `SEVERE`, but only a **2% chance** it instantly drops back to `CALM`. This gives the simulation realistic "clustered" disaster waves. |
-| **3. Measuring Chaos** | **Intensity Multipliers** | It calculates exactly how much worse a bad day is compared to a normal day across all metrics. This is what correlates sick calls and flight delays together.<br><br>👉 *Example:* The data shows a `NORMAL` day averages 2 sick calls, but a `SEVERE` day averages 7. Therefore, the script generates a multiplier of **3.5x** for the `SEVERE` state. |
-| **4. Baseline Rhythms** | **The NHPP (Non-Homogeneous Poisson Process)** | After stripping out the extreme `SEVERE` spikes, it uses a statistical regression to find the underlying rhythm of sick calls based on the Day of Week (DOW).<br><br>It uses a log-link math formula:<br>$$\lambda_{base}(t) = \exp\big(\beta_0 + \sum \beta_i x_i(t)\big)$$<br>where $\beta_0$ is the standard Tuesday intercept, and $\beta_i$ are the modifiers for other days.<br><br>👉 *Example:* The intercept ($\beta_0$) for a Tuesday is `-3.2`. The math for a Tuesday is $\exp(-3.2) = \mathbf{0.04}$ sick calls per day. But a Friday is more stressful ($\beta_{Fri} = +0.25$). So Friday's baseline jumps to $\exp(-3.2 + 0.25) = \mathbf{0.05}$ sick calls per day. *(Note: You can't have a fraction of a sick call! This `0.05` is just the statistical average, meaning a 5% risk. The simulation rolls the dice against this rate to generate a whole number, usually 0 or 1).* |
+| **2. Regime Inference** *(F-42)* | **The Regime Hidden Markov Model → Transition Matrix ($P$)** | Nobody records "today was a SEVERE day" — the regime is **hidden**. It is no longer read from a label file (D9) nor cut by quantiles. The Calibrator builds **one row per day per crew base** — flights, flights delayed ≥ 15 min and flights cancelled (D8), sick calls (D4), crew on duty (D2) — and fits a 4-state **hidden Markov model** per base and season (`calibration/regime.py`, `hmmlearn`):<br>• each hidden state $k$ produces the day's flights as $\text{Multinomial}(n; 1-q_k-r_k, q_k, r_k)$ (on-time, delayed, cancelled) and its sick calls as $\text{Poisson}(\text{crew on duty}\cdot\lambda_k)$;<br>• tomorrow's state depends on today's through $P$.<br><br>Baum–Welch EM estimates $P$, $q$, $r$, $\lambda$ **together**, by maximum likelihood (several restarts, best kept; a small Dirichlet pseudo-count so no row is ever absorbing). States are ordered by severity and named CALM → SEVERE; the **Viterbi** path then labels every historical day. $\pi_0$ is the stationary distribution of $P$. The store also records the log-likelihood, BIC for 1–5 states, and the holdout log-likelihood per day against a no-regime model.<br><br>👉 *Example (mock corpus, YUL winter):* the fitted `SEVERE` state has 40% of departures delayed, 4.8% cancelled and 2.8× the sick-call rate of `NORMAL`; a `SEVERE` day is followed by another `SEVERE` day 50% of the time, so bad days cluster into bad weeks. On this corpus the labels match the generator's hidden truth on ~82% of days. |
+| **3. State Intensities** | **Intensity Multipliers** | Read straight off the HMM: $\lambda_k / \lambda_{NORMAL}$, the sick-call rate per crew on duty in each state relative to a `NORMAL` day. They are **descriptive**: generation uses the sick-call GLM's own regime coefficient and the per-regime delay probability (steps 4 and 6), so the regime effect is never applied twice.<br><br>👉 *Example:* `NORMAL` = 1.0, `SEVERE` = 2.8 — a `SEVERE` day carries 2.8× the sick-call rate of a normal day. |
+| **4. Baseline Rhythms** | **The NHPP (Non-Homogeneous Poisson Process)** | Using the regime label of every day from step 2 as a covariate (`C(regime)`), it uses a statistical regression to find the underlying rhythm of sick calls based on the Day of Week (DOW), season, base, fleet and position.<br><br>It uses a log-link math formula:<br>$$\lambda_{base}(t) = \exp\big(\beta_0 + \sum \beta_i x_i(t)\big)$$<br>where $\beta_0$ is the standard Tuesday intercept, and $\beta_i$ are the modifiers for other days.<br><br>👉 *Example:* The intercept ($\beta_0$) for a Tuesday is `-3.2`. The math for a Tuesday is $\exp(-3.2) = \mathbf{0.04}$ sick calls per day. But a Friday is more stressful ($\beta_{Fri} = +0.25$). So Friday's baseline jumps to $\exp(-3.2 + 0.25) = \mathbf{0.05}$ sick calls per day. *(Note: You can't have a fraction of a sick call! This `0.05` is just the statistical average, meaning a 5% risk. The simulation rolls the dice against this rate to generate a whole number, usually 0 or 1).* |
 | **5. Sick Durations** | **Lognormal Distribution** | Once a pilot gets sick, how long are they out? The calibrator fits historical absence lengths to a Lognormal curve (most pilots return after 1-2 days, but a few are out for weeks). |
-| **6. Flight Delays** | **Marked Point Process & Mixture Distribution** | Delays are mathematically split into two steps: First, *does a delay happen at this airport today?* (The Point Process). Second, *how long is the delay?* (The Mark).<br><br>Because delays aren't a simple bell curve (they are usually either a quick 15-minute luggage bump OR a massive 4-hour mechanical failure, with very little in between), the duration is modeled using a **Mixture Distribution**.<br><br>👉 *Example:* The simulation rolls for a delay in YUL. It hits. It then rolls against the Mixture Distribution. It has a 70% chance to draw from the "short delay" curve (avg 15 mins) and a 30% chance to draw from the "long delay" curve (avg 180 mins). |
-| **7. The Export** | **The Parameter Store** | It packages the $P$ Matrix, the Multipliers, the NHPP formulas, the Sick Duration curves, and the Delay Mixtures into a single, version-controlled file (e.g., `params_v3.2.1.json`). |
+| **6. Flight Delays** | **Marked Point Process & Mixture Distribution** | Delays are mathematically split into two steps: First, *does a delay happen at this airport today?* (The Point Process — its probability is fitted **per regime**, using step 2's day labels). Second, *how long is the delay?* (The Mark).<br><br>Because delays aren't a simple bell curve (they are usually either a quick 15-minute luggage bump OR a massive 4-hour mechanical failure, with very little in between), the duration is modeled using a **Mixture Distribution**.<br><br>👉 *Example:* The simulation rolls for a delay in YUL. It hits. It then rolls against the Mixture Distribution. It has a 70% chance to draw from the "short delay" curve (avg 15 mins) and a 30% chance to draw from the "long delay" curve (avg 180 mins). |
+| **7. The Export** | **The Parameter Store** | It packages the $P$ Matrix, the Multipliers, the regime HMM (`regime_hmm`: per-state emissions, fit report, model selection, holdout score), the NHPP formulas, the Sick Duration curves, and the Delay Mixtures into a single, version-controlled file (e.g., `params_v3.2.1.json`). |
 
 When you type `crewsim compare`, the simulation simply loads this pre-calculated `params.json` file. This architecture allows the Data Science team to update the math every season without ever touching the core simulation code.
 
@@ -466,30 +471,27 @@ When you type `crewsim compare`, the simulation simply loads this pre-calculated
 To understand exactly how these pieces connect, imagine the simulation is generating the chaos for **Day 14 (a Friday in July)**:
 
 *   **Step 1: Set the Global Weather**
-    *   **The Roll:** The simulation looks at yesterday (`DISRUPTED`) and checks the Transition Matrix $P$. It draws today's state $Z_d \sim \text{Categorical}(P[\text{yesterday}])$. It lands on a 20% chance to upgrade to `SEVERE`. *(Note: If this were Day 1, with no yesterday to look at, it would draw from the historical steady-state probability vector $\pi_0$)*.
-    *   **The Multiplier:** It looks up the intensity for a `SEVERE` day in the JSON file and locks in a global multiplier of **3.5x**.
+    *   **The Roll:** The simulation looks at yesterday (`DISRUPTED`) and checks the Transition Matrix $P$ (fitted by the regime HMM). It draws today's state $Z_d \sim \text{Categorical}(P[\text{yesterday}])$. It lands on the 30% chance to upgrade to `SEVERE`. *(Note: If this were Day 1, with no yesterday to look at, it would draw from the steady-state probability vector $\pi_0$ — the stationary distribution of $P$)*.
 
 *   **Step 2: Generate Sick Calls (The NHPP)**
-    *   **Baseline:** The NHPP formula calculates a standard base rate of **2.0 sick calls** for a normal Friday.
-    *   **Scaling:** It multiplies this baseline by the global multiplier (2.0 × 3.5 = **7.0 sick calls** target, so $\mu = 7.0$).
+    *   **Rate for this state:** The NHPP formula is evaluated with today's covariates — *including* `regime = SEVERE`. The GLM's `C(regime)[T.SEVERE]` coefficient (fitted on the HMM's day labels) lifts a normal Friday's **2.0 sick calls** to an expected **$\mu = 7.0$**.
     *   **Final Roll:** It draws the final count $k \sim \text{NegBin}(\mu = 7.0, \alpha = 1.84)$. It rolls an **8**. Eight pilots are now officially sick.
 
 *   **Step 3: Generate Flight Delays (The Marked Point Process)**
-    *   **Baseline Risk:** It checks the normal daily risk of a flight delay (**10% risk** per flight, loaded directly from `base_delay_probability` in the JSON).
-    *   **Scaling:** It multiplies this risk by the *exact same* global multiplier (10% × 3.5 = **35% risk**, so $p = 0.35$).
+    *   **Risk for this state:** It reads the delay probability fitted **for a `SEVERE` day** (`delay_by_regime.SEVERE`, e.g. **35%** per flight, versus 10% on a `NORMAL` day).
     *   **The Coin Flip (Point Process):** It walks down the timetable. For the 8:00 AM flight, it draws the occurrence $Y \sim \text{Bernoulli}(p = 0.35)$. It hits—the flight is delayed.
     *   **The Duration (Mixture Mark):** It draws the delay duration $D \sim w_1 \text{Normal}(\mu_1, \sigma_1) + w_2 \text{Normal}(\mu_2, \sigma_2)$ using the exact weights and means loaded from the JSON's `components` array. It draws the "long delay" curve and rolls exactly **165 minutes**.
 
 > [!IMPORTANT]
 > **The Cascade Effect**
-> Notice how both sick calls and flight delays use the exact same **3.5x multiplier**. This mathematically guarantees a correlated nightmare: the airline is hit with 8 sick pilots on the very same day that 35% of its flights are delayed. This correlation is what accurately simulates real-world stress and exhausts the reserve pool.
+> Notice how both sick calls and flight delays are driven by the **same daily state**. This mathematically guarantees a correlated nightmare: the airline is hit with 8 sick pilots on the very same day that 35% of its flights are delayed. Each stream's response to the state is fitted from the data (the GLM's regime coefficient, the per-regime delay probability) rather than one hand-set multiplier applied to everything — and the states themselves are learned jointly from all streams by the regime HMM. This correlation is what accurately simulates real-world stress and exhausts the reserve pool.
 
 #### Example: Inside `output/params/params_v3.2.1.json`
 
 > **Every number below is fitted output, not a setting.** This is *one possible result* of running the
-> Calibrator over one season — produced by `S0-06` (matrix, multipliers), `S0-07` (NHPP) and `S0-07b`
-> (delay mixture) from the corpus, never written by hand and never read from `configs/`. Two
-> consequences worth stating plainly:
+> Calibrator over one season — produced by `S0-06` (regime HMM: matrix, multipliers, emissions),
+> `S0-07` (NHPP) and `S0-07b` (delay mixture) from the corpus, never written by hand and never read
+> from `configs/`. Two consequences worth stating plainly:
 >
 > - **These are not Air Transat figures.** `base_delay_probability: 0.10`, the 15-minute and
 >   180-minute mixture components, the `-3.2` intercept: all are plausible-shaped inventions, in the
@@ -523,6 +525,21 @@ To understand exactly how these pieces connect, imagine the simulation is genera
     "DISRUPTED": 2.0,
     "SEVERE": 3.5
   },
+  "regime_hmm": {
+    "station": "YUL",
+    "method": "hidden_markov_model",
+    "emissions": {
+      "CALM":      {"delay_probability": 0.04, "cancel_probability": 0.002, "sick_rate_per_exposure": 0.0068, "expected_share_of_days": 0.20, "mean_run_days": 2.3},
+      "NORMAL":    {"delay_probability": 0.11, "cancel_probability": 0.003, "sick_rate_per_exposure": 0.0158, "expected_share_of_days": 0.33, "mean_run_days": 2.2},
+      "DISRUPTED": {"delay_probability": 0.24, "cancel_probability": 0.017, "sick_rate_per_exposure": 0.0273, "expected_share_of_days": 0.25, "mean_run_days": 1.6},
+      "SEVERE":    {"delay_probability": 0.40, "cancel_probability": 0.048, "sick_rate_per_exposure": 0.0444, "expected_share_of_days": 0.22, "mean_run_days": 2.0}
+    },
+    "fit": {"n_states": 4, "log_likelihood": -1853.2, "bic": 3860.6, "n_days": 303,
+            "n_sequences": 2, "converged": true, "restarts": 8, "restarts_reaching_best": 8},
+    "model_selection": {"bic_preferred_n_states": 4},
+    "holdout": {"n_days": 151, "loglik_per_day": -6.14, "loglik_per_day_one_state": -9.64},
+    "degenerate_states": []
+  },
   "sick_call_nhpp": {
     "coefficients": {
       "Intercept": -2.0215,
@@ -550,6 +567,12 @@ To understand exactly how these pieces connect, imagine the simulation is genera
   },
   "flight_delay_mixture": {
     "base_delay_probability": 0.10,
+    "delay_by_regime": {
+      "CALM":      {"delay_probability": 0.06, "mean_flights_per_day": 22.9},
+      "NORMAL":    {"delay_probability": 0.10, "mean_flights_per_day": 22.8},
+      "DISRUPTED": {"delay_probability": 0.26, "mean_flights_per_day": 22.6},
+      "SEVERE":    {"delay_probability": 0.35, "mean_flights_per_day": 22.3}
+    },
     "components": [
       {"weight": 0.70, "mean_mins": 15, "std_dev": 5},
       {"weight": 0.30, "mean_mins": 180, "std_dev": 45}
@@ -637,8 +660,8 @@ flowchart TD
         STR["named streams<br/>severity · sick_calls · delays<br/>recovery_times · tiebreaks"]
         DAY{"day d = 1..42"}
         MRK["draw Z_d from row Z_d−1 of P<br/>severity Markov chain, §2.5.4"]
-        MUL["intensity multiplier m of Z_d<br/>0.5 · 1.0 · 2.0 · 3.5"]
-        EVT["materialise the day's events<br/>sick calls & delay occurrences (scaled by m)<br/>durations (unscaled)"]
+        MUL["regime-conditional rates of Z_d<br/>GLM C(regime) · P(delay | Z_d)"]
+        EVT["materialise the day's events<br/>sick calls & delay occurrences (rates of Z_d)<br/>durations (unconditional)"]
         FRZ["SCENARIO FROZEN<br/>immutable event list + seeds"]
     end
 
@@ -657,11 +680,11 @@ flowchart TD
 
 | Step | What it actually does | Source (File vs. Code) |
 |---|---|---|
-| **1. The Inputs** | • **Scope:** Reads `base.yaml` for the 42-day window.<br>• **The Parameter Store:** Loads the deep math variables derived from historical data. **This includes the Transition Matrix ($P$) and the Intensity Multipliers.** | 📁 **Loaded from Files** (YAML configs and the historical parameter store). |
+| **1. The Inputs** | • **Scope:** Reads `base.yaml` for the 42-day window.<br>• **The Parameter Store:** Loads the deep math variables derived from historical data. **This includes the Transition Matrix ($P$) fitted by the regime hidden Markov model, the regime-conditional sick-call GLM and the per-regime delay probabilities.** | 📁 **Loaded from Files** (YAML configs and the historical parameter store). |
 | **2. The Seed Tree** | • Spawns a master random seed into 100 child seeds (one for each scenario).<br>• Splits each child into isolated "streams" so random events never overwrite each other:<br>&nbsp;&nbsp;• Stream A: Sick Call occurrences<br>&nbsp;&nbsp;• Stream B: Flight Delay occurrences<br>&nbsp;&nbsp;• Stream C: Event Durations (sick lengths and delay times) | ⚙️ **Generated in Code** (using Python's `SeedSequence`). |
 | **3. The Markov Chain** | • Rolls the dice to pick a "weather" state for each day: `{CALM, NORMAL, DISRUPTED, SEVERE}`.<br>• It checks **yesterday's** state and uses the Transition Matrix ($P$) to find the odds for today.<br>• *(For Day 1, it draws from the steady-state baseline probability $\pi_0$)*. | ⚙️ **Generated in Code** (but driven by the Transition Matrix loaded in Step 1). |
-| **4. The Intensity** | • Looks up the Intensity Multiplier for the day's state (e.g., SEVERE = 3.5x).<br>• Multiplies *every* disaster stream (sick calls, delays) by that exact multiplier to correlate the chaos. | ⚙️ **Calculated in Code** (using the Multipliers loaded in Step 1). |
-| **5. The Events** | • **Sick Calls (`NegBin`):** Generates how many pilots get sick based on the day's intensity. *(Reads `dispersion` and NHPP `coefficients`)*.<br>• **Sick Durations (`Lognormal`):** Decides exactly how many days a sick pilot stays home. *(Reads `mu` and `sigma`)*.<br>• **Delays (`Bernoulli`):** Generates the occurrence (the coin flip) of a flight delay. *(Reads `base_delay_probability`)*.<br>• **Delay Durations (`Mixture Normal`):** Decides exactly how many minutes a delayed flight is held. *(Reads `weight`, `mean_mins`, and `std_dev` from the mixture `components`)*. | ⚙️ **Generated in Code** (but driven strictly by the parameters loaded in Step 1). |
+| **4. The Intensity** | • Feeds the day's state into *every* disaster stream: the sick-call GLM gets `regime = SEVERE` as a covariate, and the delay coin uses the `SEVERE` delay probability.<br>• Because every stream reads the same state, the chaos is correlated. The Intensity Multipliers are recorded on each row as metadata only — re-applying them on top of the regime-conditional rates would count the regime effect twice. | ⚙️ **Calculated in Code** (using the regime-conditional parameters loaded in Step 1). |
+| **5. The Events** | • **Sick Calls (`NegBin`):** Generates how many pilots get sick based on the day's intensity. *(Reads `dispersion` and NHPP `coefficients`)*.<br>• **Sick Durations (`Lognormal`):** Decides exactly how many days a sick pilot stays home. *(Reads `mu` and `sigma`)*.<br>• **Delays (`Bernoulli`):** Generates the occurrence (the coin flip) of a flight delay. *(Reads `delay_by_regime` for the day's state)*.<br>• **Delay Durations (`Mixture Normal`):** Decides exactly how many minutes a delayed flight is held. *(Reads `weight`, `mean_mins`, and `std_dev` from the mixture `components`)*. | ⚙️ **Generated in Code** (but driven strictly by the parameters loaded in Step 1). |
 | **6. The Freeze** | • Locks all of the generated events into a fixed, immutable schedule.<br>• Ensures that Policy A and Policy B experience the exact same 100 months of disaster. | 📁 **Saved to File** (Exported as a Parquet file for the simulation to read). |
 
 #### Example: The Frozen Parquet Output (`scenario_set_v3.parquet`)
@@ -809,8 +832,24 @@ flowchart TD
 
 ### 2.5.4 The severity regime — a 4-state Markov chain
 
-One transition matrix per season (§4.5.2), fitted from historical daily disruption counts by story
-`S0-06`. Each state multiplies the intensity of *every* disruption stream.
+One transition matrix per season (§4.5.2), fitted by story `S0-06` — since **F-42** as a **hidden
+Markov model**: the day's state is never observed (no D9 label, no quantile cut), it is inferred from
+what it causes at the base — flights delayed and cancelled (D8), sick calls per crew on duty (D4, D2) —
+by Baum–Welch EM (`calibration/regime.py`, `calibration/hmm.py`, library `hmmlearn`). The fit yields
+`P`, what each state looks like (its delay/cancel probabilities and sick-call rate), and a Viterbi
+label for every historical day, which the sick-call GLM and the delay model are fitted on (§6.3-4).
+Every disruption stream is conditioned on the same state.
+
+```mermaid
+flowchart LR
+    OBS["each day at the base<br/>flights · delayed ≥15 min · cancelled (D8)<br/>sick calls (D4) · crew on duty (D2)"]
+    HMM["hidden Markov model, 4 states<br/>Baum–Welch EM, restarts, BIC 1–5 states"]
+    OUT1["P, π0 (stationary)<br/>per-state emissions"]
+    OUT2["Viterbi label per day<br/>(replaces D9)"]
+    GLM["sick-call GLM C(regime)<br/>delay probability per regime"]
+    OBS --> HMM --> OUT1
+    HMM --> OUT2 --> GLM
+```
 
 Each state's **self**-transition is written into its box; the arrows are the twelve moves *between*
 states. All sixteen probabilities appear once, and each row sums to 1.0.
@@ -848,13 +887,16 @@ per season by `S0-06`. This is the form that story validates:
 | **SEVERE** | 0.02 | 0.18 | 0.40 | **0.40** | 1.00 |
 | *intensity ×* | 0.5 | 1.0 | 2.0 | 3.5 | — |
 
-The chain starts each scenario by drawing the Day 1 state from the historical steady-state probability vector $\pi_0$. The daily state is drawn from the `severity` stream, once per simulated
+The chain starts each scenario by drawing the Day 1 state from the steady-state probability vector $\pi_0$ (the stationary distribution of the fitted $P$). The daily state is drawn from the `severity` stream, once per simulated
 day, before any event is materialised.
 
 **The stickiness is the point.** The 0.40 `SEVERE → SEVERE` self-transition produces *multi-day* bad
 stretches — an ice-storm week, not four unlucky Tuesdays scattered through the month. Clustered
 stretches are what actually exhaust a reserve pool, and they are the difference between a mean cost and
 a CVaR₀.₉₅. `S0-06`'s check asserts every row sums to 1.0 and that `SEVERE → SEVERE` exceeds 0.25.
+Since F-42 the tests also assert that EM recovers a *known* regime process from synthetic data, that no
+row is absorbing (a Dirichlet pseudo-count guarantees it), and that on the mock corpus — whose generator
+hides a true regime — the computed labels agree with that truth on more than 70% of days (measured: ~82%).
 
 > **These numbers are illustrative, and §5.2 is their authority** (§4.4: no section but the parameter
 > registry and §5.2 defines a constant). They are replaced by the per-season fitted matrix in the

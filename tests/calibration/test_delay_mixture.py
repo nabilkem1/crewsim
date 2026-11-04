@@ -7,14 +7,14 @@ from crewsim import config
 from crewsim.calibration import delays
 
 
-def test_delay_mixture(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delay_mixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     cfg = config.load()
     base = cfg.scope.base
     fleet = cfg.scope.fleet
 
     def mock_ensure_dir(cfg: config.BaseConfig, key: str) -> Any:
-        import pathlib
-        return pathlib.Path("/tmp")
+        # pytest's tmp_path, not a literal "/tmp": that does not exist on Windows.
+        return tmp_path
 
     def mock_load_dataset(cfg: config.BaseConfig, name: str) -> pl.DataFrame:
         if name == "d8_flight_movements":
@@ -31,19 +31,21 @@ def test_delay_mixture(monkeypatch: pytest.MonkeyPatch) -> None:
                 "fleet": [fleet, fleet, fleet, fleet, fleet, "B737", fleet],
                 "delay_minutes": [0, 20, 0, 100, 200, 999, 999],
             })
-        elif name == "d9_station_days":
-            return pl.DataFrame({
-                "season": ["winter_sun"] * 4,
-                "date": ["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-01"],
-                "station": [base, base, base, "YYZ"],
-                "disruption_class": ["NORMAL", "NORMAL", "SEVERE", "NORMAL"],
-            })
-        return pl.DataFrame()
+        raise AssertionError(f"fit_delays must not load {name} (F-42: no D9)")
+
+    # F-42: the regime of each day is the computed HMM label table, passed in
+    # by the pipeline -- not a D9 file.
+    regime_days = pl.DataFrame({
+        "season": ["winter_sun"] * 4,
+        "date": ["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-01"],
+        "station": [base, base, base, "YYZ"],
+        "disruption_class": ["NORMAL", "NORMAL", "SEVERE", "NORMAL"],
+    })
 
     monkeypatch.setattr(delays.config, "ensure_dir", mock_ensure_dir)
     monkeypatch.setattr(delays.loaders, "load_dataset", mock_load_dataset)
 
-    res = delays.fit_delays(cfg, "winter_sun")
+    res = delays.fit_delays(cfg, "winter_sun", regime_days=regime_days)
 
     assert res["season"] == "winter_sun"
     assert "delay_by_regime" in res

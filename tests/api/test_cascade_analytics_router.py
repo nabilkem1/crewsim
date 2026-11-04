@@ -9,7 +9,7 @@ router's whole predecessor was deleted for serving figures that looked real.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +20,7 @@ from crewsim.api.routers import analytics
 
 def _job(job_id="job-1", status="completed", results=None):
     return MagicMock(
-        id=job_id, status=status, results=results, created_at=datetime(2026, 8, 12, 9, 0, 0)
+        id=job_id, status=status, results=results, created_at=datetime(2026, 8, 12, 9, 0, 0, tzinfo=UTC)
     )
 
 

@@ -100,33 +100,63 @@ def test_carving_more_reserves_displaces_more_flying(cfg) -> None:
     )
 
 
-def test_reserve_bid_rule_selects_junior_crew_by_default(cfg) -> None:
-    """S1b-02 AC3: the bid rule is configured, and junior_first (the default)
-    means reserves come from the BOTTOM of the seniority list."""
-    assert cfg.population.reserve_bid_rule == "junior_first"
+def _with_bid_rule(cfg, rule: str):
+    return cfg.model_copy(
+        update={"population": cfg.population.model_copy(update={"reserve_bid_rule": rule})}
+    )
+
+
+def test_reserve_bid_rule_default_is_senior_first(cfg) -> None:
+    """IMP-118: the configured default is senior_first, and it means reserves
+    come from the TOP of the seniority list (lowest seniority number)."""
+    assert cfg.population.reserve_bid_rule == "senior_first"
     pol = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
     active, _ = roster_loader.load_rosters(cfg, **_scope(cfg), policy=pol)
 
     reserves = [c for c in active if c._is_reserve]
     lines = [c for c in active if not c._is_reserve]
-    # Higher seniority NUMBER = more junior.
-    assert min(c.seniority for c in reserves) > max(c.seniority for c in lines), (
-        "junior_first must take the most junior crew, with no overlap"
+    # Lower seniority NUMBER = more senior.
+    assert max(c.seniority for c in reserves) < min(c.seniority for c in lines), (
+        "senior_first must take the most senior crew, with no overlap"
     )
 
 
-def test_senior_first_bid_rule_inverts_the_selection(cfg) -> None:
+def test_junior_first_bid_rule_inverts_the_selection(cfg) -> None:
     """The knob has to actually do something -- otherwise AC3 is satisfied in
     name only."""
-    senior = cfg.model_copy(
-        update={"population": cfg.population.model_copy(update={"reserve_bid_rule": "senior_first"})}
-    )
     pol = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
-    active, _ = roster_loader.load_rosters(senior, **_scope(cfg), policy=pol)
+    active, _ = roster_loader.load_rosters(_with_bid_rule(cfg, "junior_first"), **_scope(cfg), policy=pol)
 
     reserves = [c for c in active if c._is_reserve]
     lines = [c for c in active if not c._is_reserve]
-    assert max(c.seniority for c in reserves) < min(c.seniority for c in lines)
+    # Higher seniority NUMBER = more junior.
+    assert min(c.seniority for c in reserves) > max(c.seniority for c in lines)
+
+
+def test_reserve_shortfall_raises(cfg, baseline) -> None:
+    """IMP-119: a policy asking for more reserves than the group has active
+    crew fails loudly, naming the group and both counts -- it is never
+    silently simulated with fewer reserves."""
+    from crewsim.gates.v1_degeneracy import policy_with_reserve_count
+
+    base = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
+    too_many = policy_with_reserve_count(base, len(baseline) + 1, "R-too-many")
+    with pytest.raises(roster_loader.ReserveShortfallError) as exc:
+        roster_loader.load_rosters(cfg, **_scope(cfg), policy=too_many)
+    msg = str(exc.value)
+    assert f"{cfg.scope.base}/{cfg.scope.fleet}/{cfg.scope.position}" in msg
+    assert f"{len(baseline) + 1} requested" in msg
+    assert f"{len(baseline)} active crew available" in msg
+
+
+def test_reserve_count_equal_to_headcount_is_not_a_shortfall(cfg, baseline) -> None:
+    """The boundary gate V1 relies on: every active crew member on reserve."""
+    from crewsim.gates.v1_degeneracy import policy_with_reserve_count
+
+    base = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
+    everyone = policy_with_reserve_count(base, len(baseline), "R-all")
+    active, _ = roster_loader.load_rosters(cfg, **_scope(cfg), policy=everyone)
+    assert sum(1 for c in active if c._is_reserve) == len(baseline)
 
 
 def test_reserves_never_share_a_calendar_object(cfg) -> None:

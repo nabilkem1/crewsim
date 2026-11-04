@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from crewsim.api.db import Job, SessionLocal, get_db
+from crewsim.api.db import Job, SessionLocal, get_db, get_job_or_404, record_job_failure
 from crewsim.api.runlog import RunLog
 from crewsim.api.streaming import stream_job
 
@@ -124,16 +124,29 @@ def run_calibration_job(job_id: str, season: str | None = None) -> None:
         for message in dict.fromkeys(f"{w.category.__name__}: {w.message}" for w in caught):
             runlog.note(message, level="warning")
 
+        # What the data could not support, so a planner reads it beside the fit.
+        found_limitations = (store.get("diagnostics") or {}).get("limitations", [])
+        for item in found_limitations:
+            if item.get("severity") in ("HIGH", "MEDIUM"):
+                runlog.note(f"Limitation: {item.get('title')} -- {item.get('detail')}", level="warning")
+
         nhpp = store.get("sick_call_nhpp", {})
         mixture = store.get("flight_delay_mixture", {})
         components = mixture.get("components", [])
+        regime_hmm = store.get("regime_hmm", {})
+        hmm_fit = regime_hmm.get("fit") or {}
+        settings = cfg.calibration.regime_hmm
 
         job.results = {
             "season": resolved_season,
+            "limitations": found_limitations,
             "fitted": {
                 "transition_matrix": store.get("markov_transition_matrix_P", []),
                 "regime_pi0": store.get("markov_steady_state_pi0", {}),
                 "intensity_multipliers": store.get("intensity_multipliers", {}),
+                # F-42: the regime is a hidden Markov model -- per-state
+                # emissions, BIC model selection and the holdout score.
+                "regime_hmm": regime_hmm,
                 "nhpp_coefficients": nhpp.get("coefficients", {}),
                 "nhpp_dispersion": nhpp.get("dispersion"),
                 "nhpp_category_levels": nhpp.get("category_levels", {}),
@@ -148,21 +161,39 @@ def run_calibration_job(job_id: str, season: str | None = None) -> None:
             # with, for the UI's "how was this calibrated" explanation --
             # not restated from memory, read from the same cfg the fit used.
             "calibration_settings": {
-                "regime_quantiles": {
-                    "p_calm": cfg.calibration.regime_quantiles.p_calm,
-                    "p_normal": cfg.calibration.regime_quantiles.p_normal,
-                    "p_disrupted": cfg.calibration.regime_quantiles.p_disrupted,
+                "regime_hmm": {
+                    "n_restarts": settings.n_restarts,
+                    "max_iter": settings.max_iter,
+                    "tol": settings.tol,
+                    "transition_pseudocount": settings.transition_pseudocount,
+                    "delay_threshold_minutes": settings.delay_threshold_minutes,
+                    "sick_call_exposure": settings.sick_call_exposure,
                 },
                 "delay_gmm_components": cfg.calibration.delay_gmm_components,
             },
-            # The pipeline exposes no goodness-of-fit statistic or iteration
-            # history. Rather than invent one, say so -- the UI keys its
-            # "not reported" state off these being absent.
-            "goodness_of_fit": None,
+            # F-42: the regime HMM is a real likelihood fit, so its goodness
+            # of fit is reported -- read from the store, never invented. The
+            # NB GLM and the delay mixture still report no likelihood here.
+            "goodness_of_fit": (
+                {
+                    "model": "regime hidden Markov model",
+                    "log_likelihood": hmm_fit.get("log_likelihood"),
+                    "bic": hmm_fit.get("bic"),
+                    "n_days": hmm_fit.get("n_days"),
+                    "converged": hmm_fit.get("converged"),
+                    "restarts_reaching_best": hmm_fit.get("restarts_reaching_best"),
+                    "restarts": hmm_fit.get("restarts"),
+                    "holdout": regime_hmm.get("holdout"),
+                    "bic_preferred_n_states": (regime_hmm.get("model_selection") or {}).get(
+                        "bic_preferred_n_states"
+                    ),
+                }
+                if hmm_fit else None
+            ),
             "goodness_of_fit_note": (
-                "The calibration pipeline does not report a likelihood or "
-                "per-iteration history, so none is shown. Convergence diagnostics "
-                "require run_pipeline to return fit history first."
+                "Reported for the regime hidden Markov model only (log-likelihood, BIC, "
+                "restart agreement, holdout log-likelihood per day vs a one-state model). "
+                "The sick-call GLM and the delay mixture do not report one here."
             ),
         }
         # Filename only. The absolute path leaks the developer's home directory
@@ -179,28 +210,10 @@ def run_calibration_job(job_id: str, season: str | None = None) -> None:
         job.status = "completed"
         db.commit()
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller via the job row
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = "failed"
-            job.error_message = str(exc)
-            entries = list(job.log or [])
-            if entries and entries[-1].get("status") == "running":
-                entries[-1] = {**entries[-1], "status": "failed"}
-            entries.append(
-                {
-                    "step": None,
-                    "total": len(pipeline.PHASES),
-                    "message": str(exc),
-                    "detail": None,
-                    "status": "error",
-                    "duration_ms": None,
-                    "progress_done": None,
-                    "progress_total": None,
-                    "artifact": None,
-                }
-            )
-            job.log = entries
-            db.commit()
+        record_job_failure(
+            db, job_id, exc, total_steps=len(pipeline.PHASES),
+            progress_done=None, progress_total=None, artifact=None,
+        )
     finally:
         db.close()
 
@@ -249,16 +262,9 @@ def launch_calibration(
     return job
 
 
-def _get_job_or_404(job_id: str, db: Session) -> Job:
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-
 @router.get("/{job_id}/results")
 def get_calibration_results(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    job = _get_job_or_404(job_id, db)
+    job = get_job_or_404(job_id, db)
     return {"job_id": job_id, "status": job.status, **(job.results or {})}
 
 
@@ -270,7 +276,7 @@ def get_calibration_logs(job_id: str, db: Session = Depends(get_db)) -> dict[str
     "params_vX.json generated.") printed verbatim for every job, including
     failed ones.
     """
-    job = _get_job_or_404(job_id, db)
+    job = get_job_or_404(job_id, db)
     return {
         "job_id": job_id,
         "status": job.status,

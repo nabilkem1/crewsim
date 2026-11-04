@@ -17,10 +17,12 @@ queue is the fix when that trade stops paying.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from http import HTTPStatus
+from typing import Any
 
 from sqlalchemy import JSON as SAJSON
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, create_engine, inspect, text
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 Base = declarative_base()
 
@@ -155,3 +157,48 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def get_job_or_404(job_id: str, db: Session) -> Job:
+    """The job row, or HTTP 404. IMP-612: shared by every router (there were three copies)."""
+    from fastapi import HTTPException
+
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Job not found")
+    return job
+
+
+def record_job_failure(
+    db: Session, job_id: str, exc: BaseException, total_steps: int | None = None,
+    **extra_log_fields: Any,
+) -> None:
+    """Mark a job failed and, if `total_steps` is given, close its execution log.
+
+    IMP-612: the worker failure path, shared by the processing and calibration
+    routers (it was copied in each). The last "running" log entry is marked
+    "failed" and an "error" entry is appended, so the live stream shows where
+    the job stopped rather than just going quiet. `extra_log_fields` carries
+    keys a router's log entries always have (calibration's progress/artifact
+    columns), so every entry in one log has the same shape.
+    """
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        return
+    job.status = "failed"
+    job.error_message = str(exc)
+    if total_steps is not None:
+        entries = list(job.log or [])
+        if entries and entries[-1].get("status") == "running":
+            entries[-1] = {**entries[-1], "status": "failed"}
+        entries.append({
+            "step": None,
+            "total": total_steps,
+            "message": str(exc),
+            "detail": None,
+            "status": "error",
+            "duration_ms": None,
+            **extra_log_fields,
+        })
+        job.log = entries
+    db.commit()

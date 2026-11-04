@@ -19,7 +19,7 @@ IMPORT_SIMPY = re.compile(r"^\s*(import\s+simpy|from\s+simpy\b)", re.MULTILINE)
 def test_engine_modules_do_not_import_simpy() -> None:
     offenders = [
         p.name for p in ENGINE.glob("*.py")
-        if p.name not in ALLOWED and IMPORT_SIMPY.search(p.read_text())
+        if p.name not in ALLOWED and IMPORT_SIMPY.search(p.read_text(encoding="utf-8"))
     ]
     assert not offenders, (
         f"engine modules importing simpy: {offenders}. "

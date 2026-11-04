@@ -19,7 +19,7 @@
 
 .btn {
   padding: var(--spacing-2) var(--spacing-4);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-button);
   border: none;
   font-family: var(--font-sans);
   font-weight: 500;
@@ -33,13 +33,28 @@
 }
 
 .btn-primary {
-  background-color: var(--color-primary-600);
-  color: white;
+  background-color: var(--action-bg);
+  color: var(--action-fg);
 }
 
 .btn-secondary {
   background-color: var(--color-neutral-200);
   color: var(--color-neutral-900);
+}
+
+/* Ops Console dark: secondary = Outlined Explore Pill; compact 12px type on
+   both (Review Amber / Outlined pills, DESIGN_dark.md). */
+:root[data-theme="dark"] .btn {
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  padding: 0.5rem 1rem;
+}
+
+:root[data-theme="dark"] .btn-secondary {
+  background-color: var(--secondary-bg);
+  color: var(--secondary-fg);
+  box-shadow: inset 0 0 0 1px var(--secondary-border);
 }
 
 .error-alert {
@@ -98,6 +113,38 @@
 .status-failed {
   background-color: var(--color-error-bg);
   color: var(--color-error-text);
+}
+
+/* Ops Console dark: Status Badge -- small pastel fills, 4px radius, 12px/500,
+   not uppercase-shouting. Rose + Violation Ink = failed, Mint = healthy,
+   Cream = waiting, Horizon Blue = in progress. */
+:root[data-theme="dark"] .status-badge {
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.12px;
+  text-transform: none;
+}
+
+:root[data-theme="dark"] .status-queued {
+  background-color: var(--color-caution-cream);
+  color: var(--color-ops-night);
+}
+
+:root[data-theme="dark"] .status-running {
+  background-color: var(--color-horizon-blue);
+  color: var(--color-ops-night);
+}
+
+:root[data-theme="dark"] .status-completed {
+  background-color: var(--color-clear-mint);
+  color: var(--color-ops-night);
+}
+
+:root[data-theme="dark"] .status-failed {
+  background-color: var(--color-violation-rose);
+  color: var(--color-violation-ink);
 }
 
 .job-progress-container {
@@ -174,4 +221,20 @@
 
 .toast-close:hover {
   opacity: 1;
+}
+
+/* Ops Console dark: progress track = Optimizer Lavender line on Grid Line. */
+:root[data-theme="dark"] .job-progress-container {
+  background-color: var(--color-grid-line);
+  border-radius: 9999px;
+}
+
+:root[data-theme="dark"] .job-progress-bar {
+  background-color: var(--color-optimizer-lavender);
+}
+
+:root[data-theme="dark"] .job-item {
+  background-color: var(--color-raised-graphite);
+  border-color: transparent;
+  border-radius: 20px;
 }

@@ -8,6 +8,7 @@ def assign_reserve(
     min_rest: float,
     pairing_id: str,
     deadhead_start: float | None = None,
+    flight_mins: float = 0.0,
 ) -> None:
     """
     E3: Reserve Assigned.
@@ -23,6 +24,10 @@ def assign_reserve(
     the local and cross-base paths cannot drift, and the DEADHEAD block is a
     real calendar block that L1/L2/L3 and the L0 invariant all see, not a free
     teleport into position.
+
+    IMP-102: `flight_mins` is the covered item's flight time. It is recorded
+    on the DRAFTED_DUTY block, as the draft path does (cascade.py), so the
+    reserve's L3 rolling flight-time counter sees the trip they flew.
     """
     occupy_start = duty_start if deadhead_start is None else deadhead_start
     if occupy_start > duty_start:
@@ -70,7 +75,10 @@ def assign_reserve(
         )
 
     # 2. The duty block
-    duty = Block(start=duty_start, end=duty_end, btype=BlockType.DRAFTED_DUTY, pairing_id=pairing_id)
+    duty = Block(
+        start=duty_start, end=duty_end, btype=BlockType.DRAFTED_DUTY,
+        pairing_id=pairing_id, flight_mins=flight_mins,
+    )
     crew.calendar.append(duty)
     
     # 3. The rest block (we insert it here, or at E6. The spec is slightly contradictory, 

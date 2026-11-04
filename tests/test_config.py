@@ -49,7 +49,7 @@ def test_costs_pilots_yaml_loads_into_validated_models() -> None:
 
 def test_missing_required_section_raises_not_silently_defaults() -> None:
     """A run against a malformed config must refuse to start (§4.4)."""
-    raw = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text())
+    raw = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text(encoding="utf-8"))
     del raw["scope"]
     with pytest.raises(ValidationError, match="scope"):
         config.BaseConfig.model_validate(raw)
@@ -57,7 +57,7 @@ def test_missing_required_section_raises_not_silently_defaults() -> None:
 
 def test_unknown_key_is_rejected_not_ignored() -> None:
     """extra='forbid' on every model: a YAML typo must fail loud."""
-    raw = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text())
+    raw = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text(encoding="utf-8"))
     raw["not_a_real_section"] = 1
     with pytest.raises(ValidationError):
         config.BaseConfig.model_validate(raw)
@@ -105,6 +105,33 @@ def test_absent_demand_triggers_no_demand_notice() -> None:
     cfg = config.load().model_copy(update={"demand": None})
     notices = config.unconsumed_notices(cfg)
     assert not [n for n in notices if n.startswith("demand.")]
+
+
+def test_open_question_warning_names_policies_buying_long_call() -> None:
+    """IMP-117: when every standby shift is no longer than the long-call
+    notice, the warning names the policies that still buy long-call reserves,
+    and no longer claims they can never be called (cross-shift calls exist)."""
+    cfg = config.load()
+    lc_notice = max(s.hours for s in cfg.reserve_lines.shifts)
+    cfg = cfg.model_copy(update={
+        "legality": cfg.legality.model_copy(update={"long_call_notice_hours": float(lc_notice)}),
+    })
+    warnings = config.open_question_warnings(cfg)
+    assert len(warnings) == 1
+    buying = config.policies_buying_long_call(cfg)
+    assert buying, "the shipped policies all buy long-call reserves"
+    for name in buying:
+        assert name in warnings[0]
+    assert "can never be legally called" not in warnings[0]
+
+
+def test_no_long_call_warning_when_a_shift_outlasts_the_notice() -> None:
+    cfg = config.load()
+    short = min(s.hours for s in cfg.reserve_lines.shifts) / 2
+    cfg = cfg.model_copy(update={
+        "legality": cfg.legality.model_copy(update={"long_call_notice_hours": short}),
+    })
+    assert config.open_question_warnings(cfg) == []
 
 
 def test_delay_per_minute_no_longer_declared_unconsumed() -> None:
@@ -225,7 +252,12 @@ ALLOWLIST: dict[str, set[float]] = {
     # ^ 200/10000 (AUD-28e) are MLE optimizer iteration caps for the NB fit
     #   and its derivative-free retry -- solver-procedure invariants, not
     #   business or calibration inputs (the FIT ITSELF is what config governs).
-    "src/crewsim/calibration/regime.py": {8, 2, 10},
+    # F-42: regime.py no longer slices ISO date strings (10 gone) -- it works on
+    # typed dates; 8 (receipt hash truncation) and 2 (json indent) remain.
+    "src/crewsim/calibration/regime.py": {8, 2},
+    # F-42: 2 is the number of flight-outcome probabilities per HMM state
+    # (delayed q_k, cancelled r_k) in the BIC parameter count -- structural.
+    "src/crewsim/calibration/hmm.py": {2},
     # blake2b digest_size (byte length of a receipt hash) and json indent --
     # same category as above. The spec's own stable_seed() example (§4.3)
     # hardcodes digest_size as a code literal, not a config value.
@@ -364,7 +396,9 @@ ALLOWLIST: dict[str, set[float]] = {
     #   100      - percent, for progress arithmetic
     #   10/20    - how many rows a dashboard endpoint returns
     #   1024/3/2 - bytes->MB/GB arithmetic and round() precision
-    "src/crewsim/api/routers/calibration.py": {400, 404, 100},
+    # (404 left calibration.py and jobs.py with IMP-612: their not-found path
+    # is the shared api/db.get_job_or_404, which uses HTTPStatus.NOT_FOUND.)
+    "src/crewsim/api/routers/calibration.py": {400, 100},
     "src/crewsim/api/routers/config.py": {404},
     # 400/404 are HTTP status codes, same category as this section's other
     # entries. This router computes nothing -- it reads cascade figures a
@@ -383,7 +417,7 @@ ALLOWLIST: dict[str, set[float]] = {
     # values silently stopped being exempt -- merged, and worth remembering
     # the next time this list grows.
     "src/crewsim/api/routers/data.py": {404, 422, 503, 50, 500, 2},
-    "src/crewsim/api/routers/jobs.py": {400, 404, 10, 100},
+    "src/crewsim/api/routers/jobs.py": {400, 10, 100},
     "src/crewsim/api/routers/platform.py": {100, 1024, 3, 2},
     # 4 is the number of steps the batch job's execution log reports (a
     # property of the log format, like a progress bar's segment count); 3 is
@@ -575,7 +609,7 @@ def test_no_numeric_constant_outside_configs() -> None:
     offenders = []
     for py, rel in _guarded_files():
         allowed = ALLOWLIST.get(rel, set())
-        tree = ast.parse(py.read_text(), filename=str(py))
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Constant):
                 continue
@@ -603,7 +637,7 @@ def test_allowlist_has_no_stale_entries() -> None:
     for rel, values in ALLOWLIST.items():
         py = ROOT / rel
         assert py.is_file(), f"{rel} in ALLOWLIST no longer exists"
-        tree = ast.parse(py.read_text(), filename=str(py))
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         found = {
             node.value
             for node in ast.walk(tree)
@@ -648,7 +682,7 @@ def _attribute_names_used_in_src() -> set[str]:
         # so they do not self-satisfy -- but genuine dynamic reads that live
         # there do count (e.g. APPRCompensation.on_cancellation resolves a band
         # via getattr(self, self.cancellation_band)).
-        tree = ast.parse(py.read_text(), filename=str(py))
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute):
                 used.add(node.attr)

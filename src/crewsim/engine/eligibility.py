@@ -2,21 +2,12 @@ from typing import Any, Literal
 
 import numpy as np
 
-from crewsim.engine.legality import is_legal_assignment
-from crewsim.engine.state import Block, BlockType, CrewMember, OpenTimeItem
+from crewsim.engine.legality import is_legal_assignment, on_call_block
+from crewsim.engine.state import BlockType, CrewMember, OpenTimeItem
 
-
-def on_call_block(crew: CrewMember, when: float) -> Block | None:
-    """The RESERVE block covering `when`, or None.
-
-    THE definition of "on call at an instant" -- the eligibility pool, the
-    remaining-window dispatch rule, the V3 historical reconstruction and the
-    trace's alternatives log all call this, so they cannot drift apart.
-    """
-    for b in crew.calendar:
-        if b.btype == BlockType.RESERVE and b.start <= when < b.end:
-            return b
-    return None
+# `on_call_block` is defined in legality.py (L8 needs it, and this module
+# imports legality) and re-exported here for its existing callers.
+__all__ = ["EligibilityEngine", "is_on_call_at", "on_call_block", "oncall_minutes_in"]
 
 
 def oncall_minutes_in(crew: CrewMember, start: float, end: float) -> float:

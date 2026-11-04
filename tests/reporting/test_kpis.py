@@ -173,6 +173,47 @@ def test_compute_kpis_utilization_rate_from_real_reserve_staffing_rows():
     assert result["utilization_rate"] == 0.25
 
 
+def test_reserve_usage_is_split_by_call_type_and_flags_paid_but_unused():
+    """IMP-117: SC/LC reserve-days paid and assignments used are reported
+    separately, and a call type that is paid for but never used is flagged."""
+    cfg = config.load()
+    warmup_end, _ = des.measurement_window_bounds(cfg)
+    rows = [
+        {"sim_time": warmup_end + 1.0, "event_uid": 0, "root_event_uid": 0, "crew_id": "S1",
+         "category": "RESERVE_STAFFING", "amount": 250.0},
+        {"sim_time": warmup_end + 1.0, "event_uid": 0, "root_event_uid": 0, "crew_id": "L1",
+         "category": "RESERVE_STAFFING", "amount": 180.0},
+        {"sim_time": warmup_end + 2.0, "event_uid": 7, "root_event_uid": 7, "crew_id": "S1",
+         "category": "RESERVE_UTILIZATION", "amount": 100.0},
+    ]
+    sim = _fake_sim(cfg, rows)
+    types_by_key = {
+        ("S1", warmup_end + 1.0, 0): "SC",
+        ("L1", warmup_end + 1.0, 0): "LC",
+        ("S1", warmup_end + 2.0, 7): "SC",
+    }
+    sim.reserve_call_type_of = lambda r: types_by_key.get((r.crew_id, r.sim_time, r.event_uid))
+
+    result = compute_kpis(cfg, [sim])
+    usage = result["reserve_by_call_type"]
+    assert usage["SC"] == {"staffing_days_mean": 1.0, "staffing_dollars_mean": 250.0, "assignments_mean": 1.0}
+    assert usage["LC"] == {"staffing_days_mean": 1.0, "staffing_dollars_mean": 180.0, "assignments_mean": 0.0}
+    assert result["unused_paid_call_types"] == ["LC"]
+
+
+def test_real_simulation_records_a_call_type_for_every_reserve_row():
+    """IMP-117: the engine's side table covers every RESERVE_STAFFING and
+    RESERVE_UTILIZATION row it books, so the split above is never partial."""
+    cfg = config.load()
+    costs = config.load_costs(cfg)
+    policy = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
+    sim = des.run_scenario(cfg, costs, policy, scenario_id=0, n_scenarios=1)
+    reserve_rows = [r for r in sim.ledger.rows
+                    if r.category in ("RESERVE_STAFFING", "RESERVE_UTILIZATION")]
+    assert reserve_rows
+    assert all(sim.reserve_call_type_of(r) in ("SC", "LC") for r in reserve_rows)
+
+
 def test_compute_kpis_utilization_rate_none_when_no_reserves_staffed():
     cfg = config.load()
     sim = _fake_sim(cfg, rows=[])

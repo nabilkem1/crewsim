@@ -59,7 +59,7 @@ def extract_confirm_markers(paths: list[pathlib.Path]) -> list[dict[str, Any]]:
     """
     markers = []
     for path in paths:
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             m = _CONFIRM_RE.search(line)
             if not m:
                 continue
@@ -135,9 +135,10 @@ def build_report(
     from ..engine.policy import load_policy
     from ..gates.v3_eligibility import run_v3_gate
     from ..gates.v4_cascade import run_v4_gate
-    from ..gates.v9_sensitivity import _real_r_recommender
+    from ..gates.v9_sensitivity import real_r_recommender
     from .drilldown import build_scenario_drilldown, select_exemplar_scenarios
     from .gate_status import compute_core_gates
+    from .kpis import reserve_usage_by_call_type, unused_paid_call_types
 
     representative_policy = representative_policy or policy_names[0]
 
@@ -145,7 +146,7 @@ def build_report(
     sims_by_policy: dict[str, list[Any]] = {}
     for i, name in enumerate(policy_names, start=1):
         print(f"  policy {name} ({i}/{len(policy_names)})...", file=sys.stderr)
-        policy = load_policy(config.repo_root() / "configs" / "policies" / f"{name}.yaml")
+        policy = load_policy(config.policy_path(name))
 
         def _progress(done: int, total: int) -> None:
             print(f"\r    scenario {done}/{total}", end="", file=sys.stderr, flush=True)
@@ -164,6 +165,7 @@ def build_report(
             "scenario_costs": scenario_costs,
             "mean_cost": float(np.mean(scenario_costs)),
             "cvar95": des.cvar95(scenario_costs),
+            "reserve_by_call_type": reserve_usage_by_call_type(cfg, sims),
         }
         sims_by_policy[name] = sims
 
@@ -185,11 +187,11 @@ def build_report(
 
     # V9: the real argmin-over-R lambda curve, from the SAME per-policy sims
     # already run above -- not a second simulation pass (build_r_star_lookup
-    # would re-run these; reuse its formula (_real_r_recommender) on data we
+    # would re-run these; reuse its formula (real_r_recommender) on data we
     # already have instead).
     term_pen = costs.disruption.terminal_penalty_multiple
     r_lookup = {(d["r_value"], term_pen): (d["mean_cost"], d["cvar95"]) for d in per_policy.values()}
-    recommend = _real_r_recommender(r_lookup)
+    recommend = real_r_recommender(r_lookup)
     lambdas = cfg.sensitivity.lambda_risk_dial
     lambda_curve = [(lam, recommend(0, term_pen, lam)) for lam in lambdas]
     v9_unstable = (max(r for _, r in lambda_curve) - min(r for _, r in lambda_curve)) > cfg.sensitivity.instability_threshold
@@ -223,7 +225,7 @@ def build_report(
             dd_sims = sims_by_policy[drilldown_policy]
         else:
             print(f"  drilldown: policy {drilldown_policy} ({n_scenarios} scenario(s), traced)...", file=sys.stderr)
-            dd_policy = load_policy(config.repo_root() / "configs" / "policies" / f"{drilldown_policy}.yaml")
+            dd_policy = load_policy(config.policy_path(drilldown_policy))
 
             def _dd_progress(done: int, total: int) -> None:
                 print(f"\r    scenario {done}/{total}", end="", file=sys.stderr, flush=True)
@@ -317,7 +319,12 @@ def build_report(
         )
 
     parts = [
+        # IMP-410: a real document head. Without <meta charset>, a browser
+        # opening the file from disk guesses the encoding (cp1252 on Windows)
+        # and renders the UTF-8 written below as mojibake.
+        '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">',
         "<title>Crew Recovery Simulation -- Policy Comparison Report</title>",
+        "</head><body>",
         "<h1>Crew Recovery Simulation -- Policy Comparison Report</h1>",
         f"<p>Policies: {esc(', '.join(policy_names))} &middot; {n_scenarios} scenario(s) &middot; "
         f"master_seed={esc(master_seed)} &middot; representative policy for V3/V4: {esc(representative_policy)}"
@@ -347,8 +354,28 @@ def build_report(
             f"not a meaningful U-shape at this scale of data. CVaR95 is where the real trade-off is; "
             f"the marked optimum is CVaR95's minimum, not E[cost]'s.</i></p>"
         )
+    # IMP-117: a reserve type that is paid for and never used is shown, not hidden.
+    usage_rows = []
+    unused_notes: list[str] = []
+    for name, d in per_policy.items():
+        usage = d["reserve_by_call_type"]
+        for call_type, u in usage.items():
+            usage_rows.append((
+                name, call_type, f"{u['staffing_days_mean']:.2f}",
+                f"${u['staffing_dollars_mean']:,.2f}", f"{u['assignments_mean']:.2f}",
+            ))
+        for call_type in unused_paid_call_types(usage):
+            unused_notes.append(f"{name}: {call_type} reserves are paid for but never assigned")
+    unused_warning = (
+        f"<p><b>Warning:</b> {esc('; '.join(unused_notes))}. See configs/base.yaml "
+        f"-&gt; legality.long_call_notice_hours and reserve_lines (IMP-117).</p>"
+        if unused_notes else ""
+    )
     parts.extend([
         tradeoff_fig.to_html(full_html=False, include_plotlyjs=False),
+        "<h2>Reserve usage by call type (measurement window, mean per scenario)</h2>",
+        table(["policy", "call type", "reserve-days paid", "staffing $", "assignments"], usage_rows),
+        unused_warning,
         "<h2>Lambda curve</h2>",
         lambda_fig.to_html(full_html=False, include_plotlyjs=False),
     ])
@@ -370,7 +397,9 @@ def build_report(
         for d in drilldown_sections:
             parts.append(render_drilldown_scenario(d))
 
+    parts.append("</body></html>")
+
     out_dir = config.ensure_dir(cfg, "reports_dir")
     path = out_dir / "policy_report.html"
-    path.write_text("\n".join(parts))
+    path.write_text("\n".join(parts), encoding="utf-8")
     return path

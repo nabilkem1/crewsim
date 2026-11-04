@@ -4,6 +4,7 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
+from .. import config
 from ..engine.eligibility import is_on_call_at
 from ..engine.legality import is_legal_assignment
 from ..engine.roster_loader import load_rosters
@@ -58,7 +59,7 @@ def reconstruct_eligibility(cfg, window: str) -> dict:
     d4 = loaders.load_dataset(cfg, "d4_absences")
     d4 = d4.filter(
         (pl.col("base") == base)
-        & (pl.col("fleet") == fleet)
+        & pl.col("fleet").is_in(sorted(config.fleet_members(cfg, fleet)))
         & (pl.col("position") == position)
         & pl.col("affected_pairing_id").is_not_null()
         & (pl.col("absence_start") >= win.start)
@@ -74,7 +75,15 @@ def reconstruct_eligibility(cfg, window: str) -> dict:
         if crew is None:
             continue  # not an active in-scope crew member in this window
 
-        notification_minutes = to_minutes(row["notification_ts"])
+        # No notification time in a real extract: `data.null_notification_ts` says
+        # whether the event is left out or taken as reported at 00:00 on the
+        # absence's first day (the same rule the V6 replay applies).
+        notified = row["notification_ts"]
+        if notified is None:
+            if cfg.data.null_notification_ts == "exclude":
+                continue
+            notified = datetime.datetime.combine(row["absence_start"], datetime.time.min)
+        notification_minutes = to_minutes(notified)
         pairing_id = row["affected_pairing_id"]
 
         for b in crew.calendar:
@@ -83,7 +92,7 @@ def reconstruct_eligibility(cfg, window: str) -> dict:
 
             item = OpenTimeItem(
                 uid=0, pairing_id=pairing_id, base=crew.base,
-                fleet=next(iter(crew.fleet_quals)), position=crew.position,
+                fleet=crew.primary_fleet, position=crew.position,
                 start=b.start, end=b.end, deadline=b.start, origin="SICK_CALL",
                 root_event_uid=0, flight_mins=b.flight_mins,
             )

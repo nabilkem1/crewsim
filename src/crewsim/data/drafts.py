@@ -16,12 +16,47 @@ from typing import Any
 import polars as pl
 
 from .. import config
-from . import loaders
+from . import ids, loaders
 
 # Step 3 of §6.3-1's recipe: "the pilot was suddenly placed on a flight."
 # Not a `draft_reconstruction` parameter -- it is part of what a draft *is*,
 # not an assumption about how Air Transat's systems happen to be coded.
 _PLACED_ON_A_PAIRING = "PAIRING"
+
+
+def with_notice_lead(cfg: config.BaseConfig, d6: pl.DataFrame) -> pl.DataFrame:
+    """`d6` plus `lead_hours` (IMP-514): hours from the schedule change to the
+    start of the pairing it placed the crew member on.
+
+    The pairing start is the first leg's report time when D3 has legs, else
+    the pairing's start date at midnight. A change whose pairing cannot be
+    found in D3 (even after resolving its spelling) has a null lead: with a
+    notice rule on, that change cannot be shown to be short notice.
+    """
+    d3 = loaders.load_dataset(cfg, "d3_pairings")
+    starts = d3.select(
+        pl.col("pairing_id").alias("_pid"), pl.col("start_date").cast(pl.Datetime).alias("_start")
+    )
+    try:
+        legs = loaders.load_dataset(cfg, "d3_pairing_legs")
+    except FileNotFoundError:
+        legs = None
+    if legs is not None:
+        first = legs.group_by("pairing_id").agg(pl.col("report_local").min().alias("_first"))
+        starts = (
+            starts.join(first.rename({"pairing_id": "_pid"}), on="_pid", how="left")
+            .with_columns(pl.coalesce("_first", "_start").alias("_start"))
+            .select("_pid", "_start")
+        )
+    resolved = ids.resolve_pairing_ids(
+        d6["new_pairing_id"], None, d3["pairing_id"], cfg.data.pairing_id_forms
+    )["resolved"]
+    return (
+        d6.with_columns(resolved.alias("_pid"))
+        .join(starts, on="_pid", how="left")
+        .with_columns(((pl.col("_start") - pl.col("change_ts")) / pl.duration(hours=1)).alias("lead_hours"))
+        .drop("_pid", "_start")
+    )
 
 
 def reconstruct_drafts(cfg: config.BaseConfig, d6: pl.DataFrame | None = None) -> pl.DataFrame:
@@ -57,6 +92,14 @@ def reconstruct_drafts(cfg: config.BaseConfig, d6: pl.DataFrame | None = None) -
         & (pl.col("new_block_type") == _PLACED_ON_A_PAIRING)
         & (pl.col("initiator").is_null() | pl.col("initiator").is_in(params.initiator_filter))
     )
+    if params.max_notice_hours is not None:
+        # IMP-514: a change made weeks ahead is a roster change, not a draft,
+        # however it is coded. Off (None) until Crew Planning states the window.
+        candidates = (
+            with_notice_lead(cfg, candidates)
+            .filter(pl.col("lead_hours") <= params.max_notice_hours)
+            .drop("lead_hours")
+        )
 
     drafts = candidates.join(premium, on=["crew_id", "new_pairing_id"], how="inner")
 
@@ -99,7 +142,7 @@ def score_recall(
     truth_path = cfg.paths.corpus_dir / "_ground_truth.json"
     if not truth_path.is_file():
         return None
-    truth = json.loads(truth_path.read_text())
+    truth = json.loads(truth_path.read_text(encoding="utf-8"))
     true_n = truth["drafts_true"] if true_n is None else true_n
     gate = cfg.quality_gates.d6_d7_join_pass
     if not true_n:

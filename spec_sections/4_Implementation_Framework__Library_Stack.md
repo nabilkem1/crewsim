@@ -32,6 +32,7 @@ The build contract. It answers three questions an engineer joining the project a
 | RNG / CRN | **NumPy** `Generator` + `SeedSequence` | ≥1.26 | `SeedSequence.spawn()` gives collision-resistant hierarchical seeding. This is the backbone of Common Random Numbers — see §5.2. Do **not** use `random` or `np.random.seed()`; both are global state and both break CRN. |
 | Data frames | **Polars** (primary), pandas (interop) | Polars ≥0.20 | Cost ledgers are tall-and-narrow (millions of rows × 7 columns). Polars' lazy engine aggregates them ~5–10× faster than pandas and uses far less memory. pandas is kept only where a plotting library demands it. |
 | Statistical fitting | **statsmodels**, **scipy.stats** | latest | GLM (Poisson / Negative Binomial) for sick-call intensity; distribution fitting and goodness-of-fit tests. |
+| Regime model (latent daily severity) | **hmmlearn** | ≥0.3.3 | F-42: the daily regime is a *hidden* state, so it is fitted as a hidden Markov model (Baum–Welch EM, forward–backward, Viterbi, BIC, multi-sequence fitting) rather than read from a label file (D9). hmmlearn is the scikit-learn-family HMM library and is built to be subclassed with a custom emission model — needed here, because one day is a mix of multinomial flight outcomes and a Poisson sick-call count with an exposure offset (`calibration/hmm.py`). *Alternatives rejected:* pomegranate v1 (equally flexible, but pulls in PyTorch); nltk's HMM (discrete-symbol tagger for language, cannot express count emissions). |
 | Config & policy objects | **Pydantic v2** + YAML | ≥2.5 | A policy is data that gets serialised, hashed, stored beside its results, and reloaded a year later. Pydantic gives validation + JSON schema for free. Plain dicts do not. |
 | Storage | **Parquet** via pyarrow; Delta Lake (Phase 2+) | pyarrow ≥14 | Columnar, compresses ledgers ~10:1, and aligns with the existing ADLS Gen2 estate. |
 | Parallel execution | **joblib** (MVP) → **Ray** (Phase 2) | — | Scenarios are embarrassingly parallel. joblib is three lines; Ray earns its complexity only when we outgrow one machine. |
@@ -57,7 +58,7 @@ crew-recovery-sim/
 ├── src/crewsim/
 │   ├── data/                      # ETL, schemas, corpus loaders          (§6)
 │   │   └── corpus/                # the datasets D1–D12, committed        (§6.1)
-│   ├── calibration/               # NHPP fit, regime model, V&V targets   (§6.3)
+│   ├── calibration/               # NHPP fit, regime HMM (hmm.py, regime.py), V&V targets (§6.3)
 │   ├── scenarios/                 # ScenarioGenerator, CRN seed management(§5.2)
 │   ├── engine/
 │   │   ├── state.py               # Crew State Engine                     (§5.4)

@@ -1,0 +1,3 @@
+invoice_line_id,invoice_id,invoice_date,service_date,cost_type,station,supplier_code,quantity,unit_price_cad,amount_cad,original_amount,currency,is_credit_note,is_group_bill,crew_id,pairing_id,aims_booking_ref
+INV-EX-1-1,INV-EX-1,2026-07-20,2026-07-14,HOTEL,CDG,H123,1,210.00,210.00,,,0,0,P000001,C0290_20260714,
+INV-EX-2-1,INV-EX-2,2026-07-21,2026-07-15,TRANSPORT,YUL,,1,95.00,95.00,,,0,0,,,

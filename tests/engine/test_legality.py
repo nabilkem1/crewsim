@@ -236,6 +236,111 @@ def test_l8_classification_uses_call_time_not_report_time():
     res = check_l8_notice_time(crew, duty, now=100.0, cfg=mock_cfg)
     assert res.legal
 
+def test_in_progress_pairing_blocks_a_draft():
+    """IMP-104: a crew member cannot be drafted off a pairing already under way.
+
+    PAIRING is not an OCCUPYING block (line holders are drafted off FUTURE
+    pairings by design), so before this check a crew member flying a trip at
+    the call was a legal candidate for an item overlapping it, and the draft
+    reopened a trip that was in the air.
+    """
+    cfg = _test_cfg()
+    flying = _test_crew([
+        Block(start=50.0, end=900.0, btype=BlockType.PAIRING, pairing_id="IN_AIR"),
+    ])
+    item = _test_duty(start=300.0, end=500.0)
+
+    res = is_legal_assignment(flying, item, now=100.0, cfg=cfg)
+    assert not res.legal and res.fail_rule == "ILLEGAL_L0"
+    assert "already under way" in res.reason
+
+    # The same pairing, not yet started at the call, may be drafted off.
+    assert is_legal_assignment(flying, item, now=40.0, cfg=cfg).legal
+
+
+def test_line_notice():
+    """IMP-104: line-holder draft notice comes from config, boundary inclusive."""
+    import types
+
+    from crewsim.engine.legality import check_l8_notice_time
+
+    cfg = types.SimpleNamespace(legality=types.SimpleNamespace(
+        short_call_notice_hours=2.0, long_call_notice_hours=12.0,
+        line_holder_draft_notice_hours=3.0,
+    ))
+    line_holder = _test_crew([Block(start=0.0, end=2000.0, btype=BlockType.DAY_OFF)])
+    item = _test_duty(start=400.0, end=600.0)
+
+    assert check_l8_notice_time(line_holder, item, now=220.0, cfg=cfg).legal       # exactly 3 h
+    late = check_l8_notice_time(line_holder, item, now=221.0, cfg=cfg)
+    assert not late.legal and late.fail_rule == "ILLEGAL_L8"
+
+    # The shipped default (0.0) adds no floor, but a call after the report is
+    # never legal.
+    cfg.legality.line_holder_draft_notice_hours = 0.0
+    assert check_l8_notice_time(line_holder, item, now=400.0, cfg=cfg).legal
+    assert not check_l8_notice_time(line_holder, item, now=401.0, cfg=cfg).legal
+
+
+def _l8_cfg():
+    import types
+
+    return types.SimpleNamespace(legality=types.SimpleNamespace(
+        short_call_notice_hours=2.0, long_call_notice_hours=12.0,
+        line_holder_draft_notice_hours=0.0,
+    ))
+
+
+def test_l8_between_shifts_reserve_gets_reserve_notice():
+    """IMP-116: a reserve called BETWEEN shifts, for a duty reporting inside
+    their next shift, is in the eligibility pool because that next block covers
+    the report. L8 must hold them to that block's SC/LC notice, not to the
+    line-holder notice (0 h) they used to fall through to."""
+    from crewsim.engine.eligibility import is_on_call_at
+    from crewsim.engine.legality import check_l8_notice_time
+
+    # Off shift at the call (now=500); on an SC shift from 600 that covers the
+    # report at 610. 1h50 notice: legal for a line holder, illegal for SC (2 h).
+    reserve = _test_crew([
+        Block(start=0.0, end=400.0, btype=BlockType.RESERVE, reserve_call_type="SC"),
+        Block(start=600.0, end=1320.0, btype=BlockType.RESERVE, reserve_call_type="SC"),
+    ])
+    item = _test_duty(start=610.0, end=800.0)
+    assert is_on_call_at(reserve, item.start)  # the pool admits them
+
+    res = check_l8_notice_time(reserve, item, now=500.0, cfg=_l8_cfg())
+    assert not res.legal and res.fail_rule == "ILLEGAL_L8"
+    assert "for SC" in res.reason
+
+    # Enough SC notice -> legal.
+    assert check_l8_notice_time(reserve, item, now=480.0, cfg=_l8_cfg()).legal
+
+
+def test_l8_between_shifts_long_call_reserve_gets_long_call_notice():
+    """IMP-116, LC variant: the next shift's LC notice applies, not 0 h."""
+    from crewsim.engine.legality import check_l8_notice_time
+
+    reserve = _test_crew([
+        Block(start=1440.0, end=2160.0, btype=BlockType.RESERVE, reserve_call_type="LC"),
+    ])
+    item = _test_duty(start=1500.0, end=1700.0)
+
+    short = check_l8_notice_time(reserve, item, now=1000.0, cfg=_l8_cfg())   # 8.3 h
+    assert not short.legal and "for LC" in short.reason
+    assert check_l8_notice_time(reserve, item, now=780.0, cfg=_l8_cfg()).legal  # 12 h exactly
+
+
+def test_l8_line_holder_still_gets_line_holder_notice():
+    """IMP-116 must not change line holders: with no RESERVE block at the call
+    or at the report, the line-holder notice applies."""
+    from crewsim.engine.legality import check_l8_notice_time, reserve_call_type_for
+
+    line_holder = _test_crew([Block(start=0.0, end=200.0, btype=BlockType.PAIRING, pairing_id="P1")])
+    item = _test_duty(start=610.0, end=800.0)
+    assert reserve_call_type_for(line_holder, item, now=500.0) is None
+    assert check_l8_notice_time(line_holder, item, now=500.0, cfg=_l8_cfg()).legal
+
+
 def test_l3_rolling_7d():
     import types
 

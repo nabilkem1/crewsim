@@ -20,6 +20,21 @@ class BlockType(Enum):
     # rolling-limit hours).
     ABSENCE = "ABSENCE"
 
+
+# Block types that count as duty -- for L0 overlap and the rolling-limit
+# counters. Defined HERE, not in legality.py, because legality imports this
+# module (not the other way round) and get_rolling_counters below needs it.
+# legality.DUTY_BLOCKS is this same object (IMP-612: there used to be two
+# hand-kept copies).
+DUTY_BLOCKS: frozenset[BlockType] = frozenset({
+    BlockType.PAIRING,
+    BlockType.RESERVE,
+    BlockType.DRAFTED_DUTY,
+    BlockType.DEADHEAD,
+    BlockType.SIMULATOR,
+    BlockType.TRAINING,
+})
+
 # AUD-06: full-field equality, no ordering. This used to be
 # @dataclass(frozen=True, order=True) with every field except `start` marked
 # compare=False -- so PAIRING[100,200] == VACATION[100,500] was True and
@@ -59,7 +74,7 @@ class OpenTimeItem:
     start: float          # report time
     end: float            # release time
     deadline: float       # cancel if not covered by this time
-    origin: str           # "SICK_CALL" | "CASCADE" | "DELAY"
+    origin: str           # "SICK_CALL" | "CASCADE" | "DISPLACED_LINE"
     root_event_uid: int   # for cost attribution across cascade levels
     flight_mins: float = 0.0
 
@@ -94,6 +109,14 @@ class CrewMember:
     # hinges on this flag, and as a runtime attribute it would be invisible to
     # mypy and silently dropped by dataclasses.replace.
     _is_cross_base: bool = False
+
+    @property
+    def primary_fleet(self) -> str:
+        """One fleet to name this crew member by. Deterministic: `fleet_quals`
+        is a set, and `next(iter(set))` over strings changes with the hash
+        seed -- harmless while it held one fleet, a run-to-run difference once
+        a fleet group makes it hold several (IMP-522)."""
+        return min(self.fleet_quals) if self.fleet_quals else "UNKNOWN"
 
     def blocks_in(self, start: float, end: float) -> list[Block]:
         """Return all blocks that overlap the interval [start, end):
@@ -130,11 +153,7 @@ class CrewMember:
         duty_mins = 0.0
         flight_mins = 0.0
 
-        # DUTY_BLOCKS as defined in legality.py
-        duty_btypes = {
-            BlockType.PAIRING, BlockType.RESERVE, BlockType.DRAFTED_DUTY,
-            BlockType.DEADHEAD, BlockType.SIMULATOR, BlockType.TRAINING
-        }
+        duty_btypes = set(DUTY_BLOCKS)
         if not count_reserve_as_duty:
             duty_btypes.discard(BlockType.RESERVE)
 

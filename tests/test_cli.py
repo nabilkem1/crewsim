@@ -1,6 +1,21 @@
 import subprocess
 
 
+def test_every_subcommand_has_a_handler():
+    """IMP-612: every top-level subcommand registered with argparse has an
+    `args.cmd == "<name>"` handler. `fit-delays` used to be registered with no
+    handler and fell through to a "not implemented yet" stub."""
+    import re
+
+    from crewsim import config
+
+    src = (config.repo_root() / "src" / "crewsim" / "cli.py").read_text(encoding="utf-8")
+    registered = set(re.findall(r'\bsub\.add_parser\(\s*"([^"]+)"', src))
+    handled = set(re.findall(r'args\.cmd == "([^"]+)"', src))
+    assert registered, "no subcommands found -- the scan is broken"
+    assert registered <= handled, f"registered without a handler: {sorted(registered - handled)}"
+
+
 def test_cli_compare():
     """Test that the compare command works and calculates paired statistics.
 
@@ -147,24 +162,45 @@ def test_cli_explain_crew_rolling_counters():
     assert unknown.returncode == 1
     assert "not found" in unknown.stdout
 
+def _a_reserve_assigned_in_scenario_0_under_r10() -> str:
+    """A reserve that really received a DRAFTED_DUTY in scenario 0 under R10.
+
+    Found by running the same simulation explain-crew runs, rather than
+    hard-coding a crew id: which crew are reserves depends on
+    population.reserve_bid_rule (IMP-118), so a fixed id silently stops being a
+    reserve when that rule changes.
+    """
+    from crewsim import config
+    from crewsim.engine import des
+    from crewsim.engine.policy import load_policy
+    from crewsim.engine.state import BlockType
+
+    cfg = config.load()
+    policy = load_policy(config.repo_root() / "configs" / "policies" / "R10.yaml")
+    sim = des.run_scenario(cfg, config.load_costs(cfg), policy, scenario_id=0, n_scenarios=1)
+    for crew in sorted(sim.reserves, key=lambda c: c.crew_id):
+        if any(b.btype == BlockType.DRAFTED_DUTY for b in crew.calendar):
+            return crew.crew_id
+    raise AssertionError("no reserve was assigned in scenario 0 under R10")
+
+
 def test_cli_explain_crew_scenario():
     """S1b-05b's manual check: --scenario must show a crew's calendar AFTER
     that scenario's real DES/drafting events, not the static D2/D3 roster.
-    P00448 is a real reserve drafted at t=2484 in scenario 0 under policy
-    R10 (found via `explain-recovery --scenario 0 --policy R10 --trace`).
-    Its static calendar has a single unbroken RESERVE (SC) block
-    [t=1680->10320]; the real post-sim calendar must show that block split
+    The static calendar of a reserve used in scenario 0 under R10 has no
+    DRAFTED_DUTY; the real post-sim calendar must show its RESERVE block split
     by a DRAFTED_DUTY/REST pair, proving --scenario reads real simulated
     state, not a copy of the static roster with a different label."""
+    crew_id = _a_reserve_assigned_in_scenario_0_under_r10()
     static = subprocess.run(
-        ["uv", "run", "crewsim", "explain-crew", "--crew", "P00448", "--timeline"],
+        ["uv", "run", "crewsim", "explain-crew", "--crew", crew_id, "--timeline"],
         capture_output=True, text=True, check=False
     )
     assert static.returncode == 0
     assert "DRAFTED_DUTY" not in static.stdout
 
     scenario = subprocess.run(
-        ["uv", "run", "crewsim", "explain-crew", "--crew", "P00448", "--scenario", "0",
+        ["uv", "run", "crewsim", "explain-crew", "--crew", crew_id, "--scenario", "0",
          "--policy", "R10", "--timeline"],
         capture_output=True, text=True, check=False
     )
@@ -208,7 +244,7 @@ def test_cli_report_drilldown():
 
     path = result.stdout.strip().splitlines()[-1].removeprefix("wrote ")
     import pathlib
-    html = pathlib.Path(path).read_text()
+    html = pathlib.Path(path).read_text(encoding="utf-8")
     assert 'id="drilldown"' in html
     assert "costliest" in html
     assert "typical" in html
@@ -289,7 +325,7 @@ def test_cli_grid():
     p = pathlib.Path(path)
     assert p.is_file()
     assert p.name == "grid_results.csv"
-    rows = p.read_text().strip().splitlines()
+    rows = p.read_text(encoding="utf-8").strip().splitlines()
     assert len(rows) == 6  # header + 5 policies
 
 

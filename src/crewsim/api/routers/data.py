@@ -198,9 +198,13 @@ def get_dataset_rows(
 def get_data_profile_report() -> str:
     """Generate and return the S0-02b data profile HTML report."""
     from crewsim.config import load
+    from crewsim.data import limitations
     from crewsim.data.profile import compute_profiles
     from crewsim.data.profile_html import render
 
     cfg = load()
     profiles = compute_profiles(cfg)
-    return render(profiles, cfg.calibration.overdispersion_threshold)
+    return render(
+        profiles, cfg.calibration.overdispersion_threshold,
+        [x.as_dict() for x in limitations.collect(cfg)],
+    )

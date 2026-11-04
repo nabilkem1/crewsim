@@ -50,7 +50,7 @@ Window **2023-08-01 → 2026-07-31** (36 months), seed `20260805`. Total ≈96 M
 | `d6_schedule_changes.csv` | 3,114 | D6 | Schedule changes — the raw material for **draft reconstruction** |
 | `d7_pay_register.csv` | 7,881 | D7 | Pay items with premium codes — the other half of that join |
 | `d8_flight_movements.csv` | 67,368 | D8 | OTP: scheduled vs actual, IATA delay codes, cancellations |
-| `d9_station_days.csv` | 62,354 | D9 | Station-day disruption class — the severity regime |
+| `d9_station_days.csv` | 62,354 | D9 | Station-day disruption class — the generator's TRUE hidden regime. **Not a calibration input since F-42** (the regime is inferred by an HMM from D8/D4/D2); kept only as ground truth for the optional `regime_label_agreement` diagnostic |
 | `d10_positioning_invoices.csv` | 745 | D10 | Hotel / deadhead / transport costs |
 | `d11_training_sessions.csv` | 5,621 | D11 | Ground and simulator sessions with requalification deadlines |
 | `d12_agreement_rules.yaml` | — | D12 | Agreement rules as a document. Confirmed facts marked `CONFIRMED`; the rest `[CONFIRM: …]` |

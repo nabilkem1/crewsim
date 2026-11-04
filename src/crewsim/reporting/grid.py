@@ -20,15 +20,8 @@ def load_grid_config(path: str | Path) -> list[str]:
     own header comment and backlog story S1e-04b), so the grid has one real
     dimension: which policy file to run.
     """
-    data = yaml.safe_load(Path(path).read_text())
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     return list(data["policies"])
-
-
-def _policy_path(name_or_path: str) -> Path:
-    p = Path(name_or_path)
-    if p.is_file():
-        return p
-    return config.repo_root() / "configs" / "policies" / f"{name_or_path}.yaml"
 
 
 def _run_one_policy(
@@ -39,7 +32,7 @@ def _run_one_policy(
     master_seed: str,
     on_scenario: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
-    policy = load_policy(_policy_path(policy_name))
+    policy = load_policy(config.policy_path(policy_name))
     sims = des.run_policy_crn(
         cfg, costs, policy, n_scenarios, master_seed, on_progress=on_scenario
     )
@@ -48,8 +41,10 @@ def _run_one_policy(
     result["policy_id"] = policy.policy_id
     result["policy_hash"] = policy.get_hash()
     # WN-007: the other half of the reproducibility chain a policy_hash alone
-    # doesn't carry -- which costs table this run priced against.
-    result["costs_version"] = policy.costs_file
+    # doesn't carry -- which costs table this run priced against. IMP-612: the
+    # file and version actually LOADED, not the policy's pin label (a bare pin
+    # such as "costs_pilots.yaml" carries no version at all).
+    result["costs_version"] = f"{cfg.costs_file}@{costs.version}"
     # The per-scenario vector, in scenario_id order, so callers can compute a
     # PAIRED difference between two policies (reporting/paired.py). The
     # aggregate KPIs above cannot support that -- a mean tells you nothing
@@ -261,7 +256,7 @@ def write_grid_csv(cfg: config.BaseConfig, results: list[dict[str, Any]]) -> Pat
     out_dir = config.ensure_dir(cfg, "reports_dir")
     path = out_dir / "grid_results.csv"
     fieldnames = ["policy_name", "policy_id", "policy_hash"] + [key for key, _ in _TABLE_COLUMNS[1:]]
-    with path.open("w", newline="") as f:
+    with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in results:

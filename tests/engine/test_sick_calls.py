@@ -46,6 +46,47 @@ def test_sick_calls():
         assert b.pairing_id != otis[0].pairing_id, "Pairing block should be removed from calendar"
 
 
+def test_in_progress_pairing_is_not_reopened():
+    """IMP-105: a sick call breaks only pairings that start at or after the call.
+
+    A pairing already under way at the call used to be reopened as an item
+    whose deadline (start - lead) was already in the past, so it was born late
+    and cancelled. Now the crew member completes the duty in progress, and the
+    absence removes them from everything that starts later.
+    """
+    cfg = config.load()
+    crew = CrewMember(
+        crew_id="S1", seniority=1, base="YUL", position="FO", fleet_quals={"A321neoLR"},
+        calendar=[
+            Block(start=900.0, end=1300.0, btype=BlockType.PAIRING,
+                  pairing_id="IN_PROGRESS", flight_mins=200.0),
+            Block(start=3000.0, end=3400.0, btype=BlockType.PAIRING,
+                  pairing_id="LATER", flight_mins=200.0),
+        ],
+    )
+    now = 1000.0
+    sick, items = apply_sick_call(cfg, [crew], now, 3.0, 1, np.random.default_rng(0))
+
+    assert sick is crew
+    assert [i.pairing_id for i in items] == ["LATER"]
+    assert all(i.start >= now for i in items)
+    assert any(b.pairing_id == "IN_PROGRESS" for b in crew.calendar), (
+        "the duty already under way stays on the calendar (completed)"
+    )
+
+
+def test_crew_with_only_an_in_progress_pairing_is_not_selected():
+    """IMP-105: a crew member whose only pairing in the window has already
+    started has nothing a sick call could reopen, so they are not a candidate."""
+    cfg = config.load()
+    crew = CrewMember(
+        crew_id="S1", seniority=1, base="YUL", position="FO", fleet_quals={"A321neoLR"},
+        calendar=[Block(start=900.0, end=1300.0, btype=BlockType.PAIRING, pairing_id="IN_PROGRESS")],
+    )
+    sick, items = apply_sick_call(cfg, [crew], 1000.0, 3.0, 1, np.random.default_rng(0))
+    assert sick is None and items == []
+
+
 def test_apply_named_absence_selects_the_named_crew_not_a_random_one():
     cfg = config.load()
     target = CrewMember(crew_id="T1", seniority=1, base="YUL", position="FO", fleet_quals={"A321neoLR"},

@@ -1,0 +1,2 @@
+flight_no,flight_date,origin,destination,cancel_cause_category,cancel_cause_detail,decided_ts,source_system
+TS000,2026-07-14,YUL,CDG,WEATHER,,,OCC log

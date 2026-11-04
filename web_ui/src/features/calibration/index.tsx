@@ -20,7 +20,7 @@ export const CalibrationDashboard: React.FC = () => {
           style={{
             padding: 'var(--spacing-2) var(--spacing-4)',
             backgroundColor: activeTab === 'pipeline' ? 'var(--color-primary-600)' : 'transparent',
-            color: activeTab === 'pipeline' ? 'white' : 'var(--color-text-base)',
+            color: activeTab === 'pipeline' ? 'var(--color-on-primary)' : 'var(--color-text-base)',
             border: activeTab === 'pipeline' ? 'none' : '1px solid var(--border-default)',
             borderRadius: 'var(--radius-md)',
             fontWeight: 500,
@@ -34,7 +34,7 @@ export const CalibrationDashboard: React.FC = () => {
           style={{
             padding: 'var(--spacing-2) var(--spacing-4)',
             backgroundColor: activeTab === 'profile' ? 'var(--color-primary-600)' : 'transparent',
-            color: activeTab === 'profile' ? 'white' : 'var(--color-text-base)',
+            color: activeTab === 'profile' ? 'var(--color-on-primary)' : 'var(--color-text-base)',
             border: activeTab === 'profile' ? 'none' : '1px solid var(--border-default)',
             borderRadius: 'var(--radius-md)',
             fontWeight: 500,

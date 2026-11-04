@@ -7,7 +7,7 @@ import { Modal } from '../../components/Modal';
  * calibration/{nhpp,regime,delays}.py) -- no example numbers, no invented
  * intermediate steps. Where a field wasn't previously exposed to this
  * endpoint (category levels, dispersion, base_delay_probability, the real
- * regime-quantile thresholds actually used), it was added to the job
+ * regime-HMM settings and fit report actually used), it was added to the job
  * result rather than approximated here.
  */
 
@@ -16,9 +16,43 @@ interface TransitionMatrix {
 }
 
 interface RegimeSettings {
-  p_calm: number;
-  p_normal: number;
-  p_disrupted: number;
+  n_restarts: number;
+  max_iter: number;
+  tol: number;
+  transition_pseudocount: number;
+  delay_threshold_minutes: number;
+  sick_call_exposure: string;
+}
+
+interface StateEmission {
+  delay_probability: number;
+  cancel_probability: number;
+  sick_rate_per_exposure: number;
+  expected_share_of_days: number;
+  mean_run_days: number | null;
+}
+
+interface RegimeHmm {
+  station?: string;
+  emissions?: Record<string, StateEmission>;
+  degenerate_states?: string[];
+  model_selection?: {
+    by_n_states: Record<string, { log_likelihood: number; bic: number; aic: number }>;
+    bic_preferred_n_states: number | null;
+  };
+  holdout?: { n_days: number; loglik_per_day: number | null; loglik_per_day_one_state: number | null };
+}
+
+interface GoodnessOfFit {
+  model: string;
+  log_likelihood: number | null;
+  bic: number | null;
+  n_days: number | null;
+  converged: boolean | null;
+  restarts_reaching_best: number | null;
+  restarts: number | null;
+  holdout?: { n_days: number; loglik_per_day: number | null; loglik_per_day_one_state: number | null } | null;
+  bic_preferred_n_states: number | null;
 }
 
 interface MixtureComponent {
@@ -31,6 +65,7 @@ interface FittedData {
   transition_matrix?: TransitionMatrix;
   regime_pi0?: Record<string, number>;
   intensity_multipliers?: Record<string, number>;
+  regime_hmm?: RegimeHmm;
   nhpp_coefficients?: Record<string, number>;
   nhpp_dispersion?: number | null;
   nhpp_category_levels?: Record<string, string[]>;
@@ -44,10 +79,10 @@ interface CalibrationResults {
   season?: string;
   fitted?: FittedData;
   calibration_settings?: {
-    regime_quantiles?: RegimeSettings;
+    regime_hmm?: RegimeSettings;
     delay_gmm_components?: number;
   };
-  goodness_of_fit?: unknown;
+  goodness_of_fit?: GoodnessOfFit | null;
   goodness_of_fit_note?: string;
 }
 
@@ -473,8 +508,9 @@ const TransitionMatrixModal: React.FC<{ data: FittedData; settings?: RegimeSetti
       {data.regime_pi0 && (
         <>
           <p style={{ marginTop: 'var(--spacing-4)' }}>
-            &pi;<sub>0</sub> -- the observed fraction of days in each state across the fitting
-            window (used as day-0's starting distribution when a simulation has no "yesterday"):
+            &pi;<sub>0</sub> -- the stationary distribution of the fitted chain, i.e. the long-run
+            share of days in each state (used as day-0's starting distribution when a simulation
+            has no "yesterday"):
           </p>
           <div style={codeBlock}>
             {states.map((s) => `${s.padEnd(11)} = ${fmtPct(data.regime_pi0?.[s])}`).join('\n')}
@@ -482,55 +518,50 @@ const TransitionMatrixModal: React.FC<{ data: FittedData; settings?: RegimeSetti
         </>
       )}
 
-      <h3 style={sectionHeading}>How this was calibrated</h3>
+      <h3 style={sectionHeading}>How this was calibrated (hidden Markov model)</h3>
       <Steps>
-        <Step title="Score every station-day by a chaos index.">
-          <V>chaos index = (sick calls that day) + (flights delayed or cancelled that day)</V>
-          <Bullets>
-            <li>One number per station-day across the whole fitting window.</li>
-          </Bullets>
-        </Step>
-
-        <Step title="Bucket the days into 4 severity states by quantile.">
-          {settings ? (
-            <Bullets>
-              <li>
-                <V>CALM</V> — index at or below the {fmtPct(settings.p_calm, 0)} quantile
-              </li>
-              <li>
-                <V>NORMAL</V> — at or below {fmtPct(settings.p_normal, 0)}
-              </li>
-              <li>
-                <V>DISRUPTED</V> — at or below {fmtPct(settings.p_disrupted, 0)}
-              </li>
-              <li>
-                <V>SEVERE</V> — everything above {fmtPct(settings.p_disrupted, 0)}
-              </li>
-            </Bullets>
-          ) : (
-            <span>Thresholds are empirical quantiles of the index.</span>
-          )}
+        <Step title="Build one row of observations per day at the base.">
+          <V>
+            flights, flights delayed{settings ? ` ≥ ${settings.delay_threshold_minutes} min` : ''},
+            flights cancelled (D8) · sick calls (D4) · crew on duty (D2)
+          </V>
           <Bullets>
             <li>
-              Quantiles, not fixed cut-offs: a "severe" day is defined relative to this season's
-              own distribution, so a quiet season does not simply report zero severe days.
+              The regime itself is never observed — no label is supplied (D9 is not an input).
             </li>
+            <li>A day with no data is kept but carries no information; the chain runs through it.</li>
           </Bullets>
         </Step>
 
-        <Step title="Count one-step transitions between calendar-consecutive days.">
-          For every pair of consecutive days both inside the window, count how often day{' '}
-          <V>t</V> is state <V>i</V> and day <V>t+1</V> is state <V>j</V>.
+        <Step title="Assume each hidden state produces the day's observations.">
+          <Bullets>
+            <li>flight outcomes ~ Multinomial(flights; on-time, delayed q<sub>k</sub>, cancelled r<sub>k</sub>)</li>
+            <li>sick calls ~ Poisson(crew on duty × λ<sub>k</sub>)</li>
+            <li>tomorrow's state depends only on today's: P(S<sub>t+1</sub>=j | S<sub>t</sub>=i)</li>
+          </Bullets>
         </Step>
 
-        <Step title="Normalise each row into probabilities.">
-          Divide each count by the total number of day-<V>t</V>-is-<V>i</V> observations.
+        <Step title="Fit everything at once by maximum likelihood (Baum–Welch EM).">
           <Bullets>
             <li>
-              A state with no observed next day falls back to staying in itself with probability
-              1, so every row still sums to 1 rather than to zero.
+              E-step: forward–backward gives, for each day, the probability of each state given
+              all days before and after it.
             </li>
+            <li>M-step: re-estimate P, q, r, λ as posterior-weighted counts and rates.</li>
+            {settings && (
+              <li>
+                {settings.n_restarts} starting points, best log-likelihood kept; transition counts
+                smoothed with a pseudo-count of {settings.transition_pseudocount} so no row is
+                ever empty or absorbing.
+              </li>
+            )}
           </Bullets>
+        </Step>
+
+        <Step title="Name the states and label every day.">
+          States are ordered by severity (delay, cancellation and sick rates) and named CALM →
+          SEVERE. The most likely state path (Viterbi) labels each day; the sick-call GLM and the
+          delay model are then fitted on those labels.
         </Step>
       </Steps>
 
@@ -584,26 +615,29 @@ const IntensityMultipliersModal: React.FC<{ data: FittedData }> = ({ data }) => 
 
   return (
     <>
-      <p>How much worse a day in each regime is, relative to a typical NORMAL day.</p>
+      <p>
+        How much more often crew call in sick in each regime, relative to a typical NORMAL day.
+      </p>
 
       <h3 style={sectionHeading}>Formula</h3>
       <div style={codeBlock}>
-        {'multiplier[state] = mean(chaos index | state) / mean(chaos index | NORMAL)\n\n'}
+        {'multiplier[state] = λ[state] / λ[NORMAL]   (λ = sick calls per crew on duty per day)\n\n'}
         {states.map((s) => `multiplier[${s.padEnd(10)}] = ${fmt(data.intensity_multipliers?.[s], 3)}`).join('\n')}
       </div>
       <p>
         A SEVERE multiplier of {fmt(data.intensity_multipliers?.SEVERE, 2)} means a SEVERE day
-        carries {fmt(data.intensity_multipliers?.SEVERE, 1)}&times; the chaos index of a typical
-        NORMAL day.
+        carries {fmt(data.intensity_multipliers?.SEVERE, 1)}&times; the sick-call rate of a
+        typical NORMAL day.
       </p>
 
       <h3 style={sectionHeading}>How this was calibrated</h3>
       <Steps>
-        <Step title="Reuse the day-to-state assignment from the transition matrix.">
-          The same chaos-index quantile buckets — this does not re-cluster the data.
+        <Step title="Read λ for each state from the regime hidden Markov model.">
+          λ is the HMM's own sick-call emission rate, estimated jointly with the transition
+          matrix — no separate re-clustering of days.
         </Step>
-        <Step title="Take the mean chaos index within each state.">
-          One average per state, over every day assigned to it.
+        <Step title="Express it per state.">
+          One rate per state, weighted by each day's posterior probability of being in it.
         </Step>
         <Step title="Divide each by the NORMAL mean.">
           That makes <V>NORMAL = 1.000</V> by construction, so every other state reads directly
@@ -635,8 +669,8 @@ const IntensityMultipliersModal: React.FC<{ data: FittedData }> = ({ data }) => 
         <WorkedExample>
           <p style={{ margin: 0 }}>
             <V>{worked.state}</V> has a multiplier of <V>{fmt(worked.value, 3)}</V>, so a{' '}
-            <V>{worked.state}</V> day carries <V>{fmt(worked.value, 1)}×</V> the chaos of a
-            typical NORMAL day — {worked.pctMore}.
+            <V>{worked.state}</V> day carries <V>{fmt(worked.value, 1)}×</V> the sick-call rate
+            of a typical NORMAL day — {worked.pctMore}.
           </p>
         </WorkedExample>
       )}
@@ -1069,6 +1103,26 @@ export const ResultsInspector: React.FC<{ initialJobId?: string }> = ({ initialJ
               <strong>Goodness of fit: not reported.</strong> {results.goodness_of_fit_note}
             </div>
           )}
+          {results.goodness_of_fit && (
+            <div style={{ fontSize: '0.8125rem', color: 'var(--color-neutral-600)', borderLeft: '3px solid var(--border-default)', paddingLeft: 'var(--spacing-3)', marginBottom: 'var(--spacing-4)' }}>
+              <strong>Goodness of fit ({results.goodness_of_fit.model}):</strong>{' '}
+              log-likelihood {fmt(results.goodness_of_fit.log_likelihood, 1)}, BIC{' '}
+              {fmt(results.goodness_of_fit.bic, 1)} over {results.goodness_of_fit.n_days ?? '—'} days;{' '}
+              {results.goodness_of_fit.restarts_reaching_best ?? '—'}/{results.goodness_of_fit.restarts ?? '—'}{' '}
+              restarts reached the best optimum
+              {results.goodness_of_fit.converged === false ? ' (iteration cap hit — not converged)' : ''}.
+              {results.goodness_of_fit.holdout?.loglik_per_day != null && (
+                <>
+                  {' '}Holdout log-likelihood per day {fmt(results.goodness_of_fit.holdout.loglik_per_day, 2)} vs{' '}
+                  {fmt(results.goodness_of_fit.holdout.loglik_per_day_one_state, 2)} for a model with no regimes.
+                </>
+              )}
+              {results.goodness_of_fit.bic_preferred_n_states != null && (
+                <> BIC prefers {results.goodness_of_fit.bic_preferred_n_states} state(s).</>
+              )}{' '}
+              {results.goodness_of_fit_note}
+            </div>
+          )}
 
           {fitted && (
             <div style={{ maxHeight: '400px', overflowY: 'auto', borderTop: '1px solid var(--border-default)', paddingTop: 'var(--spacing-4)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-4)' }}>
@@ -1077,6 +1131,23 @@ export const ResultsInspector: React.FC<{ initialJobId?: string }> = ({ initialJ
                 <SectionHeader title="Transition Matrix (Markov States)" onHelp={() => setOpenModal('transition')} />
                 <MatrixTable matrix={fitted.transition_matrix} pi0={fitted.regime_pi0} />
               </div>
+
+              {fitted.regime_hmm?.emissions && (
+                <div>
+                  <SectionHeader title="Regime HMM — what each state looks like" onHelp={() => setOpenModal('transition')} />
+                  <KeyValueTable
+                    columns={['State', 'P(delayed) · P(cancelled) · sick/crew-day', 'share of days']}
+                    rows={STATE_ORDER.filter((s) => fitted.regime_hmm?.emissions?.[s]).map((s) => {
+                      const e = fitted.regime_hmm!.emissions![s];
+                      return {
+                        label: s,
+                        value: `${fmt(e.delay_probability, 3)} · ${fmt(e.cancel_probability, 4)} · ${fmt(e.sick_rate_per_exposure, 4)}`,
+                        note: `${fmtPct(e.expected_share_of_days)}${fitted.regime_hmm?.degenerate_states?.includes(s) ? ' (near-empty)' : ''}`,
+                      };
+                    })}
+                  />
+                </div>
+              )}
 
               <div>
                 <SectionHeader title="Intensity Multipliers" onHelp={() => setOpenModal('multipliers')} />
@@ -1117,7 +1188,7 @@ export const ResultsInspector: React.FC<{ initialJobId?: string }> = ({ initialJ
       {openModal && fitted && (
         <Modal title={modalTitles[openModal]} onClose={() => setOpenModal(null)}>
           {openModal === 'transition' && (
-            <TransitionMatrixModal data={fitted} settings={settings?.regime_quantiles} />
+            <TransitionMatrixModal data={fitted} settings={settings?.regime_hmm} />
           )}
           {openModal === 'multipliers' && <IntensityMultipliersModal data={fitted} />}
           {openModal === 'nhpp' && <NhppModal data={fitted} />}

@@ -32,6 +32,18 @@ MOCK_DATA_CAVEAT = (
     "module docstring)."
 )
 
+REAL_DATA_CAVEAT = (
+    "REAL EXTRACT -- D7 reserve/draft pay is compared through the pay codes registered in "
+    "data.pay_codes. Codes whose meaning is unconfirmed are not compared, and D7 has no code "
+    "for reserve utilisation, so read the gap as indicative until Air Transat confirms them."
+)
+
+
+def caveat_for(result: dict[str, Any]) -> str:
+    """The corpus-specific caveat: the mock's, or the real extract's."""
+    return REAL_DATA_CAVEAT if result.get("corpus_kind") == "REAL" else MOCK_DATA_CAVEAT
+
+
 # spec Sec9.2's own bias-decomposition table, verbatim -- qualitative
 # statements about mechanisms this model excludes, not computed values.
 SPEC_BIAS_DECOMPOSITION = [
@@ -52,7 +64,7 @@ SPEC_BIAS_DECOMPOSITION = [
     },
 ]
 
-# sim ledger category -> D7 pay_code: the only categories with a real
+# sim ledger category -> D7 pay codes: the only categories with a real
 # payroll counterpart at all. CANCELLATION/TERMINAL_PENALTY (the model's
 # own uncovered-flight cost estimate) have no payroll line item -- a
 # cancelled flight isn't paid to crew, so folding them into the headline
@@ -60,20 +72,34 @@ SPEC_BIAS_DECOMPOSITION = [
 # invented: verified via des.py's own ledger.book call sites (only 5
 # category SHAPES are ever booked) against D7's own real pay_code values.
 # DRAFT_TIER{n} (n=1..5, des.py's dynamic f"DRAFT_TIER{tier}") all map to
-# the single D7 pay_code DRAFT_PREM -- D7 doesn't break draft premium out
-# by impact tier, so neither does this comparison.
-_RESERVE_PAY_CODE = {
-    "RESERVE_STAFFING": "RESERVE_GTE",
-    "RESERVE_UTILIZATION": "RESERVE_UTIL",
+# the D7 draft premium codes -- D7 doesn't break draft premium out by impact
+# tier, so neither does this comparison.
+#
+# Which D7 pay codes those are is DATA, not code: `data.pay_codes` says what
+# each one is (`comparable_to`), so a real extract's own codes (DRAFT_THX,
+# RESERVE_CREDIT, ...) are used by listing them in the config.
+_CATEGORY_OF_SIM = {
+    "RESERVE_STAFFING": "RESERVE_STAFFING",
+    "RESERVE_UTILIZATION": "RESERVE_UTILIZATION",
 }
 
 
-def _pay_code_for_sim_category(category: str) -> str | None:
-    if category in _RESERVE_PAY_CODE:
-        return _RESERVE_PAY_CODE[category]
-    if category.startswith("DRAFT_TIER"):
-        return "DRAFT_PREM"
-    return None
+def pay_codes_for(cfg: config.BaseConfig, comparable_to: str) -> set[str]:
+    """The D7 pay codes the config registers as `comparable_to` this category."""
+    return {c for c, spec in cfg.data.pay_codes.items() if spec.comparable_to == comparable_to}
+
+
+def comparable_pay_codes(cfg: config.BaseConfig) -> set[str]:
+    """Every D7 pay code that has a simulated counterpart."""
+    return (
+        pay_codes_for(cfg, "RESERVE_STAFFING")
+        | pay_codes_for(cfg, "RESERVE_UTILIZATION")
+        | pay_codes_for(cfg, "DRAFT")
+    )
+
+
+def _is_comparable_sim_category(category: str) -> bool:
+    return category in _CATEGORY_OF_SIM or category.startswith("DRAFT_TIER")
 
 
 def month_bounds(period: str) -> tuple[datetime.date, datetime.date]:
@@ -88,7 +114,7 @@ def _scope_crew_ids(cfg: config.BaseConfig) -> set[str]:
     d1 = loaders.load_dataset(cfg, "d1_crew_master")
     d1 = d1.filter(
         (pl.col("base") == cfg.scope.base)
-        & (pl.col("fleet") == cfg.scope.fleet)
+        & pl.col("fleet").is_in(sorted(config.fleet_members(cfg, cfg.scope.fleet)))
         & (pl.col("position") == cfg.scope.position)
     )
     return set(d1.get_column("crew_id"))
@@ -111,7 +137,7 @@ def compute_actual_cost(cfg: config.BaseConfig, period: str) -> dict[str, Any]:
     )
     positioning_total = float(d10.get_column("amount_cad").sum()) if d10.height else 0.0
 
-    comparable_codes = {"RESERVE_GTE", "RESERVE_UTIL", "DRAFT_PREM"}
+    comparable_codes = comparable_pay_codes(cfg)
     comparable = sum(by_pay_code.get(code, 0.0) for code in comparable_codes)
     comparable_rows = d7.filter(pl.col("pay_code").is_in(list(comparable_codes)))
     return {
@@ -130,10 +156,10 @@ def compute_simulated_cost(sim: Simulation) -> dict[str, Any]:
         by_category[row.category] = by_category.get(row.category, 0.0) + row.amount
 
     comparable = sum(
-        amount for category, amount in by_category.items() if _pay_code_for_sim_category(category) is not None
+        amount for category, amount in by_category.items() if _is_comparable_sim_category(category)
     )
     excluded = sum(
-        amount for category, amount in by_category.items() if _pay_code_for_sim_category(category) is None
+        amount for category, amount in by_category.items() if not _is_comparable_sim_category(category)
     )
     return {
         "by_category": by_category,
@@ -163,6 +189,7 @@ def run_v6_gate(cfg: config.BaseConfig, costs: Any, policy: Policy, period: str)
 
     return {
         "period": period,
+        "corpus_kind": config.corpus_kind(cfg),
         "policy_id": policy.policy_id,
         "actual": actual,
         "simulated": simulated,
@@ -172,7 +199,7 @@ def run_v6_gate(cfg: config.BaseConfig, costs: Any, policy: Policy, period: str)
 
 
 def print_v6_report(result: dict[str, Any]) -> None:
-    print(MOCK_DATA_CAVEAT)
+    print(caveat_for(result))
     print(f"\nGate V6 -- Cost Backtest, period {result['period']}, policy {result['policy_id']}")
     print("  Comparable categories (RESERVE_STAFFING/RESERVE_GTE, RESERVE_UTILIZATION/RESERVE_UTIL, "
           "DRAFT_TIER*/DRAFT_PREM):")
@@ -206,4 +233,4 @@ def print_v6_report(result: dict[str, Any]) -> None:
     for row in SPEC_BIAS_DECOMPOSITION:
         print(f"    {row['direction']:<11} {row['mechanism']}: {row['effect']}")
 
-    print(f"\n{MOCK_DATA_CAVEAT}")
+    print(f"\n{caveat_for(result)}")

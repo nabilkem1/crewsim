@@ -8,7 +8,8 @@ and policy counts. Nothing is narrated alongside the run.
 That constraint is the point. A "[1/4] loading parameter store params_v3.2.1"
 line that was hardcoded next to the code that loads the store would be
 indistinguishable from one that reports it, and this codebase has already paid
-for that class of mistake several times over (see CODE_REVIEW_API_WEBUI.md).
+for that class of mistake several times over (see the API/web-UI review in git
+history: `git show 7b34d3b:CODE_REVIEW_API_WEBUI.md`).
 So `detail` is always derived, and when a value is unavailable the line says so
 -- `params_version: MISSING` is a real, common state on a fresh checkout, and it
 is reported rather than smoothed over.

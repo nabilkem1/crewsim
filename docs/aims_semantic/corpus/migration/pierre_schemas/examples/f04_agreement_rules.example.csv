@@ -1,0 +1,3 @@
+agreement,crew_group,rule_key,value,unit,effective_from,effective_to,clause_reference,confidence,confirmed_by,comment
+ALPA,PILOT,reserve.short_call.notice_hours,2,HOURS,2025-05-01,,EXAMPLE,CONFIRMED,Labour Relations,
+ALPA,PILOT,drafting.protected_blocks,none,TEXT,2025-05-01,,EXAMPLE,CONFIRMED,Labour Relations,

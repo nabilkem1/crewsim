@@ -27,7 +27,7 @@ report.
 | Land the twelve source extracts (§6.1) into the Parquet/Delta corpus | Corpus + schema tests |
 | Reconstruct draft-event history (join schedule changes × premium pay codes, §6.3-1) | Draft-event table + **recall metric** |
 | Fit the sick-call NHPP with covariates, **per season** | `sick_call_nhpp` block of the parameter store |
-| Fit the severity-regime Markov chain, **per season** | `severity_regime` block |
+| Fit the severity-regime Markov chain, **per season** — as a hidden Markov model on D8/D4/D2 (F-42; D9 not required) | `severity_regime` block (`regime_hmm` in the store) |
 | Extract validation targets: eligibility rate, cascade rate, crew-status-at-draft distribution | `validation_targets` block, each with a confidence interval |
 | Split the data window into a **fitting period and a holdout period** | Two parameter stores; the holdout one is never used for fitting |
 

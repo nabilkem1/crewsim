@@ -315,14 +315,24 @@ same number under both policies regardless of what happened at event 17.
 ### What one scenario contains
 
 1. **Daily severity regime** `Z_d ∈ {CALM, NORMAL, DISRUPTED, SEVERE}` — a 4-state Markov chain fitted
-   per season from historical daily disruption counts. The regime multiplies the intensities of *all*
-   streams, which is what induces the sick-call/weather/delay correlation that sizes tail risk
-   (§1.3.4).
+   per season. Every stream is **conditioned on the same daily state**, which is what induces the
+   sick-call/weather/delay correlation that sizes tail risk (§1.3.4).
+
+   **How it is fitted (F-42, Option B — hidden Markov model).** The regime is never observed, so it is
+   not read from a label file (D9 is no longer an input). A hidden Markov model is fitted per crew base
+   and season (`calibration/regime.py`, `calibration/hmm.py`, library `hmmlearn`) on one row per day:
+   flights, flights delayed ≥ 15 min and flights cancelled (D8), sick calls (D4) and crew on duty (D2).
+   Given the hidden state `k`, flight outcomes are `Multinomial(n; 1−q_k−r_k, q_k, r_k)` and sick calls
+   are `Poisson(crew_on_duty · λ_k)`. Baum–Welch EM estimates `P`, `q`, `r`, `λ` jointly; Viterbi then
+   labels every historical day, and those labels are the `regime` the sick-call GLM and the delay model
+   are fitted on (§6.3-4). The store's `markov_steady_state_pi0` is the stationary distribution of `P`;
+   `intensity_multipliers` are `λ_k / λ_NORMAL` (descriptive — generation uses the GLM's own regime
+   coefficient, so the effect is not applied twice).
 
    ```python
-   P = [[.70, .25, .04, .01],     # from CALM
-        [.20, .60, .15, .05],     # from NORMAL
-        [.05, .30, .50, .15],     # from DISRUPTED
+   P = [[.70, .25, .04, .01],     # from CALM          (illustrative values -- §4.4;
+        [.20, .60, .15, .05],     # from NORMAL         the run's fitted matrix lives in
+        [.05, .30, .50, .15],     # from DISRUPTED      the parameter store)
         [.02, .18, .40, .40]]     # from SEVERE  ← note the stickiness
    intensity_multiplier = [0.5, 1.0, 2.0, 3.5]
    ```
@@ -332,15 +342,16 @@ same number under both policies regardless of what happened at event 17.
    what actually exhaust a reserve pool.
 
 2. **Sick-call arrivals** — a non-homogeneous Poisson process, intensity `λ(t) = exp(β·x(t))` with
-   covariates season, day-of-week, base, fleet, category, and the regime multiplier. Fitted as a
-   Poisson/NegBin GLM on daily counts, then thinned to continuous time.
+   covariates season, day-of-week, base, fleet, category, and the day's regime (the HMM's label,
+   `C(regime)`). Fitted as a Poisson/NegBin GLM on daily counts, then thinned to continuous time.
 
    Each arrival is **tagged to a specific crew member who is currently flying or about to report**,
    sampled from the roster state, with a sampled absence duration (lognormal). Multi-day absences
    generate multiple open-time items.
 
-3. **Delay / IROPS events** — a marked point process per station-day, regime-modulated; marks are
-   delay minutes from a fitted mixture. MVP uses delays as cost and as duty-extension triggers only;
+3. **Delay / IROPS events** — a marked point process per station-day, regime-modulated (the
+   probability a flight is delayed is fitted per regime label); marks are delay minutes from a fitted
+   mixture. MVP uses delays as cost and as duty-extension triggers only;
    no network propagation (§1.4).
 
 4. **Recovery and administrative durations** — notification-to-report times, deadhead durations, from

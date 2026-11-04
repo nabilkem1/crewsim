@@ -1,0 +1,276 @@
+{
+    // Debug configurations for CrewSim. Run from the "Run and Debug" panel (Ctrl+Shift+D).
+    // Commands being debugged:
+    //     crewsim calibrate --season winter_sun --emit        (CALIBRATION configs)
+    //     crewsim compare --policies R6 R10 --scenarios 1     (COMPARE configs)
+    // CALIBRATION stops are ON THE REAL LINES in src/crewsim (C01..C40, table printed at start
+    // and in tools/debug/calibrate_steps.py). Keys: F10 = run the highlighted line,
+    // F11 = go into the call, Shift+F11 = back to the caller, F5 = next step.
+    // To pick your own stops, edit CREWSIM_STEPS: ids and ranges, e.g. "C01-C04,C20-C25".
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // Just run the app: no step stops, no preset breakpoints (a breakpoint you click
+            // yourself will still hit; use Ctrl+F5 "Run Without Debugging" to ignore those too).
+            // Asks for the command line each time, e.g.  calibrate --season winter_sun --emit
+            //                                            compare --policies R6 R10 --scenarios 1
+            "name": "RUN: crewsim (no stops, asks for the command)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "crewsim",
+            "args": "${input:crewsimArgs}",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1"
+            }
+        },
+        {
+            // Every stop, in run order: CLI, config, pipeline, loading, regime, sick calls, delays, store.
+            "name": "CALIBRATION 1: full, CLI to distributions (C01-C40)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "all",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // From the command line to the typed DataFrames (first load of each dataset).
+            "name": "CALIBRATION 2: CLI + config + data loading (C01-C09)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "C01-C09",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // Phase 1: day states from D9, chaos, multipliers, transition counts, matrix and pi0.
+            "name": "CALIBRATION 3: regime / Markov chain (C10-C16)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "C04,C10-C16",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // Phase 2: exposure grid, design matrix, NB fit and retry, absence-duration lognormal.
+            "name": "CALIBRATION 4: sick calls / NB GLM + lognormal (C17-C26)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "C17-C26",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // Phase 3: flights joined to regimes, P(delayed) per regime, Gaussian mixture.
+            "name": "CALIBRATION 5: flight delays / mixture (C27-C34)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "C27-C34",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // Phase 4: label-agreement diagnostic, store assembly, content hash, JSON write, back to CLI.
+            "name": "CALIBRATION 6: store, hash, write (C35-C40)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "C35-C40",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // Only the lines that fit a distribution and their results.
+            "name": "CALIBRATION 7: distributions only",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "C15-C16,C20-C25,C29-C33",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // No stops: prints the file:line table, the order of the stops, and hit counts.
+            "name": "CALIBRATION: trace only (no stops)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/calibrate_steps.py",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "all",
+                "CREWSIM_STEP_MODE": "trace"
+            }
+        },
+        {
+            // Plain CLI, no step wrappers: only the breakpoints you click yourself.
+            "name": "CALIBRATION: plain CLI (your own breakpoints)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "crewsim",
+            "args": ["calibrate", "--season", "winter_sun", "--emit"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1"
+            }
+        },
+        {
+            // Stops at every meaningful step (S01..S22, see tools/debug/compare_steps.py).
+            // At each stop: Variables shows step/what/args; F11 twice = step into the real
+            // function, F10 = run it and see `result`, F5 = next step.
+            "name": "COMPARE: compare R6 vs R10 (step-by-step)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/compare_steps.py",
+            "args": ["compare", "--policies", "R6", "R10", "--scenarios", "1"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "all",
+                "CREWSIM_STEP_MAX": "2",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // Same run, but only the decision steps of the recovery of one open item:
+            // sick call -> attempt -> eligible reserves -> assign / draft -> cascade.
+            "name": "COMPARE: compare (recovery steps only)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/compare_steps.py",
+            "args": ["compare", "--policies", "R6", "R10", "--scenarios", "1"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "S07,S09,S10,S12,S14,S15,S16,S17,S19",
+                "CREWSIM_STEP_MAX": "3",
+                "CREWSIM_STEP_MODE": "break"
+            }
+        },
+        {
+            // No stops: prints one line per step hit, then a hit count per step.
+            // Good first run to see the flow and how often each step happens.
+            "name": "COMPARE: compare (trace only, no stops)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/debug/compare_steps.py",
+            "args": ["compare", "--policies", "R6", "R10", "--scenarios", "1"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1",
+                "CREWSIM_STEPS": "S01,S02,S03,S04,S05,S06,S20,S21,S22",
+                "CREWSIM_STEP_MODE": "trace"
+            }
+        },
+        {
+            // The plain CLI, no step wrappers: use your own breakpoints (click in the gutter).
+            "name": "COMPARE: compare (plain CLI, your own breakpoints)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "crewsim",
+            "args": ["compare", "--policies", "R6", "R10", "--scenarios", "1"],
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "PYTHONUTF8": "1"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "crewsimArgs",
+            "type": "promptString",
+            "description": "crewsim command line",
+            "default": "calibrate --season winter_sun --emit"
+        }
+    ]
+}

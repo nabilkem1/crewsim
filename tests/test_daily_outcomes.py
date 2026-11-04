@@ -18,7 +18,7 @@ import pytest
 from crewsim import config
 from crewsim.engine import des
 from crewsim.engine.policy import load_policy
-from crewsim.reporting.grid import _daily_outcomes, _policy_path, run_grid
+from crewsim.reporting.grid import _daily_outcomes, run_grid
 
 SEED = "master"
 N_SCENARIOS = 2
@@ -33,7 +33,7 @@ def _cfg():
 def _sim(scenario_id: int = 0):
     cfg, costs = _cfg()
     return cfg, des.run_scenario(
-        cfg, costs, load_policy(_policy_path(POLICY)),
+        cfg, costs, load_policy(config.policy_path(POLICY)),
         scenario_id=scenario_id, master_seed=SEED, n_scenarios=N_SCENARIOS,
     )
 

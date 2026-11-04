@@ -1,32 +1,56 @@
-# React + TypeScript + Vite
+# CrewSim web UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + TypeScript + Vite front end for the CrewSim reserve-sizing simulator.
+It is a thin client: every number it shows comes from the FastAPI backend in
+`src/crewsim/api/`, which runs the same engine as the `crewsim` CLI.
 
-Currently, two official plugins are available:
+## Run it locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Start the API on port 8000 (from the repository root):
 
-## React Compiler
+   ```
+   uv run uvicorn crewsim.api.main:app --reload
+   ```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+2. Start the dev server (from `web_ui/`):
 
-## Expanding the Oxlint configuration
+   ```
+   npm ci
+   npm run dev
+   ```
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+   Open http://localhost:5173. Vite proxies every `/api/...` request to
+   `http://localhost:8000` (`vite.config.ts`), so the backend must be up first.
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
+## Scripts
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+| Command | What it does |
+|---|---|
+| `npm run dev` | Dev server with hot reload on :5173 |
+| `npm run build` | Type-check (`tsc -b`) and build to `dist/`. Run by CI. |
+| `npm run lint` | `oxlint`. Run by CI. |
+| `npm run preview` | Serve the built `dist/` locally |
+
+## Talking to the API
+
+- All requests go through `src/api/client.ts` (`apiFetch`). It takes a path
+  below `/api`, uses relative URLs (so the Vite proxy and a same-origin deploy
+  both work), and throws on any non-2xx response. A component must render an
+  error state; it must never substitute placeholder data.
+- Endpoints that exist but are not implemented return `implemented: false`
+  with a `notice` and empty collections (`src/crewsim/api/mocks.py`). Check
+  them with `isNotImplemented()` and show the notice, not an empty result.
+- Long-running jobs (calibration, processing) stream progress over
+  server-sent events from `/api/<area>/<job_id>/stream`.
+
+## Layout
+
+- `src/App.tsx`: shell, navigation and per-page help.
+- `src/features/<area>/`: one folder per page (config, data, calibration,
+  processing, results, analytics, jobs, platform).
+- `src/components/`: shared UI pieces (status panels, execution log, ...).
+
+## Tests
+
+There is no unit-test runner here yet. Manual-only Playwright specs live in
+`backlog/mvp/web/playwright-test-web-features/` (not run in CI).

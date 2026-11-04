@@ -10,7 +10,7 @@ import statsmodels.formula.api as smf
 from scipy import stats
 
 from .. import config
-from ..data import loaders
+from ..data import clean, coverage, loaders
 
 # The categorical covariates the GLM formula in fit_sick_calls() is fit
 # against, in the order that matters only for readability -- predict_intensity
@@ -21,6 +21,8 @@ _CATEGORICAL_COVARIATES = ("season", "day_of_week", "base", "fleet", "position",
 def fit_sick_calls(
     cfg: config.BaseConfig,
     window: tuple[Any, Any] | None = None,
+    *,
+    regime_days: pl.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Fits the sick-call intensity GLM and absence duration distribution.
 
@@ -28,24 +30,49 @@ def fit_sick_calls(
     AUD-05 / §6.4 -- when the pipeline says it fit on the fitting window, the
     fit must actually be restricted to it. None fits on the full corpus
     (explicitly, for exploratory use), and the caller owns saying so.
+
+    `regime_days` (F-42) is the computed station-day regime table from
+    calibration.regime (station, date, season, disruption_class) -- the HMM's
+    Viterbi labels, which replaced D9. The pipeline passes the table it has
+    already fitted; when absent it is computed here for the same window.
     """
 
     # 1. Load Data
+    # D1 crew master (who exists where), D4 absences (the sick calls), and the
+    # computed regime of every crew-base day; keep only the fitting window.
     d1 = loaders.load_dataset(cfg, "d1_crew_master")
-    d4 = loaders.load_dataset(cfg, "d4_absences")
-    d9 = loaders.load_dataset(cfg, "d9_station_days")
+    # IMP-517: a sick call recorded twice is one sick call.
+    d4 = clean.load_absences(cfg)
+    if regime_days is None:
+        from . import regime
+
+        regime_days = regime.label_station_days(cfg, window)
+    d9 = regime_days
 
     if window is not None:
         w_start, w_end = window
         d4 = d4.filter((pl.col("absence_start") >= w_start) & (pl.col("absence_start") <= w_end))
         d9 = d9.filter((pl.col("date") >= w_start) & (pl.col("date") <= w_end))
 
+    # IMP-516: only days inside the span D4 was recorded over are days that could
+    # have a sick call. A day before D4 starts is not a quiet day, it is no day,
+    # and counting it as zero is what teaches the GLM that winters are calm.
+    d4_span = coverage.dataset_interval(cfg, "d4_absences", df=d4)
+    if d4_span is not None:
+        # Whatever the label table typed its dates as (Date, or an ISO string).
+        day = pl.col("date").cast(pl.String).str.slice(0, 10).str.to_date("%Y-%m-%d")
+        d9 = d9.filter((day >= d4_span.start) & (day <= d4_span.end))
+    else:
+        d9 = d9.clear()
+
     # 2. Get active pilot combos (base, fleet, position)
+    # These are the crew cells a sick call can come from.
     combos = d1.filter(
         (pl.col("crew_group") == "PILOT") & (pl.col("employment_status") == "ACTIVE")
     ).select(["base", "fleet", "position"]).unique()
     
-    # 3. Get all days and regimes from D9
+    # 3. Get all days and regimes from the computed regime table
+    # One row per station-day with its season and regime: the days that COULD have sick calls.
     grid = d9.select([
         pl.col("season"),
         pl.col("date").cast(pl.String).str.slice(0, 10).alias("date"),
@@ -63,6 +90,7 @@ def fit_sick_calls(
     exposure = grid.join(combos, on="base", how="inner")
     
     # 4. Count actual sick calls from D4
+    # Number of absences starting on each day, per base / fleet / position.
     d4_counts = d4.filter(
         pl.col("absence_start").is_not_null()
     ).with_columns(
@@ -70,12 +98,19 @@ def fit_sick_calls(
     ).group_by(["date", "base", "fleet", "position"]).len().rename({"len": "sick_calls"})
     
     # Merge sick calls onto exposure grid (fill nulls with 0)
+    # Result = the design matrix: every exposure row with its observed count (0 = quiet day).
     df = exposure.join(
         d4_counts,
         on=["date", "base", "fleet", "position"],
         how="left"
     ).fill_null(0)
-    
+
+    # IMP-201: fix the design-matrix row order. Polars joins and unique() do
+    # not guarantee order, and the optimizer's floating-point path depends on
+    # it -- unordered rows could move fitted coefficients in the last bits and,
+    # with them, the parameter store's content hash.
+    df = df.sort(["date", "base", "fleet", "position", "season", "regime", "day_of_week"])
+
     # Convert to pandas for statsmodels
     pdf = df.to_pandas()
     
@@ -84,6 +119,8 @@ def fit_sick_calls(
     formula = "sick_calls ~ C(season) + C(day_of_week) + C(base) + C(fleet) + C(position) + C(regime)"
     
     # Fit Negative Binomial Model
+    # NB = Poisson with extra variance (overdispersion alpha); log link, so each
+    # coefficient is a multiplicative effect exp(beta) on the expected daily count.
     model = smf.negativebinomial(formula, data=pdf)
     res = model.fit(disp=0, maxiter=200)
     # AUD-28e: the default fit emits ConvergenceWarning on this corpus and the
@@ -98,6 +135,7 @@ def fit_sick_calls(
         if bool(res_retry.mle_retvals.get("converged", False)):
             res, converged = res_retry, True
 
+    # Extract the fitted coefficients (log scale) and the dispersion.
     coefs = res.params.to_dict()
     # In statsmodels NB, alpha is the dispersion parameter
     alpha = coefs.get("alpha", 0.0)
@@ -115,6 +153,7 @@ def fit_sick_calls(
     }
 
     # 5. Fit Absence Duration (Lognormal)
+    # How many days an absence lasts: lognormal with loc fixed at 0 -> (shape=sigma, scale=exp(mu)).
     d4_dur = d4.filter(
         pl.col("duration_days").is_not_null() & (pl.col("duration_days") > 0)
     )
@@ -122,6 +161,7 @@ def fit_sick_calls(
     
     shape, _loc, scale = stats.lognorm.fit(durations, floc=0)
     
+    # Package the result, add a short content hash, and write nhpp_sick_calls.json.
     out_dict = {
         "coefficients": coefs,
         "dispersion": dispersion,
@@ -137,7 +177,7 @@ def fit_sick_calls(
     params_dir = config.ensure_dir(cfg, "params_dir")
     out_path = params_dir / "nhpp_sick_calls.json"
     
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out_dict, f, indent=2)
         
     out_dict["_saved_path"] = str(out_path)

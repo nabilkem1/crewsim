@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import os
 import sys
+from typing import Any
 
 from . import config
 
@@ -139,7 +141,7 @@ def _first_real_cascade(cfg, args) -> list[str] | None:
 
     costs = config.load_costs(cfg)
     policy_name = getattr(args, "policy", None) or DEFAULT_EXPLAIN_POLICY
-    policy = load_policy(config.repo_root() / "configs" / "policies" / f"{policy_name}.yaml")
+    policy = load_policy(config.policy_path(policy_name))
     sim = des.run_scenario(
         cfg, costs, policy, scenario_id=args.scenario,
         master_seed=getattr(args, "master_seed", "master"),
@@ -228,16 +230,22 @@ def doctor() -> int:
         corpus = config.resolve(cfg, "corpus_dir")
     except KeyError:
         return 1
+    # D9 is no longer an input (F-42: the regime is inferred), so its absence is no fault.
+    optional_datasets = ("d9_station_days",)
     found = [config.dataset_path(cfg, n) is not None for n in EXPECTED_DATASETS]
+    missing = [
+        n for n, hit in zip(EXPECTED_DATASETS, found, strict=True) if not hit and n not in optional_datasets
+    ]
     n = sum(found)
-    mark = OK if n == len(EXPECTED_DATASETS) else BAD
-    if n != len(EXPECTED_DATASETS):
+    mark = BAD if missing else OK
+    if missing:
         problems += 1
     print(f"    {mark} {n}/{len(EXPECTED_DATASETS)} datasets found in {corpus.name}/")
     for name, hit in zip(EXPECTED_DATASETS, found, strict=True):
         if not hit:
-            print(f"      {BAD} missing: {name}")
-    d12 = corpus / "d12_agreement_rules.yaml"
+            print(f"      {BAD if name in missing else OK} "
+                  f"{'missing' if name in missing else 'not supplied (optional)'}: {name}")
+    d12 = cfg.paths.agreement_rules_file or corpus / "d12_agreement_rules.yaml"
     if d12.is_file():
         print(f"    {OK} D12 agreement rules present ({d12.name})")
 
@@ -283,24 +291,6 @@ def _config_show() -> int:
 
     print()
     return 0
-
-
-def _todo(name: str) -> int:
-    print(f"`crewsim {name}` is not implemented yet — see backlog/stories.yaml")
-    return 2
-
-
-def _resolve_policy_path(name_or_path: str) -> str:
-    """`compare`/`gate v3`/`gate v4` already accept a bare policy name (R10)
-    and resolve it under configs/policies/; `run` historically required a
-    full path. S1c-01's own manual check (`run --policy R10`) uses the bare
-    form, so `run` needs the same resolution -- a path that exists as given
-    still works unchanged."""
-    from pathlib import Path
-
-    if Path(name_or_path).is_file():
-        return name_or_path
-    return str(config.repo_root() / "configs" / "policies" / f"{name_or_path}.yaml")
 
 
 def _stderr_progress(label: str = "scenario"):
@@ -436,8 +426,51 @@ def _data_cascade_target() -> int:
     return 0
 
 
+def _split_global_config(argv: list[str]) -> tuple[str | None, list[str]]:
+    """A leading `--config PATH` (or `--config=PATH`), and the arguments after it.
+
+    Only BEFORE the subcommand: `grid --config` has always meant the grid's own
+    policy list, and must keep meaning that.
+    """
+    if argv and argv[0] == "--config" and len(argv) >= 2:
+        return argv[1], argv[2:]
+    if argv and argv[0].startswith("--config="):
+        return argv[0].split("=", 1)[1], argv[1:]
+    return None, argv
+
+
 def main(argv: list[str] | None = None) -> int:
+    """The `crewsim` entry point.
+
+    IMP-512: `crewsim --config configs/real.yaml <command>` runs any command on a
+    different configuration (and so a different corpus) without editing the
+    committed configs/base.yaml. The choice is the process-wide $CREWSIM_CONFIG for
+    the duration of the call and is restored afterwards. Every command starts by
+    naming the corpus it reads (MOCK or REAL) on stderr.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    selected, argv = _split_global_config(argv)
+    previous = os.environ.get(config.CONFIG_ENV_VAR)
+    if selected is not None:
+        os.environ[config.CONFIG_ENV_VAR] = selected
+    try:
+        if argv and not argv[0].startswith("-"):
+            try:
+                print(config.corpus_banner(config.load(quiet=True)), file=sys.stderr)
+            except Exception:  # noqa: BLE001 - the command itself reports a bad config
+                pass
+        return _run(argv)
+    finally:
+        if selected is not None:
+            if previous is None:
+                os.environ.pop(config.CONFIG_ENV_VAR, None)
+            else:
+                os.environ[config.CONFIG_ENV_VAR] = previous
+
+
+def _run(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="crewsim")
+    ap.epilog = "global: crewsim --config PATH <command> reads another configuration (see configs/real.yaml)"
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("doctor", help="report project structure and resolve paths")
 
@@ -468,6 +501,10 @@ def main(argv: list[str] | None = None) -> int:
         help="exit 0 even when a gate is MARGINAL (below its §6.2 passing grade but above "
              "the marginal floor) -- an explicit acceptance, never the default (AUD-13)",
     )
+    data_sub.add_parser(
+        "readiness",
+        help="can this extract be calibrated and simulated? windows, template window, scope, gates",
+    )
     data_sub.add_parser("draft-events", help="reconstruct draft events from D6 x D7 (§6.3-1)")
     data_sub.add_parser("cascade-target", help="reconstruct the cascade rate, 7-day D6 follow-on scan (§6.3-3)")
 
@@ -476,7 +513,9 @@ def main(argv: list[str] | None = None) -> int:
     calibrate_parser.add_argument("--emit", action="store_true", help="Run full pipeline and emit parameter store")
     calibrate_parser.add_argument("--window", default="fitting", help="Data window to use (default: fitting)")
     calibrate_sub = calibrate_parser.add_subparsers(dest="cal_cmd")
-    regime_parser = calibrate_sub.add_parser("regime", help="Severity-regime labelling and Markov fit")
+    regime_parser = calibrate_sub.add_parser(
+        "regime", help="Severity regime: hidden Markov model fit (F-42, no D9 needed)"
+    )
     regime_parser.add_argument("--season", required=True)
     regime_parser.add_argument("--show-matrix", action="store_true")
     regime_parser.add_argument("--show-multipliers", action="store_true")
@@ -659,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.policy:
                 from .engine.policy import load_policy
                 # Policies live in configs/policies/
-                pol_path = config.repo_root() / "configs" / "policies" / f"{args.policy}.yaml"
+                pol_path = config.policy_path(args.policy)
                 pol = load_policy(pol_path)
 
             # Default to cfg.scope when no filter is given, matching what every
@@ -674,8 +713,9 @@ def main(argv: list[str] | None = None) -> int:
             fleet = args.fleet or (cfg.scope.fleet if scoped else None)
             position = args.position or (cfg.scope.position if scoped else None)
 
+            diagnostics: dict[str, Any] = {}
             active_crew, exclusions = load_rosters(
-                cfg, base=base, fleet=fleet, position=position, policy=pol
+                cfg, base=base, fleet=fleet, position=position, policy=pol, diagnostics=diagnostics
             )
             window_start, window_end = select_template_window(cfg)
 
@@ -712,6 +752,10 @@ def main(argv: list[str] | None = None) -> int:
                 print()
             print(f"Excluded: {total_excluded}")
             print(f"Exclusion Reasons: {exclusions}")
+            # IMP-520/521: what the data cost to load, when it cost anything.
+            costs = {k: v for k, v in diagnostics.items() if v}
+            if costs:
+                print(f"Roster data adjustments: {costs}")
             return 0
         if args.roster_cmd == "reserve-pattern":
             cfg = config.load()
@@ -719,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
             from .engine.roster_loader import load_rosters
             from .engine.state import BlockType
             
-            pol_path = config.repo_root() / "configs" / "policies" / f"{args.policy}.yaml"
+            pol_path = config.policy_path(args.policy)
             pol = load_policy(pol_path)
             
             active_crew, _ = load_rosters(cfg, base=args.base, fleet=args.fleet, position=args.position, policy=pol)
@@ -778,7 +822,7 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = config.load()
         costs = config.load_costs(cfg)
-        policy = load_policy(_resolve_policy_path(args.policy))
+        policy = load_policy(config.policy_path(args.policy))
         sim = des.run_scenario(
             cfg, costs, policy, scenario_id=args.scenario, master_seed=args.master_seed,
             n_scenarios=args.scenario + 1, trace=True, verbose_trace=True,
@@ -850,6 +894,9 @@ def main(argv: list[str] | None = None) -> int:
             return _data_profile(args.open_after)
         if args.data_cmd == "quality-report":
             return _data_quality_report(allow_marginal=getattr(args, "allow_marginal", False))
+        if args.data_cmd == "readiness":
+            from .data import readiness
+            return readiness.run_readiness_report(config.load())
         if args.data_cmd == "draft-events":
             return _data_draft_events()
         if args.data_cmd == "cascade-target":
@@ -866,23 +913,44 @@ def main(argv: list[str] | None = None) -> int:
             
         data_parser.print_help()
         return 2
+    # ---- calibrate: fit the parameter store (regimes, sick calls, delays) from the corpus.
     if args.cmd == "calibrate":
+        # Guard: the holdout window is reserved for validation and must never be fitted.
         if args.window == "holdout":
             print("error: Refusing to calibrate on the holdout window. The parameter store must only be fit on the fitting window.")
             return 1
             
+        # Sub-commands: run ONE fitter on its own (full corpus, no window) and print its result.
         if args.cal_cmd:
             if args.cal_cmd == "regime":
                 try:
                     cfg = config.load()
-                    # Override window in config if we support it later? Currently fitters don't even use config window except pipeline.py
+                    # F-42: the regime is inferred by a hidden Markov model on the
+                    # fitting window (D8 delays/cancellations, D4 sick calls, D2
+                    # crew on duty) -- D9 is not read. --window applies here too.
                     from .calibration import regime
-                    res = regime.fit_regime(cfg, args.season)
+                    fit_window = None
+                    if cfg.windows is not None:
+                        w = cfg.windows.get(args.window)
+                        fit_window = (w.start, w.end)
+                    res = regime.fit_regime(cfg, args.season, window=fit_window)
+                    print(f"Regime HMM for {res['station']} / {args.season} "
+                          f"({res['fit']['n_days']} days, log-lik {res['fit']['log_likelihood']:.1f}, "
+                          f"BIC {res['fit']['bic']:.1f}, "
+                          f"{res['fit']['restarts_reaching_best']}/{res['fit']['restarts']} restarts agree)")
                     print("Transition Matrix:")
                     for s in regime.STATES:
                         print(f"{s:<10} [{res['matrix'][s]['CALM']:.3f} {res['matrix'][s]['NORMAL']:.3f} {res['matrix'][s]['DISRUPTED']:.3f} {res['matrix'][s]['SEVERE']:.3f}]")
+                    print("Per-state emissions (P(delayed), P(cancelled), sick calls per crew on duty, share of days):")
+                    for s in regime.STATES:
+                        e = res["emissions"][s]
+                        print(f"{s:<10} {e['delay_probability']:.3f} {e['cancel_probability']:.4f} "
+                              f"{e['sick_rate_per_exposure']:.5f} {e['expected_share_of_days']:.1%}")
+                    if res["degenerate_states"]:
+                        print(f"[WARN] near-empty state(s): {res['degenerate_states']}")
+                    print(f"BIC-preferred number of states: {res['model_selection']['bic_preferred_n_states']}")
                     if args.show_multipliers:
-                        print("Intensity Multipliers:")
+                        print("Intensity Multipliers (sick-call rate vs NORMAL):")
                         for s in regime.STATES:
                             print(f"{s:<10} {res['multipliers'][s]:.3f}")
                     print(f"\n[DIGITAL RECEIPT] content_hash: {res['content_hash']}")
@@ -908,39 +976,55 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception as exc:  # noqa: BLE001 - a CLI reports the failure, never a traceback
                     print(f"error: {exc}")
                     return 1
-            if args.cal_cmd == "delays":
-                try:
-                    cfg = config.load()
-                    from .calibration import delays
-                    res = delays.fit_delays(cfg, args.season)
-                    print(f"Base Probability (NORMAL): {res['base_delay_probability']:.4f}\n")
-                    print("Duration Mixture Components:")
-                    for i, comp in enumerate(res['components']):
-                        print(f"Component {i+1}: weight={comp['weight']:.2f}, mean={comp['mean_mins']:.1f}m, std={comp['std_dev']:.1f}m")
-                    print(f"\n[DIGITAL RECEIPT] content_hash: {res['content_hash']}")
-                    print(f"Saved parameter file to: {res['_saved_path']}")
-                    return 0
-                except Exception as exc:  # noqa: BLE001 - a CLI reports the failure, never a traceback
-                    print(f"error: {exc}")
-                    return 1
+        # --emit: the full pipeline (all fitters on the fitting window) -> params_v<ver>_<season>.json.
         elif args.emit:
             if not args.season:
                 print("error: --season is required when using --emit")
                 return 1
             try:
+                # Load and validate configs/base.yaml (paths, windows, scope, calibration settings).
                 cfg = config.load()
                 # pass window to pipeline to use the correct config and stamp it
                 from .calibration import pipeline
                 res = pipeline.run_pipeline(cfg, args.season, window_name=args.window)
+                # Report where the store was written and its content hash (same data -> same hash).
                 print(f"Successfully generated parameter store for {args.season}")
                 print(f"Saved to: {res['_saved_path']}")
                 print(f"[DIGITAL RECEIPT] content_hash: {res['content_hash']}")
+                from .data import limitations as _limitations
+
+                found = [
+                    _limitations.Limitation(**x)
+                    for x in (res.get("diagnostics") or {}).get("limitations", [])
+                ]
+                print("\nLimitations of this calibration:")
+                print(_limitations.format_limitations(found))
                 return 0
             except Exception as exc:  # noqa: BLE001 - a CLI reports the failure, never a traceback
                 print(f"error: {exc}")
                 return 1
         calibrate_parser.print_help()
         return 2
+
+    if args.cmd == "fit-delays":
+        # IMP-612: this subcommand was registered but had no handler, so it fell
+        # through to the "not implemented yet" stub; the delay-fit printout
+        # lived in an unreachable `calibrate delays` branch (no such
+        # subparser). Wired here instead.
+        try:
+            cfg = config.load()
+            from .calibration import delays
+            res = delays.fit_delays(cfg, args.season)
+            print(f"Base Probability (NORMAL): {res['base_delay_probability']:.4f}\n")
+            print("Duration Mixture Components:")
+            for i, comp in enumerate(res['components']):
+                print(f"Component {i+1}: weight={comp['weight']:.2f}, mean={comp['mean_mins']:.1f}m, std={comp['std_dev']:.1f}m")
+            print(f"\n[DIGITAL RECEIPT] content_hash: {res['content_hash']}")
+            print(f"Saved parameter file to: {res['_saved_path']}")
+            return 0
+        except Exception as exc:  # noqa: BLE001 - a CLI reports the failure, never a traceback
+            print(f"error: {exc}")
+            return 1
 
     if args.cmd == "explain-crew":
         from .engine.legality import DUTY_BLOCKS
@@ -958,7 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
             from .engine.policy import load_policy
 
             costs = config.load_costs(cfg)
-            pol_path = config.repo_root() / "configs" / "policies" / f"{args.policy}.yaml"
+            pol_path = config.policy_path(args.policy)
             policy = load_policy(pol_path)
             sim = des.run_scenario(
                 cfg, costs, policy, scenario_id=scenario, master_seed=args.master_seed,
@@ -1032,7 +1116,7 @@ def main(argv: list[str] | None = None) -> int:
 
             cfg = config.load()
             costs = config.load_costs(cfg)
-            base_policy = load_policy(_resolve_policy_path(args.policy))
+            base_policy = load_policy(config.policy_path(args.policy))
             print("Running Gate V1: three real degeneracy scenarios "
                   "(0 reserves / all reserve / 0 reserves + arrivals)...", file=sys.stderr)
             result = run_v1_gate(cfg, costs, base_policy, master_seed=args.master_seed)
@@ -1045,7 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
 
             cfg = config.load()
             costs = config.load_costs(cfg)
-            policy = load_policy(_resolve_policy_path(args.policy))
+            policy = load_policy(config.policy_path(args.policy))
             print(f"Running Gate V2: {args.scenarios} real scenario(s) of {policy.policy_id}, "
                   f"cascades disabled...", file=sys.stderr)
             result = run_v2_gate(cfg, costs, policy, n_scenarios=args.scenarios,
@@ -1065,7 +1149,7 @@ def main(argv: list[str] | None = None) -> int:
             from .engine.policy import load_policy
             from .gates.v3_eligibility import print_v3_report, run_v3_gate, write_v3_report
 
-            pol_path = config.repo_root() / "configs" / "policies" / f"{args.policy}.yaml"
+            pol_path = config.policy_path(args.policy)
             policy = load_policy(pol_path)
             sims = des.run_policy_crn(cfg, costs, policy, args.scenarios, args.master_seed,
                                        on_progress=_stderr_progress())
@@ -1091,7 +1175,7 @@ def main(argv: list[str] | None = None) -> int:
             from .engine.policy import load_policy
             from .gates.v4_cascade import print_v4_report, run_v4_gate
 
-            pol_path = config.repo_root() / "configs" / "policies" / f"{args.policy}.yaml"
+            pol_path = config.policy_path(args.policy)
             policy = load_policy(pol_path)
             sims = des.run_policy_crn(cfg, costs, policy, args.scenarios, args.master_seed,
                                        on_progress=_stderr_progress())
@@ -1121,7 +1205,7 @@ def main(argv: list[str] | None = None) -> int:
 
             cfg = config.load()
             costs = config.load_costs(cfg)
-            policy = load_policy(_resolve_policy_path(args.policy))
+            policy = load_policy(config.policy_path(args.policy))
             print(f"Running Gate V7: {args.scenarios} real scenario(s) of {policy.policy_id}, "
                   f"sequentially then across {args.jobs} worker(s)...", file=sys.stderr)
             result = run_v7_gate(
@@ -1150,10 +1234,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"({', '.join(R_CANDIDATE_POLICIES)}) x {n_valid_tp} terminal_penalty values "
                   f"x {args.scenarios} scenarios each ({len(R_CANDIDATE_POLICIES) * n_valid_tp * args.scenarios} "
                   f"real simulation runs)...")
-            print("[NOTICE] roster_size is swept in the reported surface but has no effect on the "
-                  "result: cfg.population.roster_size is not consumed anywhere in the engine, so R* "
-                  "is identical across roster_size values -- real per-roster_size sensitivity needs the "
-                  "mock corpus generator to emit multiple population sizes (out of S1d-05's scope).")
+            # IMP-213: roster_size is no longer swept on this path; print_v9_report
+            # lists it as NOT_EXERCISED with the reason.
             r_lookup = build_r_star_lookup(cfg, costs, args.scenarios, args.master_seed)
             result = run_v9_gate(cfg, r_lookup=r_lookup)
             print_v9_report(result)
@@ -1167,7 +1249,7 @@ def main(argv: list[str] | None = None) -> int:
 
             cfg = config.load()
             costs = config.load_costs(cfg)
-            policy = load_policy(_resolve_policy_path(args.policy))
+            policy = load_policy(config.policy_path(args.policy))
             week_start = datetime.date.fromisoformat(args.week) if args.week else None
             _sim, _week_used, timeline = run_v5_gate(cfg, costs, policy, week_start)
             print(timeline)
@@ -1182,7 +1264,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             cfg = config.load()
             costs = config.load_costs(cfg)
-            policy = load_policy(_resolve_policy_path(args.policy))
+            policy = load_policy(config.policy_path(args.policy))
             result = run_v6_gate(cfg, costs, policy, args.period)
             print_v6_report(result)
             return 0
@@ -1198,7 +1280,7 @@ def main(argv: list[str] | None = None) -> int:
 
             cfg = config.load()
             costs = config.load_costs(cfg)
-            policy = load_policy(_resolve_policy_path(args.policy))
+            policy = load_policy(config.policy_path(args.policy))
             seed = getattr(args, "master_seed", "master")
             sims = des.run_policy_crn(cfg, costs, policy, args.scenarios, seed,
                                        on_progress=_stderr_progress())
@@ -1223,7 +1305,7 @@ def main(argv: list[str] | None = None) -> int:
 
             cfg = config.load()
             costs = config.load_costs(cfg)
-            p = load_policy(_resolve_policy_path(args.policy))
+            p = load_policy(config.policy_path(args.policy))
             seed = getattr(args, "master_seed", "master")
             # Actually runs, so the chain terminates in a real result digest.
             # This used to return before simulating anything, which left the
@@ -1244,7 +1326,7 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = config.load()
         costs = config.load_costs(cfg)
-        policy = load_policy(_resolve_policy_path(args.policy))
+        policy = load_policy(config.policy_path(args.policy))
         master_seed = getattr(args, "master_seed", "master")
 
         sims = des.run_policy_crn(cfg, costs, policy, args.scenarios, master_seed,
@@ -1253,12 +1335,13 @@ def main(argv: list[str] | None = None) -> int:
 
         if getattr(args, "report_eligibility", False):
             # S1c-01: a histogram, not a mean -- V3 compares distributions.
-            # Pool is reserves whose RESERVE block covers the duty window
-            # (EligibilityEngine.eligible_reserves), not the moment of the
-            # call -- get_distribution() is exactly that per-event fraction.
+            # Pool is reserves on call at the duty's REPORT time
+            # (EligibilityEngine.eligible_reserves; OPEN-4 replaced the older
+            # whole-duty-coverage rule) -- get_distribution() is exactly that
+            # per-event fraction.
             fractions = [f for sim in sims for f in sim.elig.get_distribution()]
             print(f"\nEligibility distribution ({len(fractions)} events, pool = reserves "
-                  f"whose RESERVE block covers the full duty window):")
+                  f"on call at the duty's report time):")
             n_buckets = 10
             bar_width = 50  # terminal display width, not a statistical parameter
             counts = [0] * n_buckets
@@ -1460,8 +1543,8 @@ def main(argv: list[str] | None = None) -> int:
         # set, so scenario i's sick-call arrivals (day, time, duration -- see
         # des.py::run_policy_crn) are identical across policies. The cost
         # difference reflects roster/reserve composition, not draw luck.
-        pol_a = load_policy(config.repo_root() / "configs" / "policies" / f"{args.policies[0]}.yaml")
-        pol_b = load_policy(config.repo_root() / "configs" / "policies" / f"{args.policies[1]}.yaml")
+        pol_a = load_policy(config.policy_path(args.policies[0]))
+        pol_b = load_policy(config.policy_path(args.policies[1]))
 
         sims_a = des.run_policy_crn(cfg, costs, pol_a, n, master_seed, on_progress=_stderr_progress(args.policies[0]))
         print(file=sys.stderr)
@@ -1688,7 +1771,7 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = config.load()
         costs = config.load_costs(cfg)
-        policy = load_policy(_resolve_policy_path(args.policy or DEFAULT_EXPLAIN_POLICY))
+        policy = load_policy(config.policy_path(args.policy or DEFAULT_EXPLAIN_POLICY))
         sim = des.run_scenario(
             cfg, costs, policy, scenario_id=args.scenario, master_seed=args.master_seed,
             n_scenarios=args.scenario + 1,
@@ -1836,7 +1919,7 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = config.load()
         costs = config.load_costs(cfg)
-        pol_path = config.repo_root() / "configs" / "policies" / f"{args.policy}.yaml"
+        pol_path = config.policy_path(args.policy)
         policy = load_policy(pol_path)
 
         sim = des.run_scenario(
@@ -1917,7 +2000,7 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = config.load()
         costs = config.load_costs(cfg)
-        policy = load_policy(_resolve_policy_path(args.policy))
+        policy = load_policy(config.policy_path(args.policy))
         print(f"Running counterfactual comparison: policy {policy.policy_id}, "
               f"{args.scenarios} scenario(s), 3 draft_modes (CRN-paired)...", file=sys.stderr)
         results = run_counterfactual_comparison(cfg, costs, policy, args.scenarios, args.master_seed)
@@ -1926,7 +2009,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd is None:
         ap.print_help()
         return 0
-    return _todo(args.cmd)
+    # argparse already rejects unknown commands, so reaching this line means a
+    # registered subcommand has no handler -- a bug, which
+    # tests/test_cli.py::test_every_subcommand_has_a_handler guards against.
+    ap.error(f"internal error: `crewsim {args.cmd}` is registered but has no handler")
+    return 2
 
 if __name__ == "__main__":                            # `python -m crewsim.cli`
     sys.exit(main())

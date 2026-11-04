@@ -6,7 +6,7 @@ import { ProcessingDashboard } from './features/processing'
 import { ResultsDashboard } from './features/results'
 import { AnalyticsDashboard } from './features/analytics'
 import { GlobalErrorBoundary, NotificationProvider } from './features/jobs'
-import { HealthDashboard, AuditLogViewer } from './features/platform'
+import { HealthDashboard } from './features/platform'
 import airTransatLogo from './assets/air-transat-logo.svg'
 
 /** The sidebar's items. `glyph` is what shows when the rail is collapsed --
@@ -32,7 +32,6 @@ const THEME_STORAGE_KEY = 'crewsim.theme';
 
 function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard')
-  const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [isHelpOpen, setIsHelpOpen] = useState(false)
   // Read synchronously on first render: resolving it in an effect would paint
   // the expanded sidebar first and visibly snap shut on every page load.
@@ -63,17 +62,16 @@ function App() {
       description: 'This page shows high-level metrics and system health. Check this page to verify backend connectivity.',
       features: [
         'Active runs and queued-job wait time: live from the jobs database.',
-        'CPU/memory: reported only when the host metrics library is installed, never guessed.',
-        'System audit log: who ran what, and when.'
+        'CPU/memory: reported only when the host metrics library is installed, never guessed.'
       ]
     },
-    config: { 
-      title: 'Configuration Management', 
-      description: 'Manage CrewSim policies and parameters.',
+    config: {
+      title: 'Configuration Management',
+      description: 'Inspect CrewSim policies and parameters. This page is read-only: values are changed in the files under configs/, never here.',
       features: [
         'Select a category to inspect its full JSON schema.',
-        'Search across all parameters for specific values to edit.',
-        'Validate configuration markers before executing runs.'
+        'Search across all parameters to find where a value is set.',
+        'Validate: lists every [CONFIRM] placeholder still waiting on a business owner before a run.'
       ]
     },
     data: {
@@ -85,22 +83,22 @@ function App() {
         'Data Quality runs the real Sec6.2 gates against the configured corpus.'
       ]
     },
-    calibration: { 
-      title: 'Calibration Pipeline', 
-      description: 'Run historical data fitting.',
+    calibration: {
+      title: 'Calibration Pipeline',
+      description: 'Fit the statistical models (severity regimes, sick-call arrivals, flight delays) to the historical corpus for one season.',
       features: [
-        'Tune underlying engine parameters automatically.',
-        'Click "Launch Calibration Job" to define target metrics.',
-        'Track active and past calibration runs.'
+        'Run Statistical Fitting: always runs the full pipeline and writes that season\'s parameter store.',
+        'Run monitor: track active and past calibration runs, with their logs.',
+        'Results: inspect the fitted parameters and their diagnostics.'
       ]
     },
-    processing: { 
-      title: 'Simulation Processing', 
-      description: 'Launch new simulation scenarios.',
+    processing: {
+      title: 'Simulation Processing',
+      description: 'Simulate candidate reserve policies against the same set of random scenarios (common random numbers).',
       features: [
-        'Run single deterministic scenarios.',
-        'Launch batch simulations for stochastic modeling.',
-        'Configure policy overrides prior to execution.'
+        'Single Run: the first selected policy over the chosen number of scenarios.',
+        'Batch Run: every selected policy over the same scenarios, ready for a paired comparison.',
+        'Choose the season and the scenario count before launching.'
       ]
     },
 
@@ -126,21 +124,10 @@ function App() {
         'Two populations, labelled on every figure: cascade RATE is whole-simulation (matching gate V4), chain ECONOMICS are measurement-window attributed so the dollars reconcile with E[cost].',
         'Chain size, not depth: the ledger records each row\'s root, never its immediate parent, so a deep chain and a wide one cannot be told apart in it. Size is what the data supports.',
         'A run with no cascades reports a measured zero and explains it. A run predating this feature says so instead — the two look identical in a chart and mean opposite things.',
-        'No gate V4 verdict is shown: V4 is currently INCONCLUSIVE (holdout draft-reconstruction recall is 0.000), so no validated cascade rate exists to display.'
+        'No gate V4 verdict is shown on this page: check the gate status on Results & Reports before treating a cascade rate as validated.'
       ]
     },
   }
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault()
-        setIsSearchOpen(prev => !prev)
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
 
   return (
     <GlobalErrorBoundary>
@@ -197,8 +184,8 @@ function App() {
                   type="button"
                   className="app-theme-toggle"
                   onClick={() => setTheme(t => (t === 'light' ? 'dark' : 'light'))}
-                  aria-label={theme === 'light' ? 'Switch to GitHub Dark theme' : 'Switch to Light theme'}
-                  title={theme === 'light' ? 'Switch to GitHub Dark theme' : 'Switch to Light theme'}
+                  aria-label={theme === 'light' ? 'Switch to Ops Console dark theme' : 'Switch to Light theme'}
+                  title={theme === 'light' ? 'Switch to Ops Console dark theme' : 'Switch to Light theme'}
                 >
                   <span aria-hidden="true">{theme === 'light' ? '☾' : '☀'}</span>
                   {theme === 'light' ? 'Dark' : 'Light'}
@@ -209,7 +196,7 @@ function App() {
                   title="Page Help"
                   style={{
                     width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--color-primary-500)',
-                    color: 'white', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--color-on-primary)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', padding: 0
                   }}
                 >
@@ -227,7 +214,7 @@ function App() {
                   <div style={{
                     backgroundColor: 'var(--surface-default)', padding: '2.5rem',
                     borderRadius: 'var(--radius-lg)', width: '100%', maxWidth: '550px',
-                    boxShadow: '0 20px 40px rgba(0,0,0,0.15)', border: '1px solid var(--border-default)',
+                    boxShadow: 'var(--shadow-md)', border: '1px solid var(--border-default)',
                     // Pages with a long feature list (Cascade Analytics) ran
                     // taller than the viewport, cutting off the heading and
                     // the dismiss button with no way to reach either.
@@ -246,15 +233,20 @@ function App() {
                       <div style={{ backgroundColor: 'var(--color-neutral-50)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-neutral-200)' }}>
                         <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-neutral-500)', marginBottom: '0.75rem' }}>Key Features</h3>
                         <ul style={{ paddingLeft: '1.25rem', listStyleType: 'disc', margin: 0, fontSize: '0.9rem' }}>
-                          {helpContent[activeTab]?.features.map((feat, idx) => (
-                            <li key={idx} style={{ marginBottom: '0.5rem', color: 'var(--color-neutral-700)' }}>
-                              {feat.includes(':') ? (
-                                <>
-                                  <strong style={{ color: 'var(--color-neutral-900)' }}>{feat.split(':')[0]}:</strong>{feat.split(':')[1]}
-                                </>
-                              ) : feat}
-                            </li>
-                          ))}
+                          {helpContent[activeTab]?.features.map((feat, idx) => {
+                            // Split at the FIRST colon only: everything after it
+                            // is the description, colons included.
+                            const colon = feat.indexOf(':')
+                            return (
+                              <li key={idx} style={{ marginBottom: '0.5rem', color: 'var(--color-neutral-700)' }}>
+                                {colon >= 0 ? (
+                                  <>
+                                    <strong style={{ color: 'var(--color-neutral-900)' }}>{feat.slice(0, colon)}:</strong>{feat.slice(colon + 1)}
+                                  </>
+                                ) : feat}
+                              </li>
+                            )
+                          })}
                         </ul>
                       </div>
                     </div>
@@ -263,9 +255,9 @@ function App() {
                       <button 
                         onClick={() => setIsHelpOpen(false)} 
                         style={{ 
-                          padding: '0.6rem 1.5rem', borderRadius: 'var(--radius-md)', border: 'none', 
-                          backgroundColor: 'var(--color-primary-600)', color: 'white', fontWeight: 500, cursor: 'pointer',
-                          boxShadow: '0 2px 4px rgba(37, 99, 235, 0.2)'
+                          padding: '0.6rem 1.5rem', borderRadius: 'var(--radius-button)', border: 'none', 
+                          backgroundColor: 'var(--action-bg)', color: 'var(--action-fg)', fontWeight: 500, cursor: 'pointer',
+                          boxShadow: 'var(--shadow-sm)'
                         }}
                       >
                         Got it
@@ -274,37 +266,13 @@ function App() {
                   </div>
                 </div>
               )}
-              {isSearchOpen && (
-                <div style={{
-                  position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                  backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
-                  display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '10vh'
-                }} onClick={() => setIsSearchOpen(false)}>
-                  <div style={{
-                    backgroundColor: 'var(--surface-default)', padding: '1rem',
-                    borderRadius: 'var(--radius-lg)', width: '100%', maxWidth: '600px',
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.1)'
-                  }} onClick={e => e.stopPropagation()}>
-                    <input 
-                      autoFocus
-                      type="text" 
-                      placeholder="Search jobs, runs, configurations... (Placeholder)" 
-                      style={{ 
-                        width: '100%', padding: '0.75rem', fontSize: '1rem', 
-                        border: '1px solid var(--color-primary-500)', borderRadius: 'var(--radius-md)',
-                        outline: 'none', backgroundColor: 'var(--color-bg-subtle)', color: 'var(--color-text-base)'
-                      }}
-                    />
-                    <div style={{ marginTop: '1rem', fontSize: '0.875rem', color: 'var(--color-neutral-500)', textAlign: 'center' }}>
-                      Search functionality coming soon. Press Esc to close.
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* IMP-612: no global search (GET /api/platform/search is not
+                  implemented) and no audit log view (nothing writes AuditLog
+                  rows yet, see IMP-401) -- a permanently empty or "coming
+                  soon" panel reads as a broken feature. */}
               {activeTab === 'dashboard' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-4)' }}>
                   <HealthDashboard />
-                  <AuditLogViewer />
                 </div>
               )}
               {activeTab === 'config' && <ConfigDashboard />}

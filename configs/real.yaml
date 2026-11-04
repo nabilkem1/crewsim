@@ -1,0 +1,73 @@
+# =============================================================================
+# configs/real.yaml - Air Transat's REAL extract (Pierre's delivery v3)
+#
+# Use it with:   $env:CREWSIM_CONFIG = "configs/real.yaml"     (or  crewsim --config configs/real.yaml ...)
+# base.yaml stays the mock's config and the test suite's; this file only says
+# where the real data differs. Output goes to output/real/ so no mock parameter
+# store or report is ever overwritten.
+#
+# What is accommodated here (and what is NOT) is listed in Pierre3.md and, for
+# every run, under "Limitations" in `crewsim data readiness`, the data profile
+# and the calibration store (diagnostics.limitations).
+# =============================================================================
+extends: base.yaml
+
+paths:
+  corpus_dir:   src/crewsim/data/corpus/real_datav2/v3
+  params_dir:   output/real/params
+  reports_dir:  output/real/reports
+  # v3 has no D12. The agreement rules are taken from the mock's file: Nabil's
+  # reading is that those rules are right. Every value in it is still marked
+  # [CONFIRM] there -- see limitations "d12_from_mock".
+  agreement_rules_file: src/crewsim/data/corpus/d12_agreement_rules.yaml
+
+windows:
+  # The data runs 2024-04-24 .. 2026-08-31 (D2/D4/D8). The first week of D8
+  # (2024-04-23 .. 04-30) is unusable: 79% of its flights are flagged cancelled
+  # (about 310 rows a day, against about 70 a day from 1 May) and D4 has no
+  # notification time in it. Both windows therefore start on 2024-05-01 or later.
+  # Only ONE winter_sun season (Dec-Apr) falls in each window -- a limitation
+  # the reports state, not one this file can remove.
+  fitting: {start: 2024-05-01, end: 2025-07-31}   # 15 months, one winter (Dec 2024 - Apr 2025)
+  holdout: {start: 2025-08-01, end: 2026-08-31}   # 13 months, one winter (Dec 2025 - Apr 2026)
+
+scope:
+  # D1/D2/D4 name the fleet `A321` and only keep `A321neoLR` in fleet_detail
+  # (1 active YUL FO in D1). Where D1 holds more active pilots for A321 -- it does,
+  # by far -- the scope uses A321. The type rating is shared (data.fleet_groups note).
+  fleet: A321neoLR
+  fleet_fallback: A321
+
+data:
+  drop_self_loop_flights: true       # 708 D8 rows have origin == destination (246 of them "cancelled")
+  null_notification_ts: at_absence_start   # 14% of D4 rows have no notification time
+  # D2 holds ABSENCE blocks natively (an engine block type); OFFICE and OTHER stand in for it too.
+  block_type_map: {SICK: ABSENCE, OFFICE: ABSENCE, OTHER: ABSENCE}
+  # What each D7 pay code is. Confirmed by data: DRAFT_THX / DRAFT_T2 (draft pay,
+  # D7 carries premium_cad on them). RESERVE_CREDIT is read as the reserve guarantee
+  # (3.33 h x $240 a reserve day) [CONFIRM: Pierre]. Everything else is IGNOREd:
+  # registered so the pay-code gate sees it, but not compared by V6 until its
+  # meaning is confirmed. D7 has no code for reserve UTILISATION (flying a reserve
+  # does is paid as CHV like any other flying), so that side of V6 has no actual.
+  pay_codes:
+    DRAFT_THX:        {meaning: "draft pay, 150% of the base rate (premium_cad = the extra 50%)", comparable_to: DRAFT}
+    DRAFT_T2:         {meaning: "draft pay, 200% of the base rate [CONFIRM: Pierre - 56 rows]",   comparable_to: DRAFT}
+    RESERVE_CREDIT:   {meaning: "reserve guarantee credit [CONFIRM: Pierre]",                      comparable_to: RESERVE_STAFFING}
+    CHV:              {meaning: "flying pay at the base rate; 1,318 negative rows [CONFIRM: Pierre]", comparable_to: IGNORE}
+    T_1_4:            {meaning: "[CONFIRM: Pierre]",                        comparable_to: IGNORE}
+    MIN:              {meaning: "[CONFIRM: Pierre] minimum credit?",        comparable_to: IGNORE}
+    AJU:              {meaning: "[CONFIRM: Pierre] adjustment?",            comparable_to: IGNORE}
+    BME:              {meaning: "[CONFIRM: Pierre]",                        comparable_to: IGNORE}
+    DMG:              {meaning: "[CONFIRM: Pierre]",                        comparable_to: IGNORE}
+    OVERTIME_THX:     {meaning: "overtime at 150% [CONFIRM: Pierre]",       comparable_to: IGNORE}
+    HOLIDAY_T2:       {meaning: "holiday pay at 200% [CONFIRM: Pierre]",    comparable_to: IGNORE}
+    DUTY_PREMIUM_P10: {meaning: "[CONFIRM: Pierre]",                        comparable_to: IGNORE}
+    DUTY_PREMIUM_P16: {meaning: "[CONFIRM: Pierre]",                        comparable_to: IGNORE}
+    DUTY_PREMIUM_P30: {meaning: "[CONFIRM: Pierre]",                        comparable_to: IGNORE}
+
+draft_reconstruction:
+  # Pierre's draft codes (D7). v3 D6 carries both DRAFT (7,006) and SHORT_NOTICE_COVER
+  # (6,985); the D7 join recovers 86% of paid drafts with both codes, 77% with DRAFT
+  # alone and 13% with SHORT_NOTICE_COVER alone. [CONFIRM: Pierre] what SHORT_NOTICE_COVER is.
+  premium_pay_codes:         [DRAFT_THX, DRAFT_T2]
+  short_notice_reason_codes: [DRAFT, SHORT_NOTICE_COVER]

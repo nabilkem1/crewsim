@@ -34,7 +34,7 @@ export const ConfigSearch: React.FC = () => {
           placeholder="Search config paths or values..."
           style={{ flex: 1, padding: 'var(--spacing-2)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-default)' }}
         />
-        <button type="submit" disabled={loading} style={{ padding: 'var(--spacing-2) var(--spacing-4)', backgroundColor: 'var(--color-primary-600)', color: 'white', borderRadius: 'var(--radius-md)', border: 'none', cursor: 'pointer' }}>
+        <button type="submit" disabled={loading} style={{ padding: 'var(--spacing-2) var(--spacing-4)', backgroundColor: 'var(--action-bg)', color: 'var(--action-fg)', borderRadius: 'var(--radius-button)', border: 'none', cursor: 'pointer' }}>
           Search
         </button>
       </form>

@@ -5,7 +5,8 @@ import { apiFetch, apiPost } from '../../api/client';
  * `fetchHeatmap`, `fetchTimeseries`, `fetchEligibility`, `fetchGrid`,
  * `fetchGates`, `fetchDataQuality`, `fetchMetrics`) are gone along with the
  * endpoints behind them, all of which returned hardcoded literals describing a
- * different product. See CODE_REVIEW_API_WEBUI.md.
+ * different product. See the API/web-UI review in git history:
+ * `git show 7b34d3b:CODE_REVIEW_API_WEBUI.md`.
  */
 
 export interface RunSummary {

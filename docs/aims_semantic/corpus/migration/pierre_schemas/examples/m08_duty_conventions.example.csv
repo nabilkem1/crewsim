@@ -1,0 +1,2 @@
+crew_group,fleet_family,report_offset_minutes,release_offset_minutes,subsequent_duty_report_offset_minutes,reserve_am_start_local,reserve_am_end_local,reserve_pm_start_local,reserve_pm_end_local,effective_from,effective_to
+PILOT,ALL,60,30,60,05:00,13:00,13:00,21:00,2024-05-01,

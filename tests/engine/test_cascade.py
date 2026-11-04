@@ -1,5 +1,9 @@
 
+import pytest
+
 from crewsim.engine.cascade import apply_delta, compute_draft_delta
+from crewsim.engine.drafting import determine_tier
+from crewsim.engine.legality import find_l0_violations
 from crewsim.engine.state import Block, BlockType, CrewMember, OpenTimeItem
 
 
@@ -132,3 +136,36 @@ def test_future_reserve_cascade():
     
     # Assert NO cascade item was generated (it's a capacity loss, not an open item)
     assert len(cascades) == 0
+
+
+@pytest.mark.parametrize(
+    ("btype", "expected_tier"),
+    [(BlockType.TRAINING, 3), (BlockType.SIMULATOR, 5)],
+)
+def test_training_block_removed_by_draft(btype, expected_tier):
+    """IMP-103: drafting a crew member out of training or a simulator session
+    removes that session from their calendar.
+
+    It used to stay, so the realized calendar held DRAFTED_DUTY overlapping a
+    TRAINING/SIMULATOR block -- two DUTY_BLOCKS at once, reported by
+    find_l0_violations and double-counted by the rolling counters -- while the
+    reschedule fee for exactly that session was still booked.
+    """
+    from tests.engine.conftest import legality_cfg
+    cfg = legality_cfg()
+
+    session = Block(start=850.0, end=1300.0, btype=btype)
+    crew = CrewMember("C1", "YUL", {"A330"}, "CA", 1, [session])
+    item = OpenTimeItem(
+        uid=1, pairing_id="P_DRAFT", base="YUL", fleet="A330", position="CA",
+        start=800.0, end=900.0, deadline=700.0, origin="SICK_CALL", root_event_uid=1,
+    )
+
+    assert determine_tier(crew, item, cfg) == expected_tier
+    delta, cascades = compute_draft_delta(crew, item, cfg, now=800.0)
+
+    assert session in delta.removed_blocks
+    assert cascades == []  # a rescheduled session is not an uncovered flight
+    apply_delta(crew, delta)
+    assert btype not in {b.btype for b in crew.calendar}
+    assert find_l0_violations(crew) == []

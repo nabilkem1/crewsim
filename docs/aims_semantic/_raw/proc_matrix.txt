@@ -1,0 +1,32 @@
+| `dbo.crew_base_timezone` | `crew_base_timezone`, `CREWQUAL` |
+| `dbo.CrewIdList` | `CrewIdList` |
+| `dbo.draft_order10_crews` | `draft_order10_crews` |
+| `dbo.FtcLegalLimit` | `FtcLegalLimit` |
+| `dbo.GetCivilTwilight` | `GetCivilTwilight` |
+| `dbo.GetEffectiveOffset_v1` | `vvAirports`, `vvZONEIDX` |
+| `dbo.GetEffectiveOffset` | `GetEffectiveOffset`, `vvAirports`, `vvZONEIDX` |
+| `dbo.GetEffectiveOffsetUtc` | `GetEffectiveOffset`, `GetEffectiveOffsetUtc`, `vvAirports`, `vvZONEIDX` |
+| `dbo.position_category` | `CREWQUAL`, `position_category`, `ROSTER`, `vvPositions` |
+| `dbo.R0_GetDraftList` | `AIRCTYPE`, `CRCODES`, `crew_base_timezone`, `CREWCAT`, `CREWCATEG`, `CrewIdList`, `CREWLEG`, `CREWQUAL`, `CRLEGGROUND`, `CRROUTE`, `draft_order10_crews`, `EXPI`, `LEGMAIN`, `LEGTIMES`, `position_category`, `ROSTER`, `ROSTERID`, `vvAIRCTYPE`, `vvCREWDB`, `vvCREXPREC`, `vvFMSInfo1`, `vvPositions` |
+| `dbo.R1_Get_Violations_CertainFlightsCrew` | `CREWCAT`, `CREWCATEG`, `CRROUTE`, `SPEFREC3`, `vvCountries`, `vvCREWDB` |
+| `dbo.R2_Get_Violations_Schedule_WithWithNot` | `CREWCAT`, `CREWCATEG`, `CRROUTE`, `HOTEL`, `SPEFREC2`, `vvCREWDB` |
+| `dbo.R3_Get_Violations_RestTime_Batch` | `CRCODES`, `CrewIdList`, `CREWLEG`, `CREWQUAL`, `CRLEGGROUND`, `CRROUTE`, `GetEffectiveOffset`, `GetEffectiveOffsetUtc`, `HOTAC`, `HOTEL`, `LEGMAIN`, `LEGTIMES`, `position_category`, `ROSTER`, `vvAirports`, `vvCarriers`, `vvCREWDB` |
+| `dbo.R3_Get_Violations_RestTime` | `CRCODES`, `CREWLEG`, `CREWQUAL`, `CRLEGGROUND`, `CRROUTE`, `GetEffectiveOffset`, `GetEffectiveOffsetUtc`, `HOTAC`, `HOTEL`, `LEGMAIN`, `LEGTIMES`, `position_category`, `ROSTER`, `TABLES`, `vvAirports`, `vvCarriers`, `vvCREWDB` |
+| `dbo.R4_Get_Future_Impact` | `CRCODES`, `CRROUTE`, `ROSTER`, `TABLES` |
+| `dbo.R4_Get_Violation_FDP` | `CRCODES`, `CREWLEG`, `CREWQUAL`, `CRLEGGROUND`, `CRROUTE`, `GetEffectiveOffset`, `LEGMAIN`, `LEGTIMES`, `position_category`, `ROSTER`, `TABLES`, `vvAirports`, `vvCarriers`, `vvCREWDB` |
+| `dbo.R5_Get_Violation_FTC` | `CRCODES`, `CREWLEG`, `CRLEGGROUND`, `CRROUTE`, `FtcLegalLimit`, `LEGMAIN`, `LEGTIMES`, `position_category`, `ROSTER`, `TABLES`, `vvAirports`, `vvALLWRDC`, `vvCarriers`, `vvCREWDB` |
+| `rpt._prompt_igonre` | `TABLES` |
+| `rpt.CalculateCrewFTC` | `CRCODES`, `CREWLEG`, `CRLEGGROUND`, `CRROUTE`, `FtcLegalLimit`, `LEGMAIN`, `LEGTIMES`, `position_category`, `ROSTER`, `vvAirports`, `vvALLWRDC`, `vvCarriers`, `vvCREWDB` |
+| `rpt.get_crew_categories` | `CREWCAT`, `CREWCATEG` |
+| `rpt.get_crew_certifications` | `CREWCAT`, `CREWCATEG`, `CREWQUAL`, `EXPI`, `vvAIRCTYPE`, `vvCREWDB`, `vvCREXPREC`, `vvPositions` |
+| `rpt.get_crew_qualifications` | `CREWQUAL`, `vvFMSInfo1`, `vvPositions` |
+| `rpt.Get_Custom_Rules_CertainFlightsCrew` | `CREWCAT`, `GENCAT`, `SPEFREC3`, `SPEFRECDATA`, `TABLES`, `vvAIRCTYPE`, `vvFMSCodes`, `vvPositions` |
+| `rpt.Get_Custom_Rules_Schedule_WithWithNot` | `CREWCAT`, `GENCAT`, `SPEFREC2`, `SPEFRECDATA`, `TABLES`, `vvAIRCTYPE`, `vvFMSCodes`, `vvPositions` |
+| `rpt.Get_Detailed_Pairing` | `ACCATEG`, `ACCATEG2`, `CITYCATEG`, `COUNTRYCATEG`, `CREWCAT`, `CREWCATEG`, `CREWLEG`, `CRROUTE`, `GENCAT`, `GetCivilTwilight`, `GetEffectiveOffset`, `HOTAC`, `HOTEL`, `LEGMAIN`, `PORTCATEG`, `PORTCATEG2`, `ROSTER`, `TABLES`, `vvAIRCTYPE`, `vvAirports`, `vvCarriers`, `vvFMSCodes`, `vvPositions` |
+| `rpt.list_aircraft_types` | `AIRCTYPE` |
+| `rpt.list_crew_categories` | `CREWCAT` |
+| `rpt.list_crew_positions` | `vvPositions` |
+| `rpt.list_instructor_qualifications` | `vvFMSInfo1` |
+| `rpt.lookup_airport` | `vvAirports` |
+| `rpt.lookup_crew` | `vvCREWDB` |
+| `rpt.usp_GetPairingID` | `CREWLEG`, `CRROUTE`, `ROSTER` |

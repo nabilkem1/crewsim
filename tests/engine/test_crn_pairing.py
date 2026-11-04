@@ -29,7 +29,6 @@ import re
 from crewsim import config
 from crewsim.engine import crn, des
 from crewsim.engine.policy import load_policy
-from crewsim.reporting.grid import _policy_path
 
 _SICK_CALL = re.compile(r"^\[t=(\d+)\] SICK_CALL: (\S+) ->")
 
@@ -37,7 +36,7 @@ _SICK_CALL = re.compile(r"^\[t=(\d+)\] SICK_CALL: (\S+) ->")
 def _run(policy_name: str, master_seed: str = "master", scenario_id: int = 0):
     cfg = config.load()
     costs = config.load_costs(cfg)
-    policy = load_policy(_policy_path(policy_name))
+    policy = load_policy(config.policy_path(policy_name))
     return des.run_scenario(
         cfg, costs, policy, scenario_id=scenario_id, master_seed=master_seed,
         n_scenarios=1, trace=True,
@@ -100,6 +99,41 @@ def test_arrival_stream_is_derivable_without_running_the_simulation() -> None:
             f"{sorted(logged - expected)[:5]}"
         )
         assert logged, f"{name} logged no arrivals"
+
+
+def test_intraday_order(monkeypatch) -> None:
+    """IMP-101: arrivals are handled at their own drawn time, in time order.
+
+    Before the fix a day's arrivals were processed in index order; whenever a
+    later index drew an earlier time-of-day the timeout was skipped and the
+    arrival was handled at the previous arrival's clock time while carrying
+    its own earlier timestamp. Recording the `current_time` each arrival is
+    applied with, alongside the simulation clock at that moment, pins both
+    halves: the sequence is non-decreasing, and every arrival is applied at
+    exactly env.now.
+    """
+    seen: list[tuple[float, float]] = []
+    real_apply = des.apply_sick_call
+    sims: list[des.Simulation] = []
+    real_init = des.Simulation.__init__
+
+    def recording_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        sims.append(self)
+
+    def recording_apply(cfg, crew, current_time, *args, **kwargs):
+        seen.append((current_time, sims[-1].env.now))
+        return real_apply(cfg, crew, current_time, *args, **kwargs)
+
+    monkeypatch.setattr(des.Simulation, "__init__", recording_init)
+    monkeypatch.setattr(des, "apply_sick_call", recording_apply)
+    _run("R10")
+
+    times = [t for t, _ in seen]
+    assert len(times) > 1, "scenario produced too few arrivals; this test proves nothing"
+    assert times == sorted(times), "sick calls were processed out of time order"
+    late = [(t, now) for t, now in seen if abs(t - now) > 1e-9]
+    assert not late, f"arrivals applied at a clock time other than their own: {late[:5]}"
 
 
 def test_master_seed_reaches_crew_selection() -> None:

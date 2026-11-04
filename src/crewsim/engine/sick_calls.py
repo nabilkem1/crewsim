@@ -40,7 +40,7 @@ def _break_pairings(
             uid=uid_counter,
             pairing_id=b.pairing_id or "UNKNOWN",
             base=c.base,
-            fleet=next(iter(c.fleet_quals)) if c.fleet_quals else "UNKNOWN",
+            fleet=c.primary_fleet,
             position=c.position,
             start=b.start,
             end=b.end,
@@ -94,18 +94,26 @@ def apply_sick_call(
     arrival -- deterministic, but exactly the hidden global state §4.3 bans,
     and one stray `random` consumer away from silently breaking CRN.
     """
-    # 1. Sample from crew who are on or about to report for duty.
-    # "About to report" means starting a PAIRING within the next 24 hours, for instance.
+    # 1. Sample from crew who have a PAIRING that has not yet started and
+    # reports within the absence window [current_time, current_time +
+    # duration). Sim time is minutes since horizon start (S1d-04b).
+    #
+    # IMP-105: only FUTURE pairings (start >= current_time) are broken. A
+    # pairing already under way at the call is not reopened -- it used to be,
+    # and its deadline (start - lead) was then already in the past, so it was
+    # born late and cancelled after at most a token attempt, inflating
+    # cancellations. The rule now: a crew member who falls sick mid-pairing
+    # completes the duty already in progress (it stays on their calendar), and
+    # the absence removes them from everything that starts after the call.
     eligible = []
-
-    # We look for someone with a PAIRING block overlapping [current_time, current_time + duration_days * 1440]
-    # or just starting within 24 hours. Sim time is minutes since horizon start (S1d-04b), not seconds.
     search_end = current_time + (duration_days * 1440.0)
     for c in active_crew:
-        blocks = c.blocks_in(current_time, search_end)
-        has_pairing = any(b.btype == BlockType.PAIRING for b in blocks)
-        if has_pairing:
-            eligible.append((c, blocks))
+        future_pairings = [
+            b for b in c.blocks_in(current_time, search_end)
+            if b.btype == BlockType.PAIRING and b.start >= current_time
+        ]
+        if future_pairings:
+            eligible.append((c, future_pairings))
 
     if not eligible:
         return None, []
@@ -147,8 +155,8 @@ def apply_named_absence(
     # cancels instantly with NO recovery attempt ever made -- a decision
     # with nothing to show, which fails S1e-06's own AC. Excluding it is
     # correct, not a workaround: the normal CRN engine (apply_sick_call)
-    # never produces this case either, since every item it creates has
-    # item.start within the SAME horizon its "now" is measured against.
+    # never produces this case either -- since IMP-105 it breaks only
+    # pairings with start >= the call time.
     overlapping_blocks = [
         b for b in c.blocks_in(start_min, end_min) if b.btype == BlockType.PAIRING and b.start >= 0
     ]

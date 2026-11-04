@@ -1,0 +1,3 @@
+pay_code,description_fr,description_en,crew_group,category,unit,pay_multiplier,is_premium_on_top,is_draft_related,is_reserve_related,agreement_clause,effective_from,effective_to,comment
+DRAFT_THX,Prime de draft - temps et demi,Draft premium time and a half,PILOT,DRAFT,HOURS,1.5,0,1,0,ALPA CC art. EXAMPLE,2024-05-01,2026-01-31,
+RESERVE_CREDIT,Garantie de reserve,Reserve guarantee,PILOT,RESERVE_GUARANTEE,HOURS,1.0,0,0,1,ALPA CC art. EXAMPLE,2024-05-01,,
