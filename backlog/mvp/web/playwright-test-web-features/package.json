@@ -1,0 +1,11 @@
+{
+  "name": "playwright-test-web-features",
+  "private": true,
+  "description": "Manual-only Playwright specs for the web UI epics (not run in CI). Start the API on :8000 and the Vite dev server on :5173, then run `npm ci && npx playwright install && npm test` in this folder.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}
